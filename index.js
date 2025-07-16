@@ -5,7 +5,7 @@ const accountsRoutes = require('./routes/accountRoutes'); // Import account rout
 const inventoryRoutes = require('./routes/Inventory/inventoryRoutes'); // Import inventory routes
 const inventoryCategoryRoutes = require('./routes/Inventory/Category_companyRoutes'); // Import inventory category and company routes
 
-const port = 6000;
+const port = 5000;
 
 // ✅ Use CORS Middleware (allows requests from any origin)
 app.use(cors());
