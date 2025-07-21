@@ -12,13 +12,14 @@ router.post("/stock/:productId", (req, res) => {
   const stockOut = parseFloat(data.stock_out || 0);
 
   // Step 1: Get current product details
-  const getProductQuery = "SELECT stock_in, stock_out, balance_stock FROM products WHERE id = ?";
+  const getProductQuery = "SELECT stock_in, stock_out, balance_stock, opening_stock FROM products WHERE id = ?";
   db.query(getProductQuery, [productId], (err, result) => {
     if (err) return res.status(500).send(err);
     if (result.length === 0) return res.status(404).send({ message: "Product not found" });
 
     const current = result[0];
     const openingStock = parseFloat(current.balance_stock || 0);
+    const openingBalance = parseFloat(current.opening_stock || 0);
     const totalStockIn = parseFloat(current.stock_in || 0) + stockIn;
     const totalStockOut = parseFloat(current.stock_out || 0) + stockOut;
     const newBalance = openingStock + stockIn - stockOut;
@@ -27,7 +28,7 @@ router.post("/stock/:productId", (req, res) => {
     const stockEntry = {
       product_id: productId,
       price_per_unit: data.price_per_unit,
-      opening_stock: null,
+      opening_stock: openingBalance,
       stock_in: stockIn.toString(),
       stock_out: stockOut.toString(),
       balance_stock: newBalance.toString(),
