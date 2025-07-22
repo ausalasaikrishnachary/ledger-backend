@@ -6,7 +6,7 @@ const inventoryRoutes = require('./routes/Inventory/inventoryRoutes'); // Import
 const inventoryCategoryRoutes = require('./routes/Inventory/Category_companyRoutes'); // Import inventory category and company routes
 const inventoryServiceRoutes = require('./routes/Inventory/ServiceRoutes'); // Import inventory service routes
 const inventoryStockRoutes = require('./routes/Inventory/StockRoutes'); // Import inventory stock routes
-const gstApiRoutes = require('./routes/GstApiRoutes'); // Import GST API routes
+const gstApiRoutes = require('./routes/gstApiRoutes'); // Import GST API routes
 
 const port = 5000;
 

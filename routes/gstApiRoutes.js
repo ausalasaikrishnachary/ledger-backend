@@ -9,12 +9,13 @@ const bodyParser = require('body-parser');
 const ACCESS_TOKEN = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzY29wZSI6WyJnc3AiXSwiZXhwIjoxNzU1NDI5Njg4LCJhdXRob3JpdGllcyI6WyJST0xFX1BST0RfRV9BUElfR1NUX1JFVFVSTlMiLCJST0xFX1BST0RfRV9BUElfRVdCIiwiUk9MRV9QUk9EX0VfQVBJX0dTVF9DT01NT04iLCJST0xFX1BST0RfRV9BUElfRUkiXSwianRpIjoiMTE5N2U1ZWUtODI1Ny00OTg4LWFmNzUtZjdmZWZmOTdiYjdjIiwiY2xpZW50X2lkIjoiNzcxQ0I4RTVDMjcwNDlBNDhCMzg0MjY0MzkxNzUyODQifQ.7Vp3Wv_JfUWlWI43hVlBj2KeMTMTKFq9lTtDAR96dGc';
 
 router.post('/gstin-details', async (req, res) => {
-  const { gstin } = req.body;
 
-  if (!gstin) {
-    fs.appendFileSync('error_log.txt', 'Invalid request received.\n');
-    return res.status(400).json({ success: false, message: 'Invalid request' });
-  }
+  const gstin = req.body?.gstin;
+
+if (!gstin) {
+  fs.appendFileSync('error_log.txt', 'Invalid or missing GSTIN in request.\n');
+  return res.status(400).json({ success: false, message: 'GSTIN is required' });
+}
 
   const requestid = crypto.randomBytes(8).toString('hex');
 
