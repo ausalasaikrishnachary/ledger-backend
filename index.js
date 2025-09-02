@@ -7,6 +7,7 @@ const inventoryCategoryRoutes = require('./routes/Inventory/Category_companyRout
 const inventoryServiceRoutes = require('./routes/Inventory/ServiceRoutes'); // Import inventory service routes
 const inventoryStockRoutes = require('./routes/Inventory/StockRoutes'); // Import inventory stock routes
 const gstApiRoutes = require('./routes/gstApiRoutes'); // Import GST API routes
+const transactionApiRoutes = require('./routes/Transaction/TransactionRoutes');
 
 const port = 5000;
 
@@ -21,6 +22,7 @@ app.use('/', inventoryCategoryRoutes); // Use inventory category and company rou
 app.use('/', inventoryServiceRoutes); // Use inventory service routes
 app.use('/', inventoryStockRoutes); // Use inventory stock routes
 app.use('/', gstApiRoutes); // Use GST API routes
+app.use('/', transactionApiRoutes);
 // Start server
 app.listen(port, () => {
   console.log(`Server running on http://localhost:${port}`);
