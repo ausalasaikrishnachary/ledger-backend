@@ -63,9 +63,24 @@ router.put("/products/:id", (req, res) => {
 
 // Delete Product
 router.delete("/products/:id", (req, res) => {
-  db.query("DELETE FROM products WHERE id = ?", [req.params.id], (err, result) => {
-    if (err) return res.status(500).send(err);
-    res.send({ message: "Deleted successfully." });
+  const productId = req.params.id;
+
+  // 1️⃣ Delete dependent rows in stock table
+  db.query("DELETE FROM stock WHERE product_id = ?", [productId], (err, stockResult) => {
+    if (err) {
+      console.error("Error deleting stock rows:", err);
+      return res.status(500).send({ message: "Failed to delete related stock", error: err });
+    }
+
+    // 2️⃣ Delete the product itself
+    db.query("DELETE FROM products WHERE id = ?", [productId], (err, productResult) => {
+      if (err) {
+        console.error("Error deleting product:", err);
+        return res.status(500).send({ message: "Failed to delete product", error: err });
+      }
+
+      res.send({ message: "Product deleted successfully!" });
+    });
   });
 });
 
