@@ -230,4 +230,25 @@ router.delete("/staff/:id", (req, res) => {
   });
 });
 
+
+router.get("/account", (req, res) => {
+  const sql = `
+    SELECT 
+      id, 
+      name, 
+      role
+    FROM accounts
+    WHERE LOWER(role) = 'staff'
+  `;
+  
+  db.query(sql, (err, results) => {
+    if (err) {
+      console.error("Database error:", err);
+      return res.status(500).json({ success: false, error: "Failed to fetch staff data" });
+    }
+    res.json({ success: true, staff: results });
+  });
+});
+
+
 module.exports = router;
