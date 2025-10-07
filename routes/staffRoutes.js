@@ -67,6 +67,7 @@ router.post("/staff", (req, res) => {
         opening_balance: null,
         mobile_number: mobileNumber,
         email: email,
+         password: "1234", 
         gstin: null,
         gst_registered_name: null,
         business_name: null,
@@ -116,7 +117,7 @@ router.post("/staff", (req, res) => {
         res.status(201).send({ 
           message: "Staff account created successfully", 
           id: result.insertId,
-          defaultPassword: mobileNumber // Default password is mobile number
+          defaultPassword: "1234" /// Default password is mobile number
         });
       });
     });
@@ -192,6 +193,7 @@ router.put("/staff/:id", (req, res) => {
       email: email,
       role: role,
       status: status,
+      password: "1234",
       display_name: fullName
     };
 

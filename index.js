@@ -10,6 +10,7 @@ const gstApiRoutes = require('./routes/gstApiRoutes'); // Import GST API routes
 const transactionApiRoutes = require('./routes/Transaction/TransactionRoutes');
 const accountsGroupRoutes = require('./routes/accountGroupRoutes');
 const staffRoutes = require('./routes/staffRoutes'); // Import staff routes
+const authRoutes = require('./routes/loginsignup'); 
 
 const port = 5000;
 
@@ -27,6 +28,7 @@ app.use('/', gstApiRoutes); // Use GST API routes
 app.use('/', transactionApiRoutes);
 app.use('/', accountsGroupRoutes);
 app.use('/api', staffRoutes);
+app.use('/', authRoutes); 
 
 
 // Start server
