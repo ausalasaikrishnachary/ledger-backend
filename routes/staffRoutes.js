@@ -3,6 +3,8 @@ const router = express.Router();
 const db = require('../db');
 
 // Create Staff Account
+
+
 router.post("/staff", (req, res) => {
   const {
     fullName,
@@ -56,10 +58,13 @@ router.post("/staff", (req, res) => {
         });
       }
 
-      // Prepare staff data with all required fields set to NULL except the essential ones
+      // Generate password
+      const password = `${fullName.replace(/\s+/g, "")}@123`;
+
+      // Prepare staff data
       const staffData = {
         account_group_id: null,
-        'group': "staff", // Escaped with backticks
+        'group': "staff", 
         title: "Mr.",
         entity_type: "Individual",
         name: fullName,
@@ -67,7 +72,7 @@ router.post("/staff", (req, res) => {
         opening_balance: null,
         mobile_number: mobileNumber,
         email: email,
-         password: "1234", 
+        password: password, 
         gstin: null,
         gst_registered_name: null,
         business_name: null,
@@ -108,17 +113,55 @@ router.post("/staff", (req, res) => {
       };
 
       const sql = "INSERT INTO accounts SET ?";
-      db.query(sql, staffData, (err, result) => {
+      db.query(sql, staffData, async (err, result) => {
         if (err) {
           console.error("Database error:", err);
           return res.status(500).send({ error: "Failed to create staff account" });
         }
-        
-        res.status(201).send({ 
-          message: "Staff account created successfully", 
-          id: result.insertId,
-          defaultPassword: "1234" /// Default password is mobile number
+
+        // Send email
+        const transporter = nodemailer.createTransport({
+          service: "gmail",
+          auth: {
+              user: "bharathsiripuram98@gmail.com",
+        pass: "alsishqgybtzonoj",
+          },
+          tls: { rejectUnauthorized: false },
         });
+
+        const mailOptions = {
+          from: "bharathsiripuram98@gmail.com",
+          to: email,
+          subject: "Your Staff Account Details",
+          text: `
+Hello ${fullName},
+
+Your staff account has been successfully created.
+
+Phone Number: ${mobileNumber}
+Role: ${role}
+Email: ${email}
+Password: ${password}
+
+Please keep this information secure.
+          `,
+        };
+
+        try {
+          await transporter.sendMail(mailOptions);
+          res.status(201).send({
+            message: "Staff account created successfully and email sent",
+            id: result.insertId,
+            defaultPassword: password
+          });
+        } catch (mailErr) {
+          console.error("Email error:", mailErr);
+          res.status(201).send({
+            message: "Staff account created but failed to send email",
+            id: result.insertId,
+            defaultPassword: password
+          });
+        }
       });
     });
   });
@@ -153,47 +196,40 @@ router.get("/staff/:id", (req, res) => {
   });
 });
 
-// Update Staff Member - FIXED: Added backticks around `group`
+
+
 router.put("/staff/:id", (req, res) => {
-  const {
-    fullName,
-    email,
-    role,
-    status
-  } = req.body;
+  const { fullName, email, role, status } = req.body;
 
   // Validate required fields
   if (!fullName || !email || !role) {
-    return res.status(400).send({ 
-      error: "Full name, email, and role are required" 
-    });
+    return res.status(400).send({ error: "Full name, email, and role are required" });
   }
 
   // Validate email format
   const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
   if (!emailRegex.test(email)) {
-    return res.status(400).send({ 
-      error: "Please provide a valid email address" 
-    });
+    return res.status(400).send({ error: "Please provide a valid email address" });
   }
 
   // Check if email already exists (excluding current staff member)
   const checkEmailSql = "SELECT id FROM accounts WHERE email = ? AND id != ?";
   db.query(checkEmailSql, [email, req.params.id], (err, results) => {
     if (err) return res.status(500).send({ error: "Database error" });
-    
+
     if (results.length > 0) {
-      return res.status(400).send({ 
-        error: "Email already exists" 
-      });
+      return res.status(400).send({ error: "Email already exists" });
     }
+
+    // Generate password from fullName
+    const password = `${fullName.replace(/\s+/g, "")}@123`;
 
     const updateData = {
       name: fullName,
       email: email,
       role: role,
       status: status,
-      password: "1234",
+      password: password,
       display_name: fullName
     };
 
@@ -203,17 +239,21 @@ router.put("/staff/:id", (req, res) => {
         console.error("Database error:", err);
         return res.status(500).send({ error: "Failed to update staff account" });
       }
-      
+
       if (result.affectedRows === 0) {
         return res.status(404).send({ error: "Staff member not found" });
       }
-      
-      res.send({ 
-        message: "Staff account updated successfully" 
+
+      // No email is sent
+      res.send({
+        message: "Staff account updated successfully",
+        id: req.params.id,
+        password: password
       });
     });
   });
 });
+
 
 // Delete Staff Member - FIXED: Added backticks around `group`
 router.delete("/staff/:id", (req, res) => {
