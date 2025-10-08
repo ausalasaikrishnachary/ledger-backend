@@ -5,12 +5,29 @@ const db = require('../db');
 // Create Account
 router.post("/accounts", (req, res) => {
   const data = req.body;
+
+  // Always set default password as "1234" if not provided
+  const accountData = {
+    ...data,
+    password: data.password || "1234"
+  };
+
   const sql = "INSERT INTO accounts SET ?";
-  db.query(sql, data, (err, result) => {
-    if (err) return res.status(500).send(err);
-    res.send({ id: result.insertId, ...data });
+  db.query(sql, accountData, (err, result) => {
+    if (err) {
+      console.error("Database error:", err);
+      return res.status(500).send({ error: "Database error", details: err });
+    }
+
+    res.send({
+      message: "Account created successfully",
+      id: result.insertId,
+      defaultPassword: "1234",
+      ...accountData
+    });
   });
 });
+
 
 // Get All Accounts
 router.get("/accounts", (req, res) => {
