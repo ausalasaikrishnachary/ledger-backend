@@ -11,7 +11,8 @@ const transactionApiRoutes = require('./routes/Transaction/TransactionRoutes');
 const accountsGroupRoutes = require('./routes/accountGroupRoutes');
 const staffRoutes = require('./routes/staffRoutes'); // Import staff routes
 const loginRoutes = require('./routes/loginsignup');
-const AuthRoutes = require('./routes/authRoutes');  
+const AuthRoutes = require('./routes/authRoutes');
+const LogVisit = require('./routes/LogVisit'); // ✅ correct relative path
 
 const port = 5000;
 
@@ -31,6 +32,7 @@ app.use('/', accountsGroupRoutes);
 app.use('/api', staffRoutes);
 app.use('/', loginRoutes); 
 app.use('/', AuthRoutes); 
+app.use('/api', LogVisit); // ✅ mount LogVisit under /api
 
 
 // Start server
