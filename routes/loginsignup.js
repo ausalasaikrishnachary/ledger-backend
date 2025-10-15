@@ -26,7 +26,7 @@ router.post("/login", (req, res) => {
       password,
       status
     FROM accounts 
-    WHERE (email = ? OR mobile_number = ?) AND status = 'Active'
+    WHERE (email = ? OR mobile_number = ?) AND status = 'active'
   `;
 
   db.query(sql, [username, username], (err, results) => {

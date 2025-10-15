@@ -8,11 +8,11 @@ router.post("/accounts", async (req, res) => {
   const { name, email, phone_number, password, role, ...otherData } = req.body;
 
   // Validate required fields
-  if (!name || !email || !phone_number || !role || !password) {
-    return res.status(400).json({
-      error: "Missing required fields: name, email, phone_number, role, password",
-    });
-  }
+  // if (!name || !email || !phone_number || !role || !password) {
+  //   return res.status(400).json({
+  //     error: "Missing required fields: name, email, phone_number, role, password",
+  //   });
+  // }
 
   // Prepare data for insertion, include role
   const data = { name, email, phone_number, password, role, ...otherData };
