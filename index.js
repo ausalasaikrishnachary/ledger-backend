@@ -13,7 +13,7 @@ const staffRoutes = require('./routes/staffRoutes'); // Import staff routes
 const loginRoutes = require('./routes/loginsignup');
 const AuthRoutes = require('./routes/authRoutes');
 const LogVisit = require('./routes/LogVisit'); // ✅ correct relative path
-
+const expensiveRoutes = require("./routes/expensiveRoutes");
 const port = 5000;
 
 // ✅ Use CORS Middleware (allows requests from any origin)
@@ -33,7 +33,7 @@ app.use('/api', staffRoutes);
 app.use('/', loginRoutes); 
 app.use('/', AuthRoutes); 
 app.use('/api', LogVisit); // ✅ mount LogVisit under /api
-
+app.use("/", expensiveRoutes);
 
 // Start server
 app.listen(port, () => {
