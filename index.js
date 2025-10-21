@@ -1,6 +1,7 @@
 const express = require('express');
 const cors = require('cors'); // ✅ Import CORS
 const app = express();
+
 const accountsRoutes = require('./routes/accountRoutes'); // Import account routes
 const inventoryRoutes = require('./routes/Inventory/inventoryRoutes'); // Import inventory routes
 const inventoryCategoryRoutes = require('./routes/Inventory/Category_companyRoutes'); // Import inventory category and company routes
