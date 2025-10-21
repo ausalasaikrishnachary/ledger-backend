@@ -14,6 +14,9 @@ const loginRoutes = require('./routes/loginsignup');
 const AuthRoutes = require('./routes/authRoutes');
 const LogVisit = require('./routes/LogVisit'); // ✅ correct relative path
 const expensiveRoutes = require("./routes/expensiveRoutes");
+const CustomerRoutes = require("./routes/Inventory/CustomerRoutes")
+// const salesPurchaseInventoryRoutes = require("./routes/Inventory/SalesPurchaseInventoryRoutes")
+const vochurRoutes = require("./routes/VochurRoutes")
 const port = 5000;
 
 // ✅ Use CORS Middleware (allows requests from any origin)
@@ -23,6 +26,7 @@ app.use(cors());
 app.use(express.json());
 app.use('/', accountsRoutes);
 app.use('/', inventoryRoutes); // Use inventory routes
+app.use('/', vochurRoutes)
 app.use('/', inventoryCategoryRoutes); // Use inventory category and company routes
 app.use('/', inventoryServiceRoutes); // Use inventory service routes
 app.use('/', inventoryStockRoutes); // Use inventory stock routes
@@ -34,6 +38,7 @@ app.use('/', loginRoutes);
 app.use('/', AuthRoutes); 
 app.use('/api', LogVisit); // ✅ mount LogVisit under /api
 app.use("/", expensiveRoutes);
+// app.use("/", CustomerRoutes);
 
 // Start server
 app.listen(port, () => {
