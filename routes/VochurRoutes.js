@@ -44,6 +44,12 @@ router.post("/transaction", (req, res) => {
             nextVoucherId = 1; // Fallback to 1
           }
 
+          // Calculate GST breakdown
+          const totalCGST = parseFloat(transactionData.totalCGST) || 0;
+          const totalSGST = parseFloat(transactionData.totalSGST) || 0;
+          const totalIGST = parseFloat(transactionData.totalIGST) || 0;
+          const taxType = transactionData.taxType || "CGST/SGST";
+
           // 1. Insert into Voucher table with explicit VoucherID
           const voucherSql = `INSERT INTO Voucher SET ?`;
           
@@ -52,6 +58,7 @@ router.post("/transaction", (req, res) => {
             return sum + (parseFloat(item.quantity) || 0);
           }, 0);
 
+          // Only include columns that exist in the Voucher table
           const voucherData = {
             VoucherID: nextVoucherId,
             TransactionType: 'Sales',
@@ -76,16 +83,17 @@ router.post("/transaction", (req, res) => {
             BasicAmount: parseFloat(transactionData.taxableAmount) || 0,
             ValueOfGoods: parseFloat(transactionData.taxableAmount) || 0,
             EntryDate: new Date(),
-            SGSTPercentage: 0,
-            CGSTPercentage: 0,
-            IGSTPercentage: 0,
-            SGSTAmount: 0,
-            CGSTAmount: 0,
-            IGSTAmount: 0,
+            SGSTPercentage: taxType === "CGST/SGST" ? (totalSGST > 0 ? 50 : 0) : 0,
+            CGSTPercentage: taxType === "CGST/SGST" ? (totalCGST > 0 ? 50 : 0) : 0,
+            IGSTPercentage: taxType === "IGST" ? 100 : 0,
+            SGSTAmount: totalSGST,
+            CGSTAmount: totalCGST,
+            IGSTAmount: totalIGST,
             TaxSystem: 'GST'
           };
 
           console.log('Inserting voucher data with VoucherID:', nextVoucherId);
+          console.log('GST Breakdown - CGST:', totalCGST, 'SGST:', totalSGST, 'IGST:', totalIGST);
 
           const voucherResult = await queryPromise(voucherSql, voucherData);
           const voucherId = voucherResult.insertId || nextVoucherId;
@@ -136,10 +144,10 @@ router.post("/transaction", (req, res) => {
             const stockData = {
               product_id: productId,
               price_per_unit: parseFloat(item.price) || 0,
-              opening_stock: parseFloat(product.opening_stock) || 0, // Opening stock remains constant
-              stock_in: 0, // No stock in for sales
-              stock_out: quantity, // Only the quantity sold in this transaction
-              balance_stock: newBalanceStock, // New balance after this sale
+              opening_stock: parseFloat(product.opening_stock) || 0,
+              stock_in: 0,
+              stock_out: quantity,
+              balance_stock: newBalanceStock,
               date: new Date()
             };
 
@@ -187,7 +195,13 @@ router.post("/transaction", (req, res) => {
             res.send({
               message: "Transaction completed successfully",
               voucherId: voucherId,
-              stockUpdated: true
+              stockUpdated: true,
+              taxType: taxType,
+              gstBreakdown: {
+                cgst: totalCGST,
+                sgst: totalSGST,
+                igst: totalIGST
+              }
             });
           });
 

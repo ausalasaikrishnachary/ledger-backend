@@ -8,14 +8,6 @@ const db = require('./../../db'); // Adjust path as per your project structure
 router.post('/products', (req, res) => {
   const data = req.body;
 
-  // Calculate balance_stock from opening_stock and quantity
-  const openingStock = parseFloat(data.opening_stock) || 0;
-  const quantity = parseFloat(data.quantity) || 0;
-  data.balance_stock = (openingStock + quantity).toString();
-  
-  // Set default values for stock_in and stock_out
-  data.stock_in = "0";
-  data.stock_out = "0";
   try {
     data.balance_stock = parseFloat(data.opening_stock) || 0;
     data.created_at = new Date();
