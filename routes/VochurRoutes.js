@@ -2,7 +2,38 @@ const express = require('express');
 const router = express.Router();
 const db = require('../db');
 
-// Create Sales Transaction and Update Stock
+// Get next invoice number
+router.get("/next-invoice-number", async (req, res) => {
+  try {
+    const query = `
+      SELECT MAX(CAST(SUBSTRING(InvoiceNumber, 4) AS UNSIGNED)) as maxNumber 
+      FROM Voucher 
+      WHERE TransactionType = 'Sales' 
+      AND InvoiceNumber LIKE 'INV%'
+    `;
+    
+    db.query(query, (err, results) => {
+      if (err) {
+        console.error('Error fetching next invoice number:', err);
+        return res.status(500).send({ error: 'Failed to get next invoice number' });
+      }
+      
+      let nextNumber = 1;
+      if (results[0].maxNumber !== null && !isNaN(results[0].maxNumber)) {
+        nextNumber = parseInt(results[0].maxNumber) + 1;
+      }
+      
+      const nextInvoiceNumber = `INV${nextNumber.toString().padStart(3, '0')}`;
+      
+      res.send({ nextInvoiceNumber });
+    });
+  } catch (error) {
+    console.error('Error in next-invoice-number:', error);
+    res.status(500).send({ error: 'Internal server error' });
+  }
+});
+
+// Create Sales Transaction and Update Stock - FIXED invoice number handling
 router.post("/transaction", (req, res) => {
   const transactionData = req.body;
   console.log('Received transaction data:', transactionData);
@@ -63,6 +94,10 @@ router.post("/transaction", (req, res) => {
             batchDetailsJson = '[]';
           }
 
+          // Use the provided invoice number or generate a default
+          const invoiceNumber = transactionData.invoiceNumber || 'INV001';
+          console.log('Using invoice number:', invoiceNumber);
+
           // 1. Insert into Voucher table with explicit VoucherID and BatchDetails
           const voucherSql = `INSERT INTO Voucher SET ?`;
           
@@ -75,7 +110,8 @@ router.post("/transaction", (req, res) => {
           const voucherData = {
             VoucherID: nextVoucherId,
             TransactionType: 'Sales',
-            VchNo: transactionData.invoiceNumber || 'INV001',
+            VchNo: invoiceNumber, // Use the actual invoice number
+            InvoiceNumber: transactionData.invoiceNumber || 'INV001',
             Date: transactionData.invoiceDate || new Date().toISOString().split('T')[0],
             PaymentTerms: 'Immediate',
             Freight: 0,
@@ -106,9 +142,8 @@ router.post("/transaction", (req, res) => {
             BatchDetails: batchDetailsJson
           };
 
-          console.log('Inserting voucher data with VoucherID:', nextVoucherId);
+          console.log('Inserting voucher data with VoucherID:', nextVoucherId, 'Invoice No:', invoiceNumber);
           console.log('GST Breakdown - CGST:', totalCGST, 'SGST:', totalSGST, 'IGST:', totalIGST);
-          console.log('Batch Details:', batchDetailsJson);
 
           const voucherResult = await queryPromise(voucherSql, voucherData);
           const voucherId = voucherResult.insertId || nextVoucherId;
@@ -156,7 +191,6 @@ router.post("/transaction", (req, res) => {
             console.log(`Updated product ${productId}: stock_out=${newStockOut}, balance_stock=${newBalanceStock}`);
 
             // Handle stock table - Create new stock record for this transaction
-            // FIXED: Include batch_number and voucher_id in stock table
             const stockData = {
               product_id: productId,
               price_per_unit: parseFloat(item.price) || 0,
@@ -164,8 +198,8 @@ router.post("/transaction", (req, res) => {
               stock_in: 0,
               stock_out: quantity,
               balance_stock: newBalanceStock,
-              batch_number: item.batch || null, // Store batch number
-              voucher_id: voucherId, // Store voucher ID (invoice number)
+              batch_number: item.batch || null,
+              voucher_id: voucherId,
               date: new Date()
             };
 
@@ -213,6 +247,7 @@ router.post("/transaction", (req, res) => {
             res.send({
               message: "Transaction completed successfully",
               voucherId: voucherId,
+              invoiceNumber: invoiceNumber,
               stockUpdated: true,
               taxType: taxType,
               gstBreakdown: {
@@ -698,5 +733,47 @@ router.get("/stock-structure", (req, res) => {
     res.send(results);
   });
 });
+
+
+
+// Get last invoice number
+// router.get("/transactions/last-invoice", (req, res) => {
+//   const query = "SELECT VchNo FROM Voucher WHERE TransactionType = 'Sales' ORDER BY VoucherID DESC LIMIT 1";
+  
+//   db.query(query, (err, results) => {
+//     if (err) {
+//       console.error('Error fetching last invoice:', err);
+//       return res.status(500).send(err);
+//     }
+    
+//     if (results.length === 0) {
+//       return res.send({ lastInvoiceNumber: null });
+//     }
+    
+//     res.send({ lastInvoiceNumber: results[0].VchNo });
+//   });
+// });
+
+
+
+// Get last invoice number
+router.get("/last-invoice", (req, res) => {
+  const query = "SELECT VchNo FROM Voucher WHERE TransactionType = 'Sales' ORDER BY VoucherID DESC LIMIT 1";
+  
+  db.query(query, (err, results) => {
+    if (err) {
+      console.error('Error fetching last invoice number:', err);
+      return res.status(500).send(err);
+    }
+    
+    if (results.length === 0) {
+      return res.send({ lastInvoiceNumber: null });
+    }
+    
+    res.send({ lastInvoiceNumber: results[0].VchNo });
+  });
+});
+
+
 
 module.exports = router;
