@@ -26,7 +26,7 @@ router.post("/login", (req, res) => {
       password,
       status
     FROM accounts 
-    WHERE (email = ? OR mobile_number = ?) AND status = 'active'
+    WHERE (email = ? OR mobile_number = ?) AND status = 'Active'
   `;
 
   db.query(sql, [username, username], (err, results) => {
@@ -38,12 +38,12 @@ router.post("/login", (req, res) => {
       });
     }
 
-    if (results.length === 0) {
-      return res.status(401).send({ 
-        success: false,
-        error: "Invalid username or account not active" 
-      });
-    }
+    // if (results.length === 0) {
+    //   return res.status(401).send({ 
+    //     success: false,
+    //     error: "Invalid username or account not active" 
+    //   });
+    // }
 
     const user = results[0];
 
