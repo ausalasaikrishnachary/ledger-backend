@@ -39,13 +39,16 @@ router.post("/stock/:productId", (req, res) => {
     });
 
     // Step 2: Insert new stock entry with current balance as opening stock
+    // FIXED: Include batch_number and voucher_id in stock table
     const stockEntry = {
       product_id: productId,
       price_per_unit: data.price_per_unit,
-      opening_stock: openingStockForNewEntry, // This should be the current balance
+      opening_stock: openingStockForNewEntry,
       stock_in: stockIn.toString(),
       stock_out: stockOut.toString(),
-      balance_stock: newBalance.toString(), // This becomes the opening stock for next entry
+      balance_stock: newBalance.toString(),
+      batch_number: data.batch_number || null, // Store batch number
+      voucher_id: data.voucher_id || null, // Store voucher ID
       date: date
     };
 
@@ -73,26 +76,45 @@ router.post("/stock/:productId", (req, res) => {
           stock_out_added: stockOut,
           new_balance_stock: newBalance,
           updated_stock_in: totalStockIn,
-          updated_stock_out: totalStockOut
+          updated_stock_out: totalStockOut,
+          batch_number: data.batch_number,
+          voucher_id: data.voucher_id
         });
       });
     });
   });
 });
 
-// Get Stock History for a Product
+// Get Stock History for a Product with batch and voucher details
 router.get("/stock/:productId", (req, res) => {
   const productId = req.params.productId;
   
   const query = `
-    SELECT s.*, p.goods_name, p.product_code 
+    SELECT s.*, p.goods_name, p.product_code, v.VchNo as invoice_number, v.TransactionType
     FROM stock s 
     JOIN products p ON s.product_id = p.id 
+    LEFT JOIN Voucher v ON s.voucher_id = v.VoucherID
     WHERE s.product_id = ? 
     ORDER BY s.date DESC, s.id DESC
   `;
   
   db.query(query, [productId], (err, results) => {
+    if (err) return res.status(500).send(err);
+    res.send(results);
+  });
+});
+
+// Get All Stock Entries with product and voucher details
+router.get("/stock", (req, res) => {
+  const query = `
+    SELECT s.*, p.goods_name, p.product_code, v.VchNo as invoice_number, v.TransactionType
+    FROM stock s 
+    JOIN products p ON s.product_id = p.id 
+    LEFT JOIN Voucher v ON s.voucher_id = v.VoucherID
+    ORDER BY s.date DESC, s.id DESC
+  `;
+  
+  db.query(query, (err, results) => {
     if (err) return res.status(500).send(err);
     res.send(results);
   });
@@ -144,6 +166,8 @@ router.put("/stock/:stockId", (req, res) => {
         stock_in = ?,
         stock_out = ?,
         balance_stock = ?,
+        batch_number = ?,
+        voucher_id = ?,
         date = ?
       WHERE id = ?
     `;
@@ -153,6 +177,8 @@ router.put("/stock/:stockId", (req, res) => {
       newStockIn,
       newStockOut,
       newBalance,
+      data.batch_number || null,
+      data.voucher_id || null,
       data.date,
       stockId
     ], (err2) => {

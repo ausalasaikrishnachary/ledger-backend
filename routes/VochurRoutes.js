@@ -2,7 +2,7 @@ const express = require('express');
 const router = express.Router();
 const db = require('../db');
 
-// Create Transaction and Update Stock
+// Create Sales Transaction and Update Stock
 router.post("/transaction", (req, res) => {
   const transactionData = req.body;
   console.log('Received transaction data:', transactionData);
@@ -103,7 +103,7 @@ router.post("/transaction", (req, res) => {
             CGSTAmount: totalCGST,
             IGSTAmount: totalIGST,
             TaxSystem: 'GST',
-            BatchDetails: batchDetailsJson // New column for batch details
+            BatchDetails: batchDetailsJson
           };
 
           console.log('Inserting voucher data with VoucherID:', nextVoucherId);
@@ -156,7 +156,7 @@ router.post("/transaction", (req, res) => {
             console.log(`Updated product ${productId}: stock_out=${newStockOut}, balance_stock=${newBalanceStock}`);
 
             // Handle stock table - Create new stock record for this transaction
-            // Use only existing columns in stock table
+            // FIXED: Include batch_number and voucher_id in stock table
             const stockData = {
               product_id: productId,
               price_per_unit: parseFloat(item.price) || 0,
@@ -164,12 +164,13 @@ router.post("/transaction", (req, res) => {
               stock_in: 0,
               stock_out: quantity,
               balance_stock: newBalanceStock,
+              batch_number: item.batch || null, // Store batch number
+              voucher_id: voucherId, // Store voucher ID (invoice number)
               date: new Date()
-              // Removed batch_number and voucher_id as they don't exist in stock table
             };
 
             await queryPromise("INSERT INTO stock SET ?", stockData);
-            console.log(`Created new stock record for product ${productId} with stock_out=${quantity}`);
+            console.log(`Created new stock record for product ${productId} with stock_out=${quantity}, batch=${item.batch}, voucher=${voucherId}`);
 
             // Update batch quantity if batch is selected
             if (item.batch) {
@@ -251,157 +252,6 @@ router.post("/transaction", (req, res) => {
   });
 });
 
-// Get transaction with batch details
-router.get("/transactions/:id", (req, res) => {
-  const query = "SELECT *, JSON_UNQUOTE(BatchDetails) as batch_details FROM Voucher WHERE VoucherID = ?";
-  
-  db.query(query, [req.params.id], (err, results) => {
-    if (err) {
-      console.error('Error fetching transaction:', err);
-      return res.status(500).send(err);
-    }
-    
-    if (results.length === 0) {
-      return res.send({});
-    }
-    
-    const transaction = results[0];
-    
-    // Parse batch details from JSON string
-    try {
-      if (transaction.batch_details) {
-        transaction.batch_details = JSON.parse(transaction.batch_details);
-      } else {
-        transaction.batch_details = [];
-      }
-    } catch (error) {
-      console.error('Error parsing batch details:', error);
-      transaction.batch_details = [];
-    }
-    
-    res.send(transaction);
-  });
-});
-
-// Get all transactions with batch details
-router.get("/transactions", (req, res) => {
-  const query = "SELECT *, JSON_UNQUOTE(BatchDetails) as batch_details FROM Voucher ORDER BY VoucherID DESC";
-  
-  db.query(query, (err, results) => {
-    if (err) {
-      console.error('Error fetching transactions:', err);
-      return res.status(500).send(err);
-    }
-    
-    // Parse batch details for each transaction
-    results.forEach(transaction => {
-      try {
-        if (transaction.batch_details) {
-          transaction.batch_details = JSON.parse(transaction.batch_details);
-        } else {
-          transaction.batch_details = [];
-        }
-      } catch (error) {
-        console.error('Error parsing batch details for transaction:', transaction.VoucherID, error);
-        transaction.batch_details = [];
-      }
-    });
-    
-    res.send(results);
-  });
-});
-
-// Get stock history for a product
-router.get("/stock-history/:productId", (req, res) => {
-  const productId = req.params.productId;
-  
-  const query = `
-    SELECT s.*, p.goods_name 
-    FROM stock s 
-    JOIN products p ON s.product_id = p.id 
-    WHERE s.product_id = ? 
-    ORDER BY s.date DESC, s.id DESC
-  `;
-
-  db.query(query, [productId], (err, results) => {
-    if (err) {
-      console.error('Error fetching stock history:', err);
-      return res.status(500).send(err);
-    }
-    res.send(results);
-  });
-});
-
-// Get current stock status for all products
-router.get("/stock-status", (req, res) => {
-  const query = `
-    SELECT 
-      id,
-      goods_name,
-      opening_stock,
-      stock_in,
-      stock_out,
-      balance_stock,
-      (opening_stock + stock_in - stock_out) as calculated_balance
-    FROM products 
-    ORDER BY goods_name
-  `;
-
-  db.query(query, (err, results) => {
-    if (err) {
-      console.error('Error fetching stock status:', err);
-      return res.status(500).send(err);
-    }
-    res.send(results);
-  });
-});
-
-// Health check endpoint
-router.get("/health", (req, res) => {
-  res.send({ status: "OK", message: "Transaction service is running" });
-});
-
-// Check Voucher table status
-router.get("/voucher-status", (req, res) => {
-  const queries = [
-    "SHOW COLUMNS FROM Voucher LIKE 'VoucherID'",
-    "SHOW COLUMNS FROM Voucher LIKE 'BatchDetails'",
-    "SELECT MAX(VoucherID) as maxId FROM Voucher",
-    "SHOW TABLE STATUS LIKE 'Voucher'"
-  ];
-
-  db.query(queries.join(';'), (err, results) => {
-    if (err) {
-      console.error('Error checking voucher status:', err);
-      return res.status(500).send(err);
-    }
-    
-    res.send({
-      voucherIdColumn: results[0][0],
-      batchDetailsColumn: results[1][0],
-      maxId: results[2][0],
-      tableStatus: results[3][0]
-    });
-  });
-});
-
-// Check Stock table structure
-router.get("/stock-structure", (req, res) => {
-  const query = "SHOW COLUMNS FROM stock";
-  
-  db.query(query, (err, results) => {
-    if (err) {
-      console.error('Error checking stock structure:', err);
-      return res.status(500).send(err);
-    }
-    
-    res.send(results);
-  });
-});
-
-
-
-// Create Purchase Transaction and Update Stock
 // Create Purchase Transaction and Update Stock
 router.post("/purchase-transaction", (req, res) => {
   const transactionData = req.body;
@@ -545,7 +395,7 @@ router.post("/purchase-transaction", (req, res) => {
             console.log(`Updated product ${productId}: stock_in=${newStockIn}, balance_stock=${newBalanceStock}`);
 
             // Handle stock table - Create new stock record for this purchase transaction
-            // FIXED: Remove transaction_type column as it doesn't exist in stock table
+            // FIXED: Include batch_number and voucher_id in stock table
             const stockData = {
               product_id: productId,
               price_per_unit: parseFloat(item.price) || 0,
@@ -553,12 +403,13 @@ router.post("/purchase-transaction", (req, res) => {
               stock_in: quantity, // This is purchase, so stock_in increases
               stock_out: 0,
               balance_stock: newBalanceStock,
-              date: new Date(),
-              voucher_id: voucherId // Add voucher_id if needed
+              batch_number: item.batch || null, // Store batch number
+              voucher_id: voucherId, // Store voucher ID (invoice number)
+              date: new Date()
             };
 
             await queryPromise("INSERT INTO stock SET ?", stockData);
-            console.log(`Created new purchase stock record for product ${productId} with stock_in=${quantity}`);
+            console.log(`Created new purchase stock record for product ${productId} with stock_in=${quantity}, batch=${item.batch}, voucher=${voucherId}`);
 
             // Handle batch - Create or update batch for purchase
             if (item.batch) {
@@ -650,6 +501,112 @@ router.post("/purchase-transaction", (req, res) => {
   });
 });
 
+// Get transaction with batch details
+router.get("/transactions/:id", (req, res) => {
+  const query = "SELECT *, JSON_UNQUOTE(BatchDetails) as batch_details FROM Voucher WHERE VoucherID = ?";
+  
+  db.query(query, [req.params.id], (err, results) => {
+    if (err) {
+      console.error('Error fetching transaction:', err);
+      return res.status(500).send(err);
+    }
+    
+    if (results.length === 0) {
+      return res.send({});
+    }
+    
+    const transaction = results[0];
+    
+    // Parse batch details from JSON string
+    try {
+      if (transaction.batch_details) {
+        transaction.batch_details = JSON.parse(transaction.batch_details);
+      } else {
+        transaction.batch_details = [];
+      }
+    } catch (error) {
+      console.error('Error parsing batch details:', error);
+      transaction.batch_details = [];
+    }
+    
+    res.send(transaction);
+  });
+});
+
+// Get all transactions with batch details
+router.get("/transactions", (req, res) => {
+  const query = "SELECT *, JSON_UNQUOTE(BatchDetails) as batch_details FROM Voucher ORDER BY VoucherID DESC";
+  
+  db.query(query, (err, results) => {
+    if (err) {
+      console.error('Error fetching transactions:', err);
+      return res.status(500).send(err);
+    }
+    
+    // Parse batch details for each transaction
+    results.forEach(transaction => {
+      try {
+        if (transaction.batch_details) {
+          transaction.batch_details = JSON.parse(transaction.batch_details);
+        } else {
+          transaction.batch_details = [];
+        }
+      } catch (error) {
+        console.error('Error parsing batch details for transaction:', transaction.VoucherID, error);
+        transaction.batch_details = [];
+      }
+    });
+    
+    res.send(results);
+  });
+});
+
+// Get stock history for a product with batch and voucher details
+router.get("/stock-history/:productId", (req, res) => {
+  const productId = req.params.productId;
+  
+  const query = `
+    SELECT s.*, p.goods_name, v.VchNo as invoice_number, v.TransactionType
+    FROM stock s 
+    JOIN products p ON s.product_id = p.id 
+    LEFT JOIN Voucher v ON s.voucher_id = v.VoucherID
+    WHERE s.product_id = ? 
+    ORDER BY s.date DESC, s.id DESC
+  `;
+
+  db.query(query, [productId], (err, results) => {
+    if (err) {
+      console.error('Error fetching stock history:', err);
+      return res.status(500).send(err);
+    }
+    res.send(results);
+  });
+});
+
+// Get current stock status for all products
+router.get("/stock-status", (req, res) => {
+  const query = `
+    SELECT 
+      id,
+      goods_name,
+      opening_stock,
+      stock_in,
+      stock_out,
+      balance_stock,
+      (opening_stock + stock_in - stock_out) as calculated_balance
+    FROM products 
+    ORDER BY goods_name
+  `;
+
+  db.query(query, (err, results) => {
+    if (err) {
+      console.error('Error fetching stock status:', err);
+      return res.status(500).send(err);
+    }
+    res.send(results);
+  });
+});
+
 // Get purchase transactions
 router.get("/purchase-transactions", (req, res) => {
   db.query("SELECT * FROM Voucher WHERE TransactionType = 'Purchase' ORDER BY VoucherID DESC", (err, results) => {
@@ -699,12 +656,47 @@ router.get("/purchase-stock-status", (req, res) => {
   });
 });
 
+// Health check endpoint
+router.get("/health", (req, res) => {
+  res.send({ status: "OK", message: "Transaction service is running" });
+});
+
+// Check Voucher table status
+router.get("/voucher-status", (req, res) => {
+  const queries = [
+    "SHOW COLUMNS FROM Voucher LIKE 'VoucherID'",
+    "SHOW COLUMNS FROM Voucher LIKE 'BatchDetails'",
+    "SELECT MAX(VoucherID) as maxId FROM Voucher",
+    "SHOW TABLE STATUS LIKE 'Voucher'"
+  ];
+
+  db.query(queries.join(';'), (err, results) => {
+    if (err) {
+      console.error('Error checking voucher status:', err);
+      return res.status(500).send(err);
+    }
+    
+    res.send({
+      voucherIdColumn: results[0][0],
+      batchDetailsColumn: results[1][0],
+      maxId: results[2][0],
+      tableStatus: results[3][0]
+    });
+  });
+});
+
+// Check Stock table structure
+router.get("/stock-structure", (req, res) => {
+  const query = "SHOW COLUMNS FROM stock";
+  
+  db.query(query, (err, results) => {
+    if (err) {
+      console.error('Error checking stock structure:', err);
+      return res.status(500).send(err);
+    }
+    
+    res.send(results);
+  });
+});
 
 module.exports = router;
-
-
-
-
-
-
-
