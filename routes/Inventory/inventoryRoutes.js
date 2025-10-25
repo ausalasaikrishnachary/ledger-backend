@@ -116,6 +116,7 @@ router.post('/products', async (req, res) => {
 });
 
 // Update a product - COMPLETELY FIXED VERSION
+// Update a product - FIXED VERSION
 router.put('/products/:id', async (req, res) => {
   const productId = req.params.id;
   const data = req.body;
@@ -174,6 +175,9 @@ router.put('/products/:id', async (req, res) => {
         lastBatchNumber = parseInt(lastBatchRow[0].batch_number) || 0;
       }
       console.log('📊 Last batch number for group:', lastBatchNumber);
+
+      // Store IDs of batches that were processed in this request
+      const processedBatchIds = [];
 
       // Process each batch from request
       for (const [index, batch] of batches.entries()) {
@@ -255,6 +259,7 @@ router.put('/products/:id', async (req, res) => {
           
           await db.promise().query(updateSql, updateValues);
           batchesUpdated++;
+          processedBatchIds.push(parseInt(batch.id)); // Track this batch ID
           console.log('✅ Updated batch ID:', batch.id);
           
         } else {
@@ -289,29 +294,26 @@ router.put('/products/:id', async (req, res) => {
           
           const [insertResult] = await db.promise().query(insertSql, insertValues);
           batchesInserted++;
+          processedBatchIds.push(insertResult.insertId); // Track the newly inserted batch ID
           console.log('✅ Inserted new batch with ID:', insertResult.insertId);
         }
       }
 
-      // FIXED: SMART DELETION LOGIC - Only delete batches that are not in the request
+      // FIXED: SMART DELETION LOGIC - Only delete batches that are not processed in this request
       console.log('\n🗑️ Checking for batches to delete...');
       
-      // Get IDs of batches that should be kept (existing batches from request)
-      const batchIdsFromRequest = batches
-        .filter(b => b.isExisting && b.id && !b.id.toString().includes('temp_'))
-        .map(b => parseInt(b.id));
-      
-      console.log('Batch IDs from request to keep:', batchIdsFromRequest);
+      console.log('Processed batch IDs (updated + inserted):', processedBatchIds);
       console.log('All existing batch IDs in DB:', Array.from(existingBatchMap.keys()));
 
-      if (batchIdsFromRequest.length > 0) {
-        const placeholders = batchIdsFromRequest.map(() => '?').join(',');
+      if (processedBatchIds.length > 0) {
+        // Delete batches that exist in DB but weren't processed in this request
+        const placeholders = processedBatchIds.map(() => '?').join(',');
         const [deleteResult] = await db.promise().query(
           `DELETE FROM batches WHERE product_id = ? AND id NOT IN (${placeholders})`,
-          [productId, ...batchIdsFromRequest]
+          [productId, ...processedBatchIds]
         );
         batchesDeleted = deleteResult.affectedRows;
-        console.log('🗑️ Deleted', batchesDeleted, 'batches that were removed from UI');
+        console.log('🗑️ Deleted', batchesDeleted, 'batches that were not in the current request');
       } else if (batches.length === 0 && existingBatches.length > 0) {
         // If no batches in request but batches exist in DB, delete all
         const [deleteResult] = await db.promise().query(
