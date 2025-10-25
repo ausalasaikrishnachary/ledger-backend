@@ -537,8 +537,27 @@ router.post("/purchase-transaction", (req, res) => {
 });
 
 // Get transaction with batch details
+// Get transaction with batch details - ENHANCED VERSION
 router.get("/transactions/:id", (req, res) => {
-  const query = "SELECT *, JSON_UNQUOTE(BatchDetails) as batch_details FROM Voucher WHERE VoucherID = ?";
+  const query = `
+    SELECT 
+      v.*, 
+      JSON_UNQUOTE(BatchDetails) as batch_details,
+      a.billing_address_line1,
+      a.billing_address_line2,
+      a.billing_city,
+      a.billing_pin_code,
+      a.billing_state,
+      a.shipping_address_line1,
+      a.shipping_address_line2,
+      a.shipping_city,
+      a.shipping_pin_code,
+      a.shipping_state,
+      a.gstin
+    FROM Voucher v
+    LEFT JOIN accounts a ON v.PartyID = a.id
+    WHERE v.VoucherID = ?
+  `;
   
   db.query(query, [req.params.id], (err, results) => {
     if (err) {
