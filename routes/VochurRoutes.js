@@ -373,7 +373,7 @@ router.post("/transaction", (req, res) => {
             
             if (error.code === 'ER_DUP_ENTRY') {
               res.status(500).send({ 
-                error: 'Database error: Duplicate entry detected. Please contact administrator to fix voucher table auto-increment.',
+                error: 'Database error: Duplicate entry detected.',
                 details: 'VoucherID primary key conflict',
                 code: 'DUPLICATE_KEY_ERROR'
               });
@@ -572,6 +572,7 @@ router.get("/last-purchase-invoice", (req, res) => {
 });
 
 // Get transaction with batch details
+// Get transaction with batch details - ENHANCED VERSION
 router.get("/transactions/:id", (req, res) => {
   const query = `
     SELECT 
@@ -830,6 +831,24 @@ router.get("/stock-structure", (req, res) => {
     }
     
     res.send(results);
+  });
+});
+
+// Get last invoice number
+router.get("/last-invoice", (req, res) => {
+  const query = "SELECT VchNo FROM voucher WHERE TransactionType = 'Sales' ORDER BY VoucherID DESC LIMIT 1";
+  
+  db.query(query, (err, results) => {
+    if (err) {
+      console.error('Error fetching last invoice number:', err);
+      return res.status(500).send(err);
+    }
+    
+    if (results.length === 0) {
+      return res.send({ lastInvoiceNumber: null });
+    }
+    
+    res.send({ lastInvoiceNumber: results[0].VchNo });
   });
 });
 
