@@ -7,7 +7,7 @@ router.get("/next-invoice-number", async (req, res) => {
   try {
     const query = `
       SELECT MAX(CAST(SUBSTRING(InvoiceNumber, 4) AS UNSIGNED)) as maxNumber 
-      FROM Voucher 
+      FROM voucher 
       WHERE TransactionType = 'Sales' 
       AND InvoiceNumber LIKE 'INV%'
     `;
@@ -67,7 +67,7 @@ router.post("/transaction", (req, res) => {
           // First, get the next available VoucherID
           let nextVoucherId;
           try {
-            const maxIdResult = await queryPromise("SELECT COALESCE(MAX(VoucherID), 0) + 1 as nextId FROM Voucher");
+            const maxIdResult = await queryPromise("SELECT COALESCE(MAX(VoucherID), 0) + 1 as nextId FROM voucher");
             nextVoucherId = maxIdResult[0].nextId;
             console.log('Next available VoucherID:', nextVoucherId);
           } catch (maxIdError) {
@@ -99,7 +99,7 @@ router.post("/transaction", (req, res) => {
           console.log('Using invoice number:', invoiceNumber);
 
           // 1. Insert into Voucher table with explicit VoucherID and BatchDetails
-          const voucherSql = `INSERT INTO Voucher SET ?`;
+          const voucherSql = `INSERT INTO voucher SET ?`;
           
           // Calculate totals safely
           const totalQty = transactionData.items.reduce((sum, item) => {
@@ -267,7 +267,7 @@ router.post("/transaction", (req, res) => {
             // Handle specific duplicate key error
             if (error.code === 'ER_DUP_ENTRY') {
               res.status(500).send({ 
-                error: 'Database error: Duplicate entry detected. Please contact administrator to fix Voucher table auto-increment.',
+                error: 'Database error: Duplicate entry detected. Please contact administrator to fix voucher table auto-increment.',
                 details: 'VoucherID primary key conflict',
                 code: 'DUPLICATE_KEY_ERROR'
               });
@@ -319,7 +319,7 @@ router.post("/purchase-transaction", (req, res) => {
           // Get the next available VoucherID
           let nextVoucherId;
           try {
-            const maxIdResult = await queryPromise("SELECT COALESCE(MAX(VoucherID), 0) + 1 as nextId FROM Voucher");
+            const maxIdResult = await queryPromise("SELECT COALESCE(MAX(VoucherID), 0) + 1 as nextId FROM voucher");
             nextVoucherId = maxIdResult[0].nextId;
             console.log('Next available VoucherID:', nextVoucherId);
           } catch (maxIdError) {
@@ -347,7 +347,7 @@ router.post("/purchase-transaction", (req, res) => {
           }
 
           // 1. Insert into Voucher table for purchase
-          const voucherSql = `INSERT INTO Voucher SET ?`;
+          const voucherSql = `INSERT INTO voucher SET ?`;
           
           const totalQty = transactionData.items.reduce((sum, item) => {
             return sum + (parseFloat(item.quantity) || 0);
@@ -538,6 +538,7 @@ router.post("/purchase-transaction", (req, res) => {
 
 // Get transaction with batch details
 // Get transaction with batch details - ENHANCED VERSION
+// transactions.js route file
 router.get("/transactions/:id", (req, res) => {
   const query = `
     SELECT 
@@ -554,7 +555,7 @@ router.get("/transactions/:id", (req, res) => {
       a.shipping_pin_code,
       a.shipping_state,
       a.gstin
-    FROM Voucher v
+    FROM voucher v
     LEFT JOIN accounts a ON v.PartyID = a.id
     WHERE v.VoucherID = ?
   `;
@@ -562,34 +563,58 @@ router.get("/transactions/:id", (req, res) => {
   db.query(query, [req.params.id], (err, results) => {
     if (err) {
       console.error('Error fetching transaction:', err);
-      return res.status(500).send(err);
+      return res.status(500).json({
+        success: false,
+        message: 'Database error',
+        error: err.message
+      });
     }
     
     if (results.length === 0) {
-      return res.send({});
+      return res.status(404).json({
+        success: false,
+        message: 'Transaction not found'
+      });
     }
     
     const transaction = results[0];
     
-    // Parse batch details from JSON string
+    // Parse batch details from JSON string with better error handling
     try {
       if (transaction.batch_details) {
-        transaction.batch_details = JSON.parse(transaction.batch_details);
+        // Handle both stringified JSON and already parsed JSON
+        if (typeof transaction.batch_details === 'string') {
+          transaction.batch_details = JSON.parse(transaction.batch_details);
+        }
+        // If it's already an object, keep it as is
       } else {
         transaction.batch_details = [];
       }
     } catch (error) {
       console.error('Error parsing batch details:', error);
+      console.log('Raw batch_details:', transaction.batch_details);
       transaction.batch_details = [];
     }
     
-    res.send(transaction);
+    // Log for debugging
+    console.log('Transaction data:', {
+      VoucherID: transaction.VoucherID,
+      CGSTAmount: transaction.CGSTAmount,
+      SGSTAmount: transaction.SGSTAmount,
+      IGSTAmount: transaction.IGSTAmount,
+      batch_details_length: transaction.batch_details?.length
+    });
+    
+    res.json({
+      success: true,
+      data: transaction
+    });
   });
 });
 
 // Get all transactions with batch details
 router.get("/transactions", (req, res) => {
-  const query = "SELECT *, JSON_UNQUOTE(BatchDetails) as batch_details FROM Voucher ORDER BY VoucherID DESC";
+  const query = "SELECT *, JSON_UNQUOTE(BatchDetails) as batch_details FROM voucher ORDER BY VoucherID DESC";
   
   db.query(query, (err, results) => {
     if (err) {
@@ -623,7 +648,7 @@ router.get("/stock-history/:productId", (req, res) => {
     SELECT s.*, p.goods_name, v.VchNo as invoice_number, v.TransactionType
     FROM stock s 
     JOIN products p ON s.product_id = p.id 
-    LEFT JOIN Voucher v ON s.voucher_id = v.VoucherID
+    LEFT JOIN voucher v ON s.voucher_id = v.VoucherID
     WHERE s.product_id = ? 
     ORDER BY s.date DESC, s.id DESC
   `;
@@ -663,7 +688,7 @@ router.get("/stock-status", (req, res) => {
 
 // Get purchase transactions
 router.get("/purchase-transactions", (req, res) => {
-  db.query("SELECT * FROM Voucher WHERE TransactionType = 'Purchase' ORDER BY VoucherID DESC", (err, results) => {
+  db.query("SELECT * FROM voucher WHERE TransactionType = 'Purchase' ORDER BY VoucherID DESC", (err, results) => {
     if (err) {
       console.error('Error fetching purchase transactions:', err);
       return res.status(500).send(err);
@@ -674,7 +699,7 @@ router.get("/purchase-transactions", (req, res) => {
 
 // Get single purchase transaction
 router.get("/purchase-transactions/:id", (req, res) => {
-  db.query("SELECT * FROM Voucher WHERE VoucherID = ? AND TransactionType = 'Purchase'", [req.params.id], (err, results) => {
+  db.query("SELECT * FROM voucher WHERE VoucherID = ? AND TransactionType = 'Purchase'", [req.params.id], (err, results) => {
     if (err) {
       console.error('Error fetching purchase transaction:', err);
       return res.status(500).send(err);
@@ -718,10 +743,10 @@ router.get("/health", (req, res) => {
 // Check Voucher table status
 router.get("/voucher-status", (req, res) => {
   const queries = [
-    "SHOW COLUMNS FROM Voucher LIKE 'VoucherID'",
-    "SHOW COLUMNS FROM Voucher LIKE 'BatchDetails'",
+    "SHOW COLUMNS FROM voucher LIKE 'VoucherID'",
+    "SHOW COLUMNS FROM voucher LIKE 'BatchDetails'",
     "SELECT MAX(VoucherID) as maxId FROM Voucher",
-    "SHOW TABLE STATUS LIKE 'Voucher'"
+    "SHOW TABLE STATUS LIKE 'voucher'"
   ];
 
   db.query(queries.join(';'), (err, results) => {
@@ -777,7 +802,7 @@ router.get("/stock-structure", (req, res) => {
 
 // Get last invoice number
 router.get("/last-invoice", (req, res) => {
-  const query = "SELECT VchNo FROM Voucher WHERE TransactionType = 'Sales' ORDER BY VoucherID DESC LIMIT 1";
+  const query = "SELECT VchNo FROM voucher WHERE TransactionType = 'Sales' ORDER BY VoucherID DESC LIMIT 1";
   
   db.query(query, (err, results) => {
     if (err) {
