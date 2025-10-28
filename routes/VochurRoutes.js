@@ -38,7 +38,7 @@ router.get("/next-purchase-invoice-number", async (req, res) => {
   try {
     const query = `
       SELECT MAX(CAST(SUBSTRING(InvoiceNumber, 5) AS UNSIGNED)) as maxNumber 
-      FROM Voucher 
+      FROM voucher 
       WHERE TransactionType = 'Purchase' 
       AND InvoiceNumber LIKE 'PINV%'
     `;
@@ -81,7 +81,7 @@ const processTransaction = async (transactionData, transactionType, connection) 
     // Get the next available VoucherID
     let nextVoucherId;
     try {
-      const maxIdResult = await queryPromise("SELECT COALESCE(MAX(VoucherID), 0) + 1 as nextId FROM Voucher", [], connection);
+      const maxIdResult = await queryPromise("SELECT COALESCE(MAX(VoucherID), 0) + 1 as nextId FROM voucher", [], connection);
       nextVoucherId = maxIdResult[0].nextId;
       console.log('Next available VoucherID:', nextVoucherId);
     } catch (maxIdError) {
@@ -176,7 +176,7 @@ const processTransaction = async (transactionData, transactionType, connection) 
     console.log(`Inserting ${transactionType} voucher data with VoucherID:`, nextVoucherId, 'Invoice No:', invoiceNumber);
 
     // Insert into Voucher table
-    const voucherResult = await queryPromise("INSERT INTO Voucher SET ?", voucherData, connection);
+    const voucherResult = await queryPromise("INSERT INTO voucher SET ?", voucherData, connection);
     const voucherId = voucherResult.insertId || nextVoucherId;
     console.log(`${transactionType} Voucher created with ID:`, voucherId);
 
@@ -530,7 +530,7 @@ router.post("/product-transaction", (req, res) => {
 
 // Get last sales invoice number
 router.get("/last-invoice", (req, res) => {
-  const query = "SELECT VchNo FROM Voucher WHERE TransactionType = 'Sales' ORDER BY VoucherID DESC LIMIT 1";
+  const query = "SELECT VchNo FROM voucher WHERE TransactionType = 'Sales' ORDER BY VoucherID DESC LIMIT 1";
   
   db.query(query, (err, results) => {
     if (err) {
@@ -550,7 +550,7 @@ router.get("/last-invoice", (req, res) => {
 router.get("/last-purchase-invoice", (req, res) => {
   const query = `
     SELECT InvoiceNumber 
-    FROM Voucher 
+    FROM voucher 
     WHERE TransactionType = 'Purchase' 
     AND InvoiceNumber LIKE 'PINV%'
     ORDER BY VoucherID DESC 
@@ -733,7 +733,7 @@ router.get("/purchase-transactions", (req, res) => {
 
 // Get product transactions
 router.get("/product-transactions", (req, res) => {
-  db.query("SELECT * FROM Voucher WHERE TransactionType = 'Product' ORDER BY VoucherID DESC", (err, results) => {
+  db.query("SELECT * FROM voucher WHERE TransactionType = 'Product' ORDER BY VoucherID DESC", (err, results) => {
     if (err) {
       console.error('Error fetching product transactions:', err);
       return res.status(500).send(err);
@@ -755,7 +755,7 @@ router.get("/purchase-transactions/:id", (req, res) => {
 
 // Get single product transaction
 router.get("/product-transactions/:id", (req, res) => {
-  db.query("SELECT * FROM Voucher WHERE VoucherID = ? AND TransactionType = 'Product'", [req.params.id], (err, results) => {
+  db.query("SELECT * FROM voucher WHERE VoucherID = ? AND TransactionType = 'Product'", [req.params.id], (err, results) => {
     if (err) {
       console.error('Error fetching product transaction:', err);
       return res.status(500).send(err);
@@ -801,7 +801,7 @@ router.get("/voucher-status", (req, res) => {
   const queries = [
     "SHOW COLUMNS FROM voucher LIKE 'VoucherID'",
     "SHOW COLUMNS FROM voucher LIKE 'BatchDetails'",
-    "SELECT MAX(VoucherID) as maxId FROM Voucher",
+    "SELECT MAX(VoucherID) as maxId FROM voucher",
     "SHOW TABLE STATUS LIKE 'voucher'"
   ];
 

@@ -111,7 +111,7 @@ router.post('/products/purchase-with-sales', async (req, res) => {
           batch.mfg_date || batch.mfgDate || null,
           batch.exp_date || batch.expDate || null,
           parseFloat(batch.quantity) || 0,
-          parseFloat(batch.cost_price || batch.costPrice) || 0,
+         
           parseFloat(batch.selling_price || batch.sellingPrice) || 0,
           parseFloat(batch.purchase_price || batch.purchasePrice) || 0,
           parseFloat(batch.mrp) || 0,
@@ -126,7 +126,7 @@ router.post('/products/purchase-with-sales', async (req, res) => {
       // Insert batches
       const batchSql = `
         INSERT INTO batches 
-        (product_id, batch_number, mfg_date, exp_date, quantity, cost_price, selling_price, purchase_price, mrp, batch_price, barcode, group_by, created_at, updated_at)
+        (product_id, batch_number, mfg_date, exp_date, quantity, selling_price, purchase_price, mrp, batch_price, barcode, group_by, created_at, updated_at)
         VALUES ?
       `;
       await db.promise().query(batchSql, [batchValues]);
@@ -183,8 +183,8 @@ router.post('/products/purchase-with-sales', async (req, res) => {
 
       const salesBatchSql = `
         INSERT INTO batches 
-        (product_id, batch_number, mfg_date, exp_date, quantity, cost_price, selling_price, purchase_price, mrp, batch_price, barcode, group_by, created_at, updated_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        (product_id, batch_number, mfg_date, exp_date, quantity,  selling_price, purchase_price, mrp, batch_price, barcode, group_by, created_at, updated_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       `;
       
       await db.promise().query(salesBatchSql, [
@@ -291,7 +291,7 @@ router.post('/products', async (req, res) => {
           batch.mfg_date || batch.mfgDate || null,
           batch.exp_date || batch.expDate || null,
           parseFloat(batch.quantity) || 0,
-          parseFloat(batch.cost_price || batch.costPrice) || 0,
+          
           parseFloat(batch.selling_price || batch.sellingPrice) || 0,
           parseFloat(batch.purchase_price || batch.purchasePrice) || 0,
           parseFloat(batch.mrp) || 0,
@@ -306,7 +306,7 @@ router.post('/products', async (req, res) => {
       // Insert batches
       const batchSql = `
         INSERT INTO batches 
-        (product_id, batch_number, mfg_date, exp_date, quantity, cost_price, selling_price, purchase_price, mrp, batch_price, barcode, group_by, created_at, updated_at)
+        (product_id, batch_number, mfg_date, exp_date, quantity, selling_price, purchase_price, mrp, batch_price, barcode, group_by, created_at, updated_at)
         VALUES ?
       `;
       await db.promise().query(batchSql, [batchValues]);
@@ -422,7 +422,6 @@ router.put('/products/:id', async (req, res) => {
           mfg_date: batch.mfg_date || batch.mfgDate || null,
           exp_date: batch.exp_date || batch.expDate || null,
           quantity: parseFloat(batch.quantity) || 0,
-          cost_price: parseFloat(batch.cost_price || batch.costPrice) || 0,
           selling_price: parseFloat(batch.selling_price || batch.sellingPrice) || 0,
           purchase_price: parseFloat(batch.purchase_price || batch.purchasePrice) || 0,
           mrp: parseFloat(batch.mrp) || 0,
@@ -444,7 +443,7 @@ router.put('/products/:id', async (req, res) => {
           
           const updateSql = `
             UPDATE batches SET 
-              mfg_date = ?, exp_date = ?, quantity = ?, cost_price = ?, 
+              mfg_date = ?, exp_date = ?, quantity = ?,  
               selling_price = ?, purchase_price = ?, mrp = ?, batch_price = ?, 
               barcode = ?, group_by = ?, updated_at = ?
             WHERE id = ?
@@ -454,7 +453,7 @@ router.put('/products/:id', async (req, res) => {
             batchData.mfg_date,
             batchData.exp_date,
             batchData.quantity,
-            batchData.cost_price,
+           
             batchData.selling_price,
             batchData.purchase_price,
             batchData.mrp,
@@ -478,7 +477,7 @@ router.put('/products/:id', async (req, res) => {
           
           const insertSql = `
             INSERT INTO batches 
-            (product_id, batch_number, mfg_date, exp_date, quantity, cost_price, 
+            (product_id, batch_number, mfg_date, exp_date, quantity,  
              selling_price, purchase_price, mrp, batch_price, barcode, group_by, 
              created_at, updated_at)
             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
@@ -490,7 +489,7 @@ router.put('/products/:id', async (req, res) => {
             batchData.mfg_date,
             batchData.exp_date,
             batchData.quantity,
-            batchData.cost_price,
+            
             batchData.selling_price,
             batchData.purchase_price,
             batchData.mrp,
