@@ -852,4 +852,110 @@ router.get("/last-invoice", (req, res) => {
   });
 });
 
+
+
+
+// ------------------------------
+// Get all vouchers for invoice number
+// ------------------------------
+  router.get('/invoices/:invoiceNumber', async (req, res) => {
+    let connection;
+    try {
+      connection = await new Promise((resolve, reject) => {
+        db.getConnection((err, conn) => {
+          if (err) reject(err);
+          else resolve(conn);
+        });
+      });
+
+      const { invoiceNumber } = req.params;
+      
+      const query = `
+        SELECT 
+          VoucherID,
+          TransactionType,
+          VchNo,
+          InvoiceNumber,
+          Date,
+          PaymentTerms,
+          Freight,
+          TotalQty,
+          TotalPacks,
+          TotalQty1,
+          TaxAmount,
+          Subtotal,
+          BillSundryAmount,
+          TotalAmount,
+          ChequeNo,
+          ChequeDate,
+          BankName,
+          AccountID,
+          AccountName,
+          PartyID,
+          PartyName,
+          BasicAmount,
+          ValueOfGoods,
+          EntryDate,
+          SGSTPercentage,
+          CGSTPercentage,
+          IGSTPercentage,
+          SGSTAmount,
+          CGSTAmount,
+          IGSTAmount,
+          TaxSystem,
+          BatchDetails,
+          paid_amount,
+          balance_amount,
+          receipt_number,
+          status,
+          paid_date,
+          created_at
+        FROM voucher 
+        WHERE InvoiceNumber = ?
+        ORDER BY 
+          CASE WHEN TransactionType = 'Sales' THEN 1 ELSE 2 END,
+          created_at ASC
+      `;
+      
+      const results = await new Promise((resolve, reject) => {
+        connection.execute(query, [invoiceNumber], (error, results) => {
+          if (error) reject(error);
+          else resolve(results);
+        });
+      });
+      
+      if (results.length === 0) {
+        return res.status(404).json({
+          success: false,
+          message: 'Invoice not found'
+        });
+      }
+      
+      // Separate sales and receipt entries
+      const salesEntry = results.find(item => item.TransactionType === 'Sales');
+      const receiptEntries = results.filter(item => item.TransactionType === 'Receipt');
+      
+      res.json({
+        success: true,
+        data: {
+          sales: salesEntry,
+          receipts: receiptEntries,
+          allEntries: results
+        }
+      });
+      
+    } catch (error) {
+      console.error('Error fetching invoice:', error);
+      res.status(500).json({
+        success: false,
+        message: 'Internal server error'
+      });
+    } finally {
+      if (connection) {
+        connection.release();
+      }
+    }
+  });
+
+
 module.exports = router;
