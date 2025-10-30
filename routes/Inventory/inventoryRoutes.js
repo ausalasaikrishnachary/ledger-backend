@@ -4,42 +4,73 @@ const db = require('./../../db');
 
 // Get next batch number based on group_by - IMPROVED VERSION
 router.get('/batches/next-batch-number', async (req, res) => {
-  const { group_by } = req.query;
-  if (!group_by) {
-    return res.status(400).json({ success: false, message: 'group_by parameter is required' });
-  }
+  const { group_by, current_count = 0 } = req.query;
+  const actualGroupBy = group_by || 'Salescatalog';
+  
+  console.log('🔢 Fetching next batch number for group:', actualGroupBy, 'current_count:', current_count);
 
   try {
+    // Get the highest batch number from database for this group
     const [lastBatchRow] = await db.promise().query(
-      'SELECT batch_number FROM batches WHERE group_by = ? ORDER BY CAST(REPLACE(batch_number, "P", "") AS UNSIGNED) DESC, CAST(REPLACE(batch_number, "S", "") AS UNSIGNED) DESC LIMIT 1',
-      [group_by]
+      `SELECT batch_number FROM batches 
+       WHERE group_by = ? 
+       ORDER BY 
+         CAST(REPLACE(batch_number, 'P', '') AS UNSIGNED) DESC,
+         CAST(REPLACE(batch_number, 'S', '') AS UNSIGNED) DESC
+       LIMIT 1`,
+      [actualGroupBy]
     );
 
-    let nextBatchNumber = 1;
+    let highestBatchNumber = 0;
+    
     if (lastBatchRow.length > 0) {
       const lastBatch = lastBatchRow[0].batch_number;
-      // Extract numeric part from batch number (handle both numeric and prefixed)
-      const numericPart = lastBatch.replace(/[^\d]/g, '');
-      nextBatchNumber = parseInt(numericPart) + 1;
+      console.log('📊 Last batch number found in DB:', lastBatch);
+      
+      // Extract numeric part from batch number (remove prefix)
+      const numericMatch = lastBatch.replace(/[^\d]/g, '');
+      if (numericMatch) {
+        highestBatchNumber = parseInt(numericMatch);
+        console.log('📈 Highest numeric value from DB:', highestBatchNumber);
+      }
+    } else {
+      console.log('📊 No existing batches found in DB, starting from 0');
     }
 
-    // Use different prefixes for different groups
+    // Determine prefix based on group type
     let prefix = '';
-    if (group_by === 'Purchaseditems') {
+    if (actualGroupBy === 'Purchaseditems') {
       prefix = 'P';
-    } else if (group_by === 'Salescatalog') {
+    } else if (actualGroupBy === 'Salescatalog') {
       prefix = 'S';
     }
 
+    // Calculate next batch number: highest from DB + current count from frontend + 1
+    const nextBatchNumber = highestBatchNumber + parseInt(current_count) + 1;
     const batchNumber = `${prefix}${String(nextBatchNumber).padStart(4, '0')}`;
     
-    res.json({ success: true, batch_number: batchNumber });
+    console.log('✅ Final batch number generated:', batchNumber, {
+      highestFromDB: highestBatchNumber,
+      currentCount: current_count,
+      calculatedNext: nextBatchNumber
+    });
+    
+    res.json({ 
+      success: true, 
+      batch_number: batchNumber,
+      highest_from_db: highestBatchNumber,
+      current_count: parseInt(current_count)
+    });
   } catch (err) {
-    console.error('Error fetching next batch number:', err);
-    res.status(500).json({ success: false, message: 'Failed to fetch next batch number', error: err.message });
+    console.error('❌ Error fetching next batch number:', err);
+    res.status(500).json({ 
+      success: false, 
+      message: 'Failed to fetch next batch number', 
+      error: err.message 
+    });
   }
 });
-
+// Create purchase product with optional sales catalog - MAIN ENDPOINT
 // Create purchase product with optional sales catalog - MAIN ENDPOINT
 router.post('/products/purchase-with-sales', async (req, res) => {
   const data = req.body;
@@ -47,7 +78,6 @@ router.post('/products/purchase-with-sales', async (req, res) => {
 
   console.log('\n========== CREATE PURCHASE WITH SALES REQUEST ==========');
   console.log('Create Sales Catalog:', create_sales_catalog);
-  console.log('Product Data:', JSON.stringify(productData, null, 2));
 
   try {
     // Set default values for purchase product
@@ -71,6 +101,7 @@ router.post('/products/purchase-with-sales', async (req, res) => {
     // Handle batches for purchase product
     let purchaseBatchCount = 0;
     if (productData.maintain_batch && Array.isArray(batches) && batches.length > 0) {
+      // Get the last batch number for Purchaseditems
       const [lastBatchRow] = await db.promise().query(
         'SELECT batch_number FROM batches WHERE group_by = ? ORDER BY CAST(REPLACE(batch_number, "P", "") AS UNSIGNED) DESC LIMIT 1',
         ['Purchaseditems']
@@ -81,6 +112,7 @@ router.post('/products/purchase-with-sales', async (req, res) => {
         const lastBatch = lastBatchRow[0].batch_number;
         const numericPart = lastBatch.replace(/[^\d]/g, '');
         lastBatchNumber = parseInt(numericPart) || 0;
+        console.log('📊 Last purchase batch number:', lastBatch, '-> numeric:', lastBatchNumber);
       }
 
       const batchValues = [];
@@ -103,7 +135,9 @@ router.post('/products/purchase-with-sales', async (req, res) => {
           barcode = `B${timestamp}${index}${Math.random().toString(36).substr(2, 5)}`;
         }
 
+        // Use P prefix for purchase batches - INCREMENT PROPERLY
         const batchNumber = `P${String(lastBatchNumber + index + 1).padStart(4, '0')}`;
+        console.log('🔄 Creating purchase batch:', batchNumber);
         
         batchValues.push([
           purchaseProductId,
@@ -111,7 +145,6 @@ router.post('/products/purchase-with-sales', async (req, res) => {
           batch.mfg_date || batch.mfgDate || null,
           batch.exp_date || batch.expDate || null,
           parseFloat(batch.quantity) || 0,
-         
           parseFloat(batch.selling_price || batch.sellingPrice) || 0,
           parseFloat(batch.purchase_price || batch.purchasePrice) || 0,
           parseFloat(batch.mrp) || 0,
@@ -137,23 +170,36 @@ router.post('/products/purchase-with-sales', async (req, res) => {
     // Create sales catalog entry if requested
     let salesProductId = null;
     let salesBatchCount = 0;
+    let salesBatchNumber = null; // DEFINE THIS VARIABLE HERE
     
     if (create_sales_catalog) {
+      // Create sales product data
       const salesProductData = {
-        ...purchaseProductData,
         group_by: 'Salescatalog',
-        stock_in: null,
-        stock_out: null,
-        balance_stock: purchaseProductData.opening_stock || "0",
-        can_be_sold: true,
+        goods_name: purchaseProductData.goods_name,
+        category_id: purchaseProductData.category_id,
+        company_id: purchaseProductData.company_id,
+        price: purchaseProductData.price,
+        inclusive_gst: purchaseProductData.inclusive_gst,
+        gst_rate: purchaseProductData.gst_rate,
+        non_taxable: purchaseProductData.non_taxable,
+        net_price: purchaseProductData.net_price,
+        hsn_code: purchaseProductData.hsn_code,
+        unit: purchaseProductData.unit,
+        cess_rate: purchaseProductData.cess_rate,
+        cess_amount: purchaseProductData.cess_amount,
+        sku: purchaseProductData.sku,
+        opening_stock: purchaseProductData.opening_stock,
+        opening_stock_date: purchaseProductData.opening_stock_date,
+        min_stock_alert: purchaseProductData.min_stock_alert,
+        max_stock_alert: purchaseProductData.max_stock_alert,
+        description: purchaseProductData.description,
         maintain_batch: false, // Sales catalog doesn't maintain batches from purchase
+        can_be_sold: true,
+        balance_stock: purchaseProductData.opening_stock || "0",
         created_at: new Date(),
         updated_at: new Date()
       };
-
-      // Remove fields that shouldn't be in sales catalog
-      delete salesProductData.id;
-      delete salesProductData.batches;
 
       const salesColumns = Object.keys(salesProductData).join(', ');
       const salesPlaceholders = Object.keys(salesProductData).map(() => '?').join(', ');
@@ -165,39 +211,46 @@ router.post('/products/purchase-with-sales', async (req, res) => {
       salesProductId = salesInsert.insertId;
       console.log('✅ Sales catalog product created with ID:', salesProductId);
 
-      // Create a default batch for sales catalog with different batch number
+      // FIXED: Get the PROPER next batch number for Salescatalog
       const [lastSalesBatchRow] = await db.promise().query(
         'SELECT batch_number FROM batches WHERE group_by = ? ORDER BY CAST(REPLACE(batch_number, "S", "") AS UNSIGNED) DESC LIMIT 1',
         ['Salescatalog']
       );
 
-      let lastSalesBatchNumber = 0;
+      let nextSalesBatchNumber = 1; // Start from 1 if no batches exist
+      
       if (lastSalesBatchRow.length > 0) {
         const lastBatch = lastSalesBatchRow[0].batch_number;
         const numericPart = lastBatch.replace(/[^\d]/g, '');
-        lastSalesBatchNumber = parseInt(numericPart) || 0;
+        const lastBatchNumber = parseInt(numericPart) || 0;
+        nextSalesBatchNumber = lastBatchNumber + 1; // Increment from the last batch
+        console.log('📊 Last sales batch number:', lastBatch, '-> numeric:', lastBatchNumber, '-> next:', nextSalesBatchNumber);
+      } else {
+        console.log('📊 No existing sales batches, starting from 1');
       }
 
-      const salesBatchNumber = `S${String(lastSalesBatchNumber + 1).padStart(4, '0')}`;
+      // Use S prefix for sales batches with PROPER INCREMENT
+      salesBatchNumber = `S${String(nextSalesBatchNumber).padStart(4, '0')}`; // ASSIGN TO THE VARIABLE DEFINED OUTSIDE
       const salesBarcode = `BS${Date.now()}${Math.random().toString(36).substr(2, 5)}`;
+
+      console.log('🔄 Creating sales batch:', salesBatchNumber);
 
       const salesBatchSql = `
         INSERT INTO batches 
-        (product_id, batch_number, mfg_date, exp_date, quantity,  selling_price, purchase_price, mrp, batch_price, barcode, group_by, created_at, updated_at)
+        (product_id, batch_number, mfg_date, exp_date, quantity, selling_price, purchase_price, mrp, batch_price, barcode, group_by, created_at, updated_at)
         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       `;
       
       await db.promise().query(salesBatchSql, [
         salesProductId,
         salesBatchNumber,
-        null,
-        null,
-        parseFloat(salesProductData.opening_stock) || 0,
-        0,
-        parseFloat(salesProductData.price) || 0,
-        0,
-        0,
-        0,
+        null, // mfg_date
+        null, // exp_date
+        parseFloat(salesProductData.opening_stock) || 0, // quantity
+        parseFloat(salesProductData.price) || 0, // selling_price
+        0, // purchase_price
+        0, // mrp
+        0, // batch_price
         salesBarcode,
         'Salescatalog',
         new Date(),
@@ -210,13 +263,17 @@ router.post('/products/purchase-with-sales', async (req, res) => {
 
     console.log('========== REQUEST COMPLETED SUCCESSFULLY ==========\n');
 
+    // FIXED: Use the salesBatchNumber variable that's defined outside the if block
     res.status(201).json({ 
       success: true, 
       purchase_product_id: purchaseProductId,
       sales_product_id: salesProductId,
       sales_catalog_created: !!create_sales_catalog,
       purchase_batch_count: purchaseBatchCount,
-      sales_batch_count: salesBatchCount
+      sales_batch_count: salesBatchCount,
+      message: create_sales_catalog 
+        ? `Product added to both Purchase and Sales catalogs successfully! Sales batch: ${salesBatchNumber}`
+        : 'Product added to Purchase catalog successfully!'
     });
   } catch (err) {
     console.error('❌ Error creating purchase product:', err);
@@ -227,7 +284,6 @@ router.post('/products/purchase-with-sales', async (req, res) => {
     });
   }
 });
-
 // Create a new product (for sales catalog directly)
 router.post('/products', async (req, res) => {
   const data = req.body;
@@ -480,7 +536,7 @@ router.put('/products/:id', async (req, res) => {
             (product_id, batch_number, mfg_date, exp_date, quantity,  
              selling_price, purchase_price, mrp, batch_price, barcode, group_by, 
              created_at, updated_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
           `;
           
           const insertValues = [
