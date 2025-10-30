@@ -1,24 +1,24 @@
 const mysql = require("mysql2"); // No /promise
 
 // Create pool
-// const db = mysql.createPool({
-//   host: "localhost",
-//   user: "root",
-//   password: "",
-//   database: "ledger",
-//   connectionLimit: 10, // optional
-//   port: 4306
-// });
-
-// Create pool
 const db = mysql.createPool({
   host: "localhost",
   user: "root",
   password: "",
   database: "ledger",
   connectionLimit: 10, // optional
-  port: 3307
+  port: 3306
 });
+
+// Create pool
+// const db = mysql.createPool({
+//   host: "localhost",
+//   user: "root",
+//   password: "",
+//   database: "ledger",
+//   connectionLimit: 10, // optional
+//   port: 3307
+// });
 
 db.getConnection((err, connection) => {
   if (err) {

@@ -636,6 +636,65 @@ router.delete('/receipts/:id', async (req, res) => {
 
 
 
+router.get('/invoices/:invoiceNumber', async (req, res) => {
+  let connection;
+  try {
+    connection = await new Promise((resolve, reject) => {
+      db.getConnection((err, conn) => {
+        if (err) reject(err);
+        else resolve(conn);
+      });
+    });
 
-
+    const { invoiceNumber } = req.params;
+    
+    const query = `
+      SELECT 
+        VoucherID,
+        InvoiceNumber,
+        TotalAmount,
+        paid_amount,
+        balance_amount,
+        paid_date,
+        status,
+        PartyName,
+        Date,
+        PartyID,
+        TaxAmount,
+        Subtotal
+      FROM voucher 
+      WHERE InvoiceNumber = ?
+    `;
+    
+    const results = await new Promise((resolve, reject) => {
+      connection.execute(query, [invoiceNumber], (error, results) => {
+        if (error) reject(error);
+        else resolve(results);
+      });
+    });
+    
+    if (results.length === 0) {
+      return res.status(404).json({
+        success: false,
+        message: 'Invoice not found'
+      });
+    }
+    
+    res.json({
+      success: true,
+      data: results[0]
+    });
+    
+  } catch (error) {
+    console.error('Error fetching invoice:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Internal server error'
+    });
+  } finally {
+    if (connection) {
+      connection.release();
+    }
+  }
+});
 module.exports = router;

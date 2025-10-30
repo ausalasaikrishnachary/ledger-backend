@@ -1,6 +1,8 @@
 const express = require('express');
 const router = express.Router();
 const db = require('../db');
+const fs = require('fs');
+const path = require('path');
 
 // Get next sales invoice number
 router.get("/next-invoice-number", async (req, res) => {
@@ -855,107 +857,369 @@ router.get("/last-invoice", (req, res) => {
 
 
 
-// ------------------------------
-// Get all vouchers for invoice number
-// ------------------------------
-  router.get('/invoices/:invoiceNumber', async (req, res) => {
-    let connection;
-    try {
-      connection = await new Promise((resolve, reject) => {
-        db.getConnection((err, conn) => {
-          if (err) reject(err);
-          else resolve(conn);
-        });
+// Store PDF in voucher table and uploads folder
+router.post("/vouchers/store-pdf", async (req, res) => {
+  const { invoiceNumber, invoiceDate, totalAmount, pdfData, fileName } = req.body;
+  
+  console.log('Storing PDF for invoice:', invoiceNumber);
+  
+  db.getConnection((err, connection) => {
+    if (err) {
+      console.error('Database connection error:', err);
+      return res.status(500).json({ 
+        success: false, 
+        message: 'Database connection failed' 
       });
-
-      const { invoiceNumber } = req.params;
-      
-      const query = `
-        SELECT 
-          VoucherID,
-          TransactionType,
-          VchNo,
-          InvoiceNumber,
-          Date,
-          PaymentTerms,
-          Freight,
-          TotalQty,
-          TotalPacks,
-          TotalQty1,
-          TaxAmount,
-          Subtotal,
-          BillSundryAmount,
-          TotalAmount,
-          ChequeNo,
-          ChequeDate,
-          BankName,
-          AccountID,
-          AccountName,
-          PartyID,
-          PartyName,
-          BasicAmount,
-          ValueOfGoods,
-          EntryDate,
-          SGSTPercentage,
-          CGSTPercentage,
-          IGSTPercentage,
-          SGSTAmount,
-          CGSTAmount,
-          IGSTAmount,
-          TaxSystem,
-          BatchDetails,
-          paid_amount,
-          balance_amount,
-          receipt_number,
-          status,
-          paid_date,
-          created_at
-        FROM voucher 
-        WHERE InvoiceNumber = ?
-        ORDER BY 
-          CASE WHEN TransactionType = 'Sales' THEN 1 ELSE 2 END,
-          created_at ASC
-      `;
-      
-      const results = await new Promise((resolve, reject) => {
-        connection.execute(query, [invoiceNumber], (error, results) => {
-          if (error) reject(error);
-          else resolve(results);
-        });
-      });
-      
-      if (results.length === 0) {
-        return res.status(404).json({
-          success: false,
-          message: 'Invoice not found'
-        });
-      }
-      
-      // Separate sales and receipt entries
-      const salesEntry = results.find(item => item.TransactionType === 'Sales');
-      const receiptEntries = results.filter(item => item.TransactionType === 'Receipt');
-      
-      res.json({
-        success: true,
-        data: {
-          sales: salesEntry,
-          receipts: receiptEntries,
-          allEntries: results
-        }
-      });
-      
-    } catch (error) {
-      console.error('Error fetching invoice:', error);
-      res.status(500).json({
-        success: false,
-        message: 'Internal server error'
-      });
-    } finally {
-      if (connection) {
-        connection.release();
-      }
     }
+
+    connection.beginTransaction(async (err) => {
+      if (err) {
+        connection.release();
+        console.error('Transaction begin error:', err);
+        return res.status(500).json({ 
+          success: false, 
+          message: 'Transaction failed to start' 
+        });
+      }
+
+      try {
+        // 1. Save PDF file to uploads folder
+        const uploadsDir = path.join(__dirname, '../../uploads/invoices');
+        
+        // Create uploads directory if it doesn't exist
+        if (!fs.existsSync(uploadsDir)) {
+          fs.mkdirSync(uploadsDir, { recursive: true });
+        }
+        
+        const filePath = path.join(uploadsDir, fileName);
+        
+        // Convert base64 to buffer and save file
+        const base64Data = pdfData.replace(/^data:application\/pdf;base64,/, "");
+        const pdfBuffer = Buffer.from(base64Data, 'base64');
+        
+        fs.writeFileSync(filePath, pdfBuffer);
+        console.log('PDF saved to:', filePath);
+
+        // 2. Update voucher table with PDF file path
+        const updateQuery = `
+          UPDATE voucher 
+          SET pdf_file_path = ?, 
+              pdf_file_name = ?,
+              pdf_generated_at = ?
+          WHERE InvoiceNumber = ? OR VchNo = ?
+        `;
+        
+        const updateParams = [
+          filePath,
+          fileName,
+          new Date(),
+          invoiceNumber,
+          invoiceNumber
+        ];
+
+        const updateResult = await new Promise((resolve, reject) => {
+          connection.query(updateQuery, updateParams, (err, results) => {
+            if (err) reject(err);
+            else resolve(results);
+          });
+        });
+
+        console.log('Voucher updated with PDF info:', updateResult.affectedRows, 'rows affected');
+
+        // Commit transaction
+        connection.commit((err) => {
+          if (err) {
+            console.error('Commit error:', err);
+            return connection.rollback(() => {
+              connection.release();
+              res.status(500).json({ 
+                success: false, 
+                message: 'Transaction commit failed',
+                error: err.message 
+              });
+            });
+          }
+          
+          connection.release();
+          console.log('PDF stored successfully for invoice:', invoiceNumber);
+          
+          res.json({
+            success: true,
+            message: 'PDF stored successfully',
+            data: {
+              invoiceNumber,
+              fileName,
+              filePath,
+              updatedRows: updateResult.affectedRows
+            }
+          });
+        });
+
+      } catch (error) {
+        console.error('Error storing PDF:', error);
+        connection.rollback(() => {
+          connection.release();
+          res.status(500).json({ 
+            success: false, 
+            message: 'Failed to store PDF',
+            error: error.message 
+          });
+        });
+      }
+    });
   });
+});
+
+// Get PDF by invoice number
+router.get("/vouchers/pdf/:invoiceNumber", (req, res) => {
+  const invoiceNumber = req.params.invoiceNumber;
+  
+  console.log('Fetching PDF for invoice:', invoiceNumber);
+  
+  const query = `
+    SELECT pdf_file_path, pdf_file_name, InvoiceNumber
+    FROM voucher 
+    WHERE (InvoiceNumber = ? OR VchNo = ?) AND pdf_file_path IS NOT NULL
+    LIMIT 1
+  `;
+  
+  db.query(query, [invoiceNumber, invoiceNumber], (err, results) => {
+    if (err) {
+      console.error('Error fetching PDF info:', err);
+      return res.status(500).json({
+        success: false,
+        message: 'Database error',
+        error: err.message
+      });
+    }
+    
+    if (results.length === 0) {
+      return res.status(404).json({
+        success: false,
+        message: 'PDF not found for invoice: ' + invoiceNumber
+      });
+    }
+    
+    const pdfInfo = results[0];
+    const filePath = pdfInfo.pdf_file_path;
+    
+    // Check if file exists
+    if (!fs.existsSync(filePath)) {
+      return res.status(404).json({
+        success: false,
+        message: 'PDF file not found on server'
+      });
+    }
+    
+    // Send the PDF file
+    res.setHeader('Content-Type', 'application/pdf');
+    res.setHeader('Content-Disposition', `attachment; filename="${pdfInfo.pdf_file_name}"`);
+    
+    const fileStream = fs.createReadStream(filePath);
+    fileStream.pipe(res);
+    
+    console.log('PDF sent for invoice:', invoiceNumber);
+  });
+});
+
+// Get all invoices with PDF info
+router.get("/vouchers/with-pdf", (req, res) => {
+  const query = `
+    SELECT 
+      VoucherID,
+      InvoiceNumber,
+      VchNo,
+      PartyName,
+      TotalAmount,
+      Date,
+      pdf_file_path,
+      pdf_file_name,
+      pdf_generated_at,
+      TransactionType
+    FROM voucher 
+    WHERE TransactionType = 'Sales'
+    ORDER BY VoucherID DESC
+  `;
+  
+  db.query(query, (err, results) => {
+    if (err) {
+      console.error('Error fetching vouchers with PDF info:', err);
+      return res.status(500).json({
+        success: false,
+        message: 'Database error',
+        error: err.message
+      });
+    }
+    
+    res.json({
+      success: true,
+      data: results
+    });
+  });
+});
+
+
+
+// Get invoice by invoice number
+router.get("/invoice-by-number/:invoiceNumber", (req, res) => {
+  const invoiceNumber = req.params.invoiceNumber;
+  
+  console.log('Fetching invoice by number:', invoiceNumber);
+  
+  const query = `
+    SELECT 
+      v.*, 
+      JSON_UNQUOTE(BatchDetails) as batch_details,
+      a.billing_address_line1,
+      a.billing_address_line2,
+      a.billing_city,
+      a.billing_pin_code,
+      a.billing_state,
+      a.shipping_address_line1,
+      a.shipping_address_line2,
+      a.shipping_city,
+      a.shipping_pin_code,
+      a.shipping_state,
+      a.gstin,
+      a.display_name,
+      a.business_name
+    FROM voucher v
+    LEFT JOIN accounts a ON v.PartyID = a.id
+    WHERE (v.InvoiceNumber = ? OR v.VchNo = ?) 
+    AND v.TransactionType = 'Sales'
+    LIMIT 1
+  `;
+  
+  db.query(query, [invoiceNumber, invoiceNumber], (err, results) => {
+    if (err) {
+      console.error('Error fetching invoice by number:', err);
+      return res.status(500).json({
+        success: false,
+        message: 'Database error',
+        error: err.message
+      });
+    }
+    
+    if (results.length === 0) {
+      return res.status(404).json({
+        success: false,
+        message: 'Invoice not found: ' + invoiceNumber
+      });
+    }
+    
+    const invoice = results[0];
+    
+    // Parse batch details from JSON string with better error handling
+    try {
+      if (invoice.batch_details) {
+        if (typeof invoice.batch_details === 'string') {
+          invoice.batch_details = JSON.parse(invoice.batch_details);
+        }
+      } else {
+        invoice.batch_details = [];
+      }
+    } catch (error) {
+      console.error('Error parsing batch details:', error);
+      console.log('Raw batch_details:', invoice.batch_details);
+      invoice.batch_details = [];
+    }
+    
+    console.log('Invoice found by number:', {
+      VoucherID: invoice.VoucherID,
+      InvoiceNumber: invoice.InvoiceNumber,
+      VchNo: invoice.VchNo,
+      batch_details_length: invoice.batch_details?.length
+    });
+    
+    res.json({
+      success: true,
+      data: invoice
+    });
+  });
+});
+
+// Serve static files from uploads directory
+router.use('/uploads', express.static(path.join(__dirname, '../../uploads')));
+
+
+
+// Get invoice by invoice number - NEW ENDPOINT
+router.get("/invoice-by-number/:invoiceNumber", (req, res) => {
+  const invoiceNumber = req.params.invoiceNumber;
+  
+  console.log('Fetching invoice by number:', invoiceNumber);
+  
+  const query = `
+    SELECT 
+      v.*, 
+      JSON_UNQUOTE(BatchDetails) as batch_details,
+      a.billing_address_line1,
+      a.billing_address_line2,
+      a.billing_city,
+      a.billing_pin_code,
+      a.billing_state,
+      a.shipping_address_line1,
+      a.shipping_address_line2,
+      a.shipping_city,
+      a.shipping_pin_code,
+      a.shipping_state,
+      a.gstin,
+      a.display_name,
+      a.business_name
+    FROM voucher v
+    LEFT JOIN accounts a ON v.PartyID = a.id
+    WHERE v.InvoiceNumber = ? OR v.VchNo = ?
+    LIMIT 1
+  `;
+  
+  db.query(query, [invoiceNumber, invoiceNumber], (err, results) => {
+    if (err) {
+      console.error('Error fetching invoice by number:', err);
+      return res.status(500).json({
+        success: false,
+        message: 'Database error',
+        error: err.message
+      });
+    }
+    
+    if (results.length === 0) {
+      return res.status(404).json({
+        success: false,
+        message: 'Invoice not found: ' + invoiceNumber
+      });
+    }
+    
+    const invoice = results[0];
+    
+    // Parse batch details from JSON string with better error handling
+    try {
+      if (invoice.batch_details) {
+        if (typeof invoice.batch_details === 'string') {
+          invoice.batch_details = JSON.parse(invoice.batch_details);
+        }
+      } else {
+        invoice.batch_details = [];
+      }
+    } catch (error) {
+      console.error('Error parsing batch details:', error);
+      invoice.batch_details = [];
+    }
+    
+    console.log('Invoice found by number:', {
+      VoucherID: invoice.VoucherID,
+      InvoiceNumber: invoice.InvoiceNumber,
+      VchNo: invoice.VchNo,
+      PartyName: invoice.PartyName,
+      batch_details_length: invoice.batch_details?.length
+    });
+    
+    res.json({
+      success: true,
+      data: invoice
+    });
+  });
+});
+
 
 
 module.exports = router;

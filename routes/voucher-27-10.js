@@ -536,8 +536,6 @@ router.post("/purchase-transaction", (req, res) => {
   });
 });
 
-// Get transaction with batch details
-// Get transaction with batch details - ENHANCED VERSION
 // transactions.js route file
 router.get("/transactions/:id", (req, res) => {
   const query = `
@@ -816,6 +814,305 @@ router.get("/last-invoice", (req, res) => {
     
     res.send({ lastInvoiceNumber: results[0].VchNo });
   });
+});
+
+
+router.post('/receipts', async (req, res) => {
+  let connection;
+  try {
+    // Get DB connection
+    connection = await new Promise((resolve, reject) => {
+      db.getConnection((err, conn) => {
+        if (err) reject(err);
+        else resolve(conn);
+      });
+    });
+
+    // Start transaction
+    await new Promise((resolve, reject) => {
+      connection.beginTransaction(err => {
+        if (err) reject(err);
+        else resolve();
+      });
+    });
+
+    const {
+      receipt_number,
+      retailer_id,
+      retailer_name,
+      amount,
+      currency,
+      payment_method,
+      receipt_date,
+      note,
+      bank_name,
+      transaction_date,
+      reconciliation_option,
+      invoice_number
+    } = req.body;
+
+    // Validate receipt_number
+    if (!receipt_number || !receipt_number.match(/^REC\d+$/)) {
+      throw new Error('Invalid receipt number format');
+    }
+
+    // Check if receipt number already exists
+    const existingReceipt = await new Promise((resolve, reject) => {
+      connection.execute(
+        `SELECT receipt_number FROM receipts WHERE receipt_number = ?`,
+        [receipt_number],
+        (err, results) => {
+          if (err) reject(err);
+          else resolve(results[0]);
+        }
+      );
+    });
+
+    if (existingReceipt) {
+      throw new Error(`Receipt number ${receipt_number} already exists`);
+    }
+
+    const receiptAmount = parseFloat(amount || 0);
+
+    // Step 1: Insert receipt in receipts table
+    const receiptResult = await new Promise((resolve, reject) => {
+      connection.execute(
+        `INSERT INTO receipts (
+          receipt_number, retailer_id, amount, currency, payment_method,
+          receipt_date, note, bank_name, transaction_date, reconciliation_option
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        [
+          receipt_number,
+          retailer_id || null,
+          receiptAmount,
+          currency || 'INR',
+          payment_method || 'Direct Deposit',
+          receipt_date || new Date(),
+          note || '',
+          bank_name || '',
+          transaction_date || null,
+          reconciliation_option || 'Do Not Reconcile',
+        ],
+        (err, results) => {
+          if (err) reject(err);
+          else resolve(results);
+        }
+      );
+    });
+
+    // Step 2: Apply receipt to existing Sales vouchers
+    if (retailer_id) {
+      let voucherQuery = `SELECT * FROM voucher WHERE PartyID = ? AND TransactionType='Sales'`;
+      const queryParams = [retailer_id];
+
+      if (invoice_number) {
+        voucherQuery += ` AND InvoiceNumber = ?`;
+        queryParams.push(invoice_number);
+      }
+
+      voucherQuery += ` ORDER BY Date ASC, VoucherID ASC`;
+
+      const vouchers = await new Promise((resolve, reject) => {
+        connection.execute(voucherQuery, queryParams, (err, results) => {
+          if (err) reject(err);
+          else resolve(results);
+        });
+      });
+
+      if (vouchers && vouchers.length > 0) {
+        let remainingAmount = receiptAmount;
+        const currentDate = new Date();
+
+        // Get previous receipt balance to calculate current balance
+        const previousReceipts = await new Promise((resolve, reject) => {
+          connection.execute(
+            `SELECT * FROM voucher WHERE PartyID = ? AND TransactionType='Receipt' ORDER BY VoucherID DESC LIMIT 1`,
+            [retailer_id],
+            (err, results) => {
+              if (err) reject(err);
+              else resolve(results);
+            }
+          );
+        });
+
+        let previousBalance = 0;
+        if (previousReceipts && previousReceipts.length > 0) {
+          previousBalance = parseFloat(previousReceipts[0].balance_amount || 0);
+        } else {
+          // If no previous receipts, use sales total amount as starting balance
+          previousBalance = parseFloat(vouchers[0].TotalAmount || 0);
+        }
+
+        for (const voucher of vouchers) {
+          if (remainingAmount <= 0) break;
+
+          const totalAmount = parseFloat(voucher.TotalAmount || 0);
+          
+          // Calculate current balance based on previous receipt balance
+          const currentBalance = previousBalance;
+          const amountToApply = Math.min(remainingAmount, currentBalance);
+          if (amountToApply <= 0) continue;
+
+          remainingAmount -= amountToApply;
+          const updatedBalanceAmount = currentBalance - amountToApply;
+
+          // FIXED: DO NOT update sales voucher at all - keep it original
+          // No UPDATE query for sales voucher
+
+          // FIXED: Create receipt entry with cumulative calculations
+          await new Promise((resolve, reject) => {
+            connection.execute(
+              `INSERT INTO voucher (
+                TransactionType, VchNo, InvoiceNumber, Date, PaymentTerms, Freight,
+                TotalQty, TotalPacks, TotalQty1, TaxAmount, Subtotal, BillSundryAmount,
+                TotalAmount, ChequeNo, ChequeDate, BankName, AccountID, AccountName,
+                PartyID, PartyName, BasicAmount, ValueOfGoods, EntryDate,
+                SGSTPercentage, CGSTPercentage, IGSTPercentage, SGSTAmount, CGSTAmount, IGSTAmount,
+                TaxSystem, BatchDetails, paid_amount, balance_amount, receipt_number, status, paid_date
+              ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+              [
+                'Receipt',
+                receipt_number,
+                voucher.InvoiceNumber,
+                currentDate,
+                'Immediate',
+                0.00,
+                0.00,
+                0,
+                0,
+                0.00,
+                amountToApply,
+                0.00,
+                currentBalance, // TotalAmount = previous balance (not amount paid)
+                null,
+                null,
+                bank_name || '',
+                voucher.AccountID,
+                voucher.AccountName,
+                voucher.PartyID,
+                retailer_name || voucher.PartyName,
+                amountToApply,
+                amountToApply,
+                currentDate,
+                0.00,
+                0.00,
+                0.00,
+                0.00,
+                0.00,
+                0.00,
+                'GST',
+                '[]',
+                amountToApply, // paid_amount = amount paid in this receipt
+                updatedBalanceAmount, // balance_amount = remaining balance after this payment
+                receipt_number,
+                updatedBalanceAmount <= 0.01 ? 'Paid' : 'Partial',
+                currentDate
+              ],
+              (err) => {
+                if (err) reject(err);
+                else resolve();
+              }
+            );
+          });
+
+          // Update previous balance for next iteration
+          previousBalance = updatedBalanceAmount;
+        }
+
+        // If leftover amount, create advance payment row
+        if (remainingAmount > 0) {
+          await new Promise((resolve, reject) => {
+            connection.execute(
+              `INSERT INTO voucher (
+                TransactionType, VchNo, Date, TotalAmount, BankName,
+                PartyID, PartyName, BasicAmount, ValueOfGoods, EntryDate,
+                paid_amount, balance_amount, receipt_number, status, paid_date
+              ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+              [
+                'Receipt',
+                receipt_number,
+                currentDate,
+                previousBalance, // Show previous balance as TotalAmount
+                bank_name,
+                retailer_id,
+                retailer_name,
+                remainingAmount,
+                remainingAmount,
+                currentDate,
+                remainingAmount,
+                0,
+                receipt_number,
+                'Paid',
+                currentDate
+              ],
+              (err) => {
+                if (err) reject(err);
+                else resolve();
+              }
+            );
+          });
+        }
+      } else {
+        // No sales vouchers found: simple receipt entry (advance payment)
+        await new Promise((resolve, reject) => {
+          connection.execute(
+            `INSERT INTO voucher (
+              TransactionType, VchNo, Date, TotalAmount, BankName,
+              PartyID, PartyName, BasicAmount, ValueOfGoods, EntryDate,
+              paid_amount, balance_amount, receipt_number, status, paid_date
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+            [
+              'Receipt',
+              receipt_number,
+              new Date(),
+              receiptAmount,
+              bank_name,
+              retailer_id,
+              retailer_name,
+              receiptAmount,
+              receiptAmount,
+              new Date(),
+              receiptAmount,
+              0,
+              receipt_number,
+              'Paid',
+              new Date()
+            ],
+            (err) => {
+              if (err) reject(err);
+              else resolve();
+            }
+          );
+        });
+      }
+    }
+
+    // Commit transaction
+    await new Promise((resolve, reject) => {
+      connection.commit(err => {
+        if (err) reject(err);
+        else resolve();
+      });
+    });
+
+    res.status(201).json({
+      id: receiptResult.insertId,
+      message: 'Receipt created and applied to vouchers successfully',
+      receipt_number
+    });
+
+  } catch (error) {
+    if (connection) {
+      await new Promise(resolve => connection.rollback(() => resolve()));
+    }
+    console.error('Error in create receipt route:', error);
+    if (error.code === 'ER_DUP_ENTRY') {
+      return res.status(400).json({ error: 'VoucherID must be AUTO_INCREMENT in voucher table' });
+    }
+    res.status(500).json({ error: error.message || 'Failed to create receipt' });
+  } finally {
+    if (connection) connection.release();
+  }
 });
 
 

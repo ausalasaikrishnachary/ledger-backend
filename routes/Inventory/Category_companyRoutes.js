@@ -1,6 +1,6 @@
 const express = require('express');
 const router = express.Router();
-const db = require('./../../db'); // Ensure this is using mysql.createConnection() or createPool()
+const db = require('./../../db');
 
 // ---------- CATEGORY CRUD ----------
 
@@ -62,7 +62,6 @@ router.delete("/categories/:id", (req, res) => {
   });
 });
 
-
 // ---------- COMPANY CRUD ----------
 
 // Create Company
@@ -122,7 +121,6 @@ router.delete("/companies/:id", (req, res) => {
     res.send({ message: "Company deleted successfully." });
   });
 });
-
 
 
 // ---------- UNITS CRUD ----------
