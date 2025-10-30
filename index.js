@@ -19,6 +19,7 @@ const CustomerRoutes = require("./routes/Inventory/CustomerRoutes")
 // const salesPurchaseInventoryRoutes = require("./routes/Inventory/SalesPurchaseInventoryRoutes")
 const vochurRoutes = require("./routes/VochurRoutes")
 const receiptsRouter = require('./routes/routes');
+const retailerReportRoutes = require("./routes/retailerReportRoutes");
 const port = 5000;
 
 // ✅ Use CORS Middleware (allows requests from any origin)
@@ -41,6 +42,7 @@ app.use('/', AuthRoutes);
 app.use('/api', LogVisit); // ✅ mount LogVisit under /api
 app.use("/", expensiveRoutes);
 app.use('/api', receiptsRouter);
+app.use("/api/reports", retailerReportRoutes);
 // Start server
 app.listen(port, () => {
   console.log(`Server running on http://localhost:${port}`);
