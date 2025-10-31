@@ -5,7 +5,7 @@ const nodemailer = require('nodemailer');
 
 // Create Account
 router.post("/accounts", async (req, res) => {
-  const { name, email, phone_number, password, role, ...otherData } = req.body;
+  const { name, email, phone_number, password, role,discount,Target, ...otherData } = req.body;
 
   // Validate required fields
   // if (!name || !email || !phone_number || !role || !password) {
@@ -15,7 +15,11 @@ router.post("/accounts", async (req, res) => {
   // }
 
   // Prepare data for insertion, include role
-  const data = { name, email, phone_number, password, role, ...otherData };
+  const data = { name, email, phone_number, password, role, 
+     discount: discount || 0, // Default to 0 if not provided
+    Target: Target || 100000,
+    ...otherData
+   };
   const sql = "INSERT INTO accounts SET ?";
 
   try {
@@ -47,6 +51,8 @@ Phone Number: ${phone_number}
 Role: ${role}
 Email: ${email}
 Password: ${password}
+Target: ${data.Target}
+Discount: ${data.discount}%
 
 Please keep this information secure.
       `,
@@ -97,14 +103,35 @@ router.get("/accounts/:id", (req, res) => {
   });
 });
 
-
-router.put("/accounts/:id", (req, res) => {
-  const data = req.body;
-  db.query("UPDATE accounts SET ? WHERE id = ?", [data, req.params.id], (err, result) => {
-    if (err) return res.status(500).send(err);
-    res.send({ id: req.params.id, ...data });
-  });
+router.put("/accounts/:id", async (req, res) => {
+  const { discount, Target, ...otherData } = req.body;
+  
+  const data = {
+    discount: discount !== undefined ? discount : 0,
+    Target: Target !== undefined ? Target : 100000,
+    ...otherData
+  };
+  
+  const sql = "UPDATE accounts SET ? WHERE id = ?";
+  
+  try {
+    const [result] = await db.promise().query(sql, [data, req.params.id]);
+    
+    if (result.affectedRows === 0) {
+      return res.status(404).json({ error: "Account not found" });
+    }
+    
+    res.json({ 
+      message: "Account updated successfully", 
+      id: req.params.id, 
+      ...data 
+    });
+  } catch (err) {
+    console.error("Update Error:", err);
+    res.status(500).json({ error: "Failed to update account" });
+  }
 });
+
 
 router.delete("/accounts/:id", (req, res) => {
   db.query("DELETE FROM accounts WHERE id = ?", [req.params.id], (err, result) => {
