@@ -82,12 +82,21 @@ router.get("/accounts", (req, res) => {
   });
 });
 
+// router.get("/accounts/:id", (req, res) => {
+//   db.query("SELECT * FROM accounts WHERE id = ?", [req.params.id], (err, results) => {
+//     if (err) return res.status(500).send(err);
+//     res.send(results[0]);
+//   });
+// });
+
 router.get("/accounts/:id", (req, res) => {
   db.query("SELECT * FROM accounts WHERE id = ?", [req.params.id], (err, results) => {
     if (err) return res.status(500).send(err);
+    if (results.length === 0) return res.status(404).send("Account not found");
     res.send(results[0]);
   });
 });
+
 
 router.put("/accounts/:id", (req, res) => {
   const data = req.body;

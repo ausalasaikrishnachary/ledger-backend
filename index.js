@@ -20,6 +20,8 @@ const CustomerRoutes = require("./routes/Inventory/CustomerRoutes")
 const vochurRoutes = require("./routes/VochurRoutes")
 const receiptsRouter = require('./routes/routes');
 const pdfRoutes = require('./routes/pdfRoutes'); // Add this line
+const orderRoutes = require('./routes/orders');
+const categoriesRoutes = require('./routes/categories');
 
 const port = 5000;
 
@@ -44,6 +46,8 @@ app.use('/api', LogVisit); // ✅ mount LogVisit under /api
 app.use("/", expensiveRoutes);
 app.use('/api', receiptsRouter);
 app.use('/', pdfRoutes);
+app.use('/api', orderRoutes); 
+app.use('/api', categoriesRoutes);
 
 
 // Start server
