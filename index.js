@@ -20,8 +20,11 @@ const CustomerRoutes = require("./routes/Inventory/CustomerRoutes")
 // const salesPurchaseInventoryRoutes = require("./routes/Inventory/SalesPurchaseInventoryRoutes")
 const vochurRoutes = require("./routes/VochurRoutes")
 const receiptsRouter = require('./routes/routes');
+const retailerReportRoutes = require("./routes/retailerReportRoutes");
+
 const pdfRoutes = require('./routes/pdfRoutes'); // Add this line
 const offersRoutes = require('./routes/Inventory/OffersRoutes');
+
 
 const port = 5000;
 
@@ -49,8 +52,10 @@ app.use('/', AuthRoutes);
 app.use('/api', LogVisit); // ✅ mount LogVisit under /api
 app.use("/", expensiveRoutes);
 app.use('/api', receiptsRouter);
-app.use('/', pdfRoutes);
 
+app.use("/api/reports", retailerReportRoutes);
+
+app.use('/', pdfRoutes);
 
 // Start server
 app.listen(port, () => {
