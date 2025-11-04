@@ -505,6 +505,34 @@ router.delete('/products/:id', async (req, res) => {
   }
 });
 
+// Get products by category ID
+router.get('/products/category/:category_id', async (req, res) => {
+  const categoryId = req.params.category_id;
+  
+  console.log('🔍 Fetching products for category ID:', categoryId);
+  
+  try {
+    const [results] = await db.promise().query(
+      'SELECT * FROM products WHERE category_id = ? ORDER BY goods_name ASC',
+      [categoryId]
+    );
+    
+    console.log('✅ Products found:', results.length);
+    console.log('📦 Products data:', results);
+    
+    res.json(results);
+  } catch (err) {
+    console.error('❌ Error fetching products by category:', err);
+    res.status(500).json({ 
+      success: false, 
+      message: 'Failed to fetch products by category', 
+      error: err.message 
+    });
+  }
+});
+
+
+
 // Get product batches
 router.get('/products/:id/batches', async (req, res) => {
   try {
