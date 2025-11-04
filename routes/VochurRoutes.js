@@ -33,298 +33,357 @@ router.get("/next-invoice-number", async (req, res) => {
   }
 });
 
-// Get next purchase invoice number
-router.get("/next-purchase-invoice-number", async (req, res) => {
-  try {
-    const query = `
-      SELECT MAX(CAST(SUBSTRING(InvoiceNumber, 5) AS UNSIGNED)) as maxNumber 
-      FROM voucher 
-      WHERE TransactionType = 'Purchase' 
-      AND InvoiceNumber LIKE 'PINV%'
-    `;
-    
-    db.query(query, (err, results) => {
-      if (err) {
-        console.error('Error fetching next purchase invoice number:', err);
-        return res.status(500).send({ error: 'Failed to get next purchase invoice number' });
-      }
-      
-      let nextNumber = 1;
-      if (results[0].maxNumber !== null && !isNaN(results[0].maxNumber)) {
-        nextNumber = parseInt(results[0].maxNumber) + 1;
-      }
-      
-      const nextInvoiceNumber = `PINV${nextNumber.toString().padStart(3, '0')}`;
-      
-      console.log('Next purchase invoice number calculated:', nextInvoiceNumber);
-      res.send({ nextInvoiceNumber });
-    });
-  } catch (error) {
-    console.error('Error in next-purchase-invoice-number:', error);
-    res.status(500).send({ error: 'Internal server error' });
-  }
-});
-
-// Helper function for database queries
-const queryPromise = (sql, params = [], connection = db) => {
+// Helper function for database queries with promise wrapper
+const executeQuery = (connection, sql, params = []) => {
   return new Promise((resolve, reject) => {
     connection.query(sql, params, (err, results) => {
-      if (err) reject(err);
-      else resolve(results);
+      if (err) {
+        reject(err);
+      } else {
+        resolve(results);
+      }
     });
   });
 };
 
-// Helper function to process transactions
-const processTransaction = async (transactionData, transactionType, connection) => {
+// Enhanced processTransactionItem function with proper stock calculations
+async function processTransactionItem(item, connection, voucherId, invoiceDate) {
   try {
-    // Get the next available VoucherID
-    let nextVoucherId;
-    try {
-      const maxIdResult = await queryPromise("SELECT COALESCE(MAX(VoucherID), 0) + 1 as nextId FROM voucher", [], connection);
-      nextVoucherId = maxIdResult[0].nextId;
-      console.log('Next available VoucherID:', nextVoucherId);
-    } catch (maxIdError) {
-      console.error('Error getting next VoucherID:', maxIdError);
-      nextVoucherId = 1;
-    }
-
-    // Calculate GST breakdown
-    const totalCGST = parseFloat(transactionData.totalCGST) || 0;
-    const totalSGST = parseFloat(transactionData.totalSGST) || 0;
-    const totalIGST = parseFloat(transactionData.totalIGST) || 0;
-    const taxType = transactionData.taxType || "CGST/SGST";
-
-    // Parse batch details from JSON string
-    let batchDetailsJson = '[]';
-    try {
-      if (transactionData.batchDetails) {
-        batchDetailsJson = typeof transactionData.batchDetails === 'string' 
-          ? transactionData.batchDetails 
-          : JSON.stringify(transactionData.batchDetails);
-      }
-    } catch (error) {
-      console.error('Error parsing batch details:', error);
-      batchDetailsJson = '[]';
-    }
-
-    // Determine invoice number based on transaction type
-    let invoiceNumber;
-    let defaultInvoiceNumber;
+    console.log(`\n🔄 Processing item: ${item.product}, Quantity: ${item.quantity}, Batch: ${item.batch}`);
     
-    switch(transactionType) {
-      case 'Sales':
-        defaultInvoiceNumber = 'INV001';
-        invoiceNumber = transactionData.invoiceNumber || defaultInvoiceNumber;
-        break;
-      case 'Purchase':
-        defaultInvoiceNumber = 'PINV001';
-        invoiceNumber = transactionData.invoiceNumber || defaultInvoiceNumber;
-        break;
-      case 'Product':
-        defaultInvoiceNumber = 'PINV001';
-        invoiceNumber = transactionData.invoiceNumber || defaultInvoiceNumber;
-        break;
-      default:
-        defaultInvoiceNumber = 'INV001';
-        invoiceNumber = transactionData.invoiceNumber || defaultInvoiceNumber;
+    let productId = null;
+    let batchId = null;
+    let pricePerUnit = parseFloat(item.price) || 0;
+    let stockOut = parseFloat(item.quantity) || 0;
+
+    // Use the product_id sent from frontend
+    if (item.product_id) {
+      console.log(`✅ Using provided product_id: ${item.product_id}`);
+      productId = item.product_id;
+      
+      // Verify the product exists with this ID
+      const products = await executeQuery(
+        connection,
+        'SELECT id, goods_name, maintain_batch, balance_stock, stock_in, stock_out, opening_stock FROM products WHERE id = ?',
+        [productId]
+      );
+
+      if (products.length === 0) {
+        throw new Error(`Product with ID ${productId} not found`);
+      }
+
+      var product = products[0];
+    } else {
+      // Fallback: Find product by name
+      console.log(`⚠️ No product_id provided, falling back to product name search: ${item.product}`);
+      const products = await executeQuery(
+        connection,
+        'SELECT id, goods_name, maintain_batch, balance_stock, stock_in, stock_out, opening_stock FROM products WHERE goods_name = ?',
+        [item.product]
+      );
+
+      if (products.length === 0) {
+        throw new Error(`Product ${item.product} not found`);
+      }
+
+      product = products[0];
+      productId = product.id;
+    }
+    
+    console.log(`📦 Product resolved:`, {
+      id: product.id,
+      name: product.goods_name,
+      maintain_batch: product.maintain_batch,
+      current_balance: product.balance_stock
+    });
+
+    let batchQuantityUpdated = false;
+    
+    // If product maintains batches, use batch logic
+    if (product.maintain_batch === 1) {
+      console.log(`🔄 Product maintains batches, checking for batch: ${item.batch}`);
+      
+      if (!item.batch) {
+        throw new Error(`Batch number is required for product ${item.product} that maintains batches`);
+      }
+
+      // Find the batch for this product using product_id
+      const batches = await executeQuery(
+        connection,
+        'SELECT * FROM batches WHERE product_id = ? AND batch_number = ?',
+        [productId, item.batch]
+      );
+
+      if (batches.length === 0) {
+        const availableBatches = await executeQuery(
+          connection,
+          'SELECT batch_number, quantity FROM batches WHERE product_id = ?',
+          [productId]
+        );
+        
+        console.log(`❌ Batch ${item.batch} not found for product ${product.goods_name} (ID: ${productId})`);
+        console.log(`📋 Available batches:`, availableBatches);
+        
+        throw new Error(`Batch ${item.batch} not found for product ${item.product}. Available batches: ${availableBatches.map(b => b.batch_number).join(', ')}`);
+      }
+
+      const batch = batches[0];
+      batchId = batch.id;
+      console.log(`✅ Batch found: ${batch.batch_number}, Current quantity: ${batch.quantity}`);
+
+      // Check if enough stock exists in the batch
+      if (parseFloat(batch.quantity) < parseFloat(item.quantity)) {
+        throw new Error(`Insufficient stock in batch ${item.batch}. Available: ${batch.quantity}, Requested: ${item.quantity}`);
+      }
+
+      // Update batch quantity
+      const newBatchQuantity = parseFloat(batch.quantity) - parseFloat(item.quantity);
+      await executeQuery(
+        connection,
+        'UPDATE batches SET quantity = ?, updated_at = NOW() WHERE id = ?',
+        [newBatchQuantity, batch.id]
+      );
+
+      console.log(`✅ Updated batch ${batch.batch_number} quantity from ${batch.quantity} to ${newBatchQuantity}`);
+      batchQuantityUpdated = true;
+      
+    } else {
+      // Product doesn't maintain batches - use regular stock logic
+      console.log(`📦 Product doesn't maintain batches, using regular stock`);
+      
+      // Handle NULL values properly
+      const currentBalance = parseFloat(product.balance_stock || 0);
+      if (currentBalance < parseFloat(item.quantity)) {
+        throw new Error(`Insufficient stock for ${item.product}. Available: ${currentBalance}, Requested: ${item.quantity}`);
+      }
     }
 
-    console.log(`Using ${transactionType} invoice number:`, invoiceNumber);
+    // Get updated product details for stock entry
+    const productDetails = await executeQuery(
+      connection,
+      'SELECT balance_stock, stock_in, stock_out, opening_stock FROM products WHERE id = ?',
+      [productId]
+    );
 
-    // Calculate totals
-    const totalQty = transactionData.items.reduce((sum, item) => {
-      return sum + (parseFloat(item.quantity) || 0);
-    }, 0);
+    if (productDetails.length === 0) {
+      throw new Error(`Product details not found for ID: ${productId}`);
+    }
 
-    // Prepare voucher data
-    const voucherData = {
-      VoucherID: nextVoucherId,
-      TransactionType: transactionType,
-      VchNo: invoiceNumber,
-      InvoiceNumber: invoiceNumber,
-      Date: transactionData.invoiceDate || new Date().toISOString().split('T')[0],
-      PaymentTerms: 'Immediate',
-      Freight: 0,
-      TotalQty: totalQty,
-      TotalPacks: transactionData.items.length,
-      TotalQty1: totalQty,
-      TaxAmount: parseFloat(transactionData.totalGST) || 0,
-      Subtotal: parseFloat(transactionData.taxableAmount) || 0,
-      BillSundryAmount: 0,
-      TotalAmount: parseFloat(transactionData.grandTotal) || 0,
-      ChequeNo: null,
-      ChequeDate: null,
-      BankName: null,
-      AccountID: transactionData.selectedSupplierId || null,
-      AccountName: transactionData.supplierInfo?.businessName || '',
-      PartyID: transactionData.selectedSupplierId || null,
-      PartyName: transactionData.supplierInfo?.name || '',
-      BasicAmount: parseFloat(transactionData.taxableAmount) || 0,
-      ValueOfGoods: parseFloat(transactionData.taxableAmount) || 0,
-      EntryDate: new Date(),
-      SGSTPercentage: taxType === "CGST/SGST" ? (totalSGST > 0 ? 50 : 0) : 0,
-      CGSTPercentage: taxType === "CGST/SGST" ? (totalCGST > 0 ? 50 : 0) : 0,
-      IGSTPercentage: taxType === "IGST" ? 100 : 0,
-      SGSTAmount: totalSGST,
-      CGSTAmount: totalCGST,
-      IGSTAmount: totalIGST,
-      TaxSystem: 'GST',
-      BatchDetails: batchDetailsJson
+    const currentProduct = productDetails[0];
+    
+    // Handle NULL values in product record
+    const openingStock = parseFloat(currentProduct.opening_stock || 0);
+    const currentStockIn = parseFloat(currentProduct.stock_in || 0);
+    const currentStockOut = parseFloat(currentProduct.stock_out || 0);
+    const currentBalance = parseFloat(currentProduct.balance_stock || 0);
+    
+    console.log(`📊 Current product stock:`, {
+      opening_stock: openingStock,
+      stock_in: currentStockIn,
+      stock_out: currentStockOut,
+      balance_stock: currentBalance
+    });
+
+    // Calculate new values - FIXED CALCULATIONS
+    const newStockOut = currentStockOut + stockOut;
+    let newBalanceStock = 0;
+
+    if (product.maintain_batch === 1) {
+      // For batch-managed products: balance = opening_stock - stock_out
+      newBalanceStock = openingStock - newStockOut;
+    } else {
+      // For non-batch products: balance = opening_stock + stock_in - stock_out
+      newBalanceStock = openingStock + currentStockIn - newStockOut;
+    }
+
+    // Create stock entry for this transaction
+    const stockEntry = {
+      product_id: productId,
+      price_per_unit: pricePerUnit,
+      opening_stock: currentBalance,
+      stock_in: 0,
+      stock_out: stockOut,
+      balance_stock: newBalanceStock,
+      batch_number: item.batch || null,
+      voucher_id: voucherId,
+      date: invoiceDate
     };
 
-    console.log(`Inserting ${transactionType} voucher data with VoucherID:`, nextVoucherId, 'Invoice No:', invoiceNumber);
+    await executeQuery(
+      connection,
+      'INSERT INTO stock SET ?',
+      [stockEntry]
+    );
 
-    // Insert into Voucher table
-    const voucherResult = await queryPromise("INSERT INTO voucher SET ?", voucherData, connection);
-    const voucherId = voucherResult.insertId || nextVoucherId;
-    console.log(`${transactionType} Voucher created with ID:`, voucherId);
+    console.log(`✅ Created stock entry for product ${item.product}:`, {
+      product_id: productId,
+      opening_stock: currentBalance,
+      stock_out: stockOut,
+      new_balance: newBalanceStock,
+      batch: item.batch
+    });
 
-    // Process each item and update stock
-    for (const [index, item] of transactionData.items.entries()) {
-      console.log(`Processing ${transactionType} item ${index + 1}:`, item);
+    // Update product totals with proper NULL handling
+    await executeQuery(
+      connection,
+      `UPDATE products SET 
+        stock_out = ?,
+        balance_stock = ?,
+        updated_at = NOW()
+       WHERE id = ?`,
+      [newStockOut, newBalanceStock, productId]
+    );
 
-      // Find product by name
-      const productResult = await queryPromise(
-        "SELECT id, balance_stock, stock_out, stock_in, opening_stock FROM products WHERE goods_name = ?",
-        [item.product],
-        connection
-      );
+    console.log(`✅ Updated product totals for ${item.product}:`, {
+      product_id: productId,
+      stock_out: newStockOut,
+      balance: newBalanceStock
+    });
 
-      if (productResult.length === 0) {
-        throw new Error(`Product not found: ${item.product}`);
-      }
-
-      const product = productResult[0];
-      const productId = product.id;
-      const quantity = parseFloat(item.quantity) || 0;
-
-      console.log(`Product found: ID=${productId}, Current balance=${product.balance_stock}, Quantity=${quantity}`);
-
-      let newStockIn, newStockOut, newBalanceStock;
-
-      // Determine stock operation based on transaction type
-      if (transactionType === 'Purchase') {
-        // Purchase: Increase stock
-        const currentStockIn = parseFloat(product.stock_in) || 0;
-        const currentBalance = parseFloat(product.balance_stock) || 0;
-        newStockIn = currentStockIn + quantity;
-        newStockOut = parseFloat(product.stock_out) || 0;
-        newBalanceStock = currentBalance + quantity;
-
-        console.log(`Purchase stock calculation: Opening=${product.opening_stock}, StockIn=${currentStockIn} -> ${newStockIn}, Balance=${currentBalance} -> ${newBalanceStock}`);
-      } else {
-        // Sales or Product: Decrease stock
-        const currentStockOut = parseFloat(product.stock_out) || 0;
-        const currentBalance = parseFloat(product.balance_stock) || 0;
-        
-        // Check if sufficient stock is available
-        if (currentBalance < quantity) {
-          throw new Error(`Insufficient stock for ${item.product}. Available: ${currentBalance}, Required: ${quantity}`);
-        }
-
-        newStockIn = parseFloat(product.stock_in) || 0;
-        newStockOut = currentStockOut + quantity;
-        newBalanceStock = currentBalance - quantity;
-
-        console.log(`${transactionType} stock calculation: Opening=${product.opening_stock}, StockOut=${currentStockOut} -> ${newStockOut}, Balance=${currentBalance} -> ${newBalanceStock}`);
-      }
-
-      // Update product stock in products table
-      await queryPromise(
-        "UPDATE products SET stock_in = ?, stock_out = ?, balance_stock = ? WHERE id = ?",
-        [newStockIn, newStockOut, newBalanceStock, productId],
-        connection
-      );
-
-      console.log(`Updated product ${productId}: stock_in=${newStockIn}, stock_out=${newStockOut}, balance_stock=${newBalanceStock}`);
-
-      // Handle stock table - Create new stock record
-      const stockData = {
-        product_id: productId,
-        price_per_unit: parseFloat(item.price) || 0,
-        opening_stock: parseFloat(product.opening_stock) || 0,
-        stock_in: transactionType === 'Purchase' ? quantity : 0,
-        stock_out: transactionType === 'Purchase' ? 0 : quantity,
-        balance_stock: newBalanceStock,
-        batch_number: item.batch || null,
-        voucher_id: voucherId,
-        date: new Date()
-      };
-
-      await queryPromise("INSERT INTO stock SET ?", stockData, connection);
-      console.log(`Created new ${transactionType} stock record for product ${productId}`);
-
-      // Handle batch operations
-      if (item.batch) {
-        const batchResult = await queryPromise(
-          "SELECT id, quantity FROM batches WHERE product_id = ? AND batch_number = ?",
-          [productId, item.batch],
-          connection
-        );
-
-        if (batchResult.length > 0) {
-          // Update existing batch
-          const batch = batchResult[0];
-          const currentBatchQty = parseFloat(batch.quantity) || 0;
-          let newBatchQty;
-
-          if (transactionType === 'Purchase') {
-            newBatchQty = currentBatchQty + quantity;
-          } else {
-            if (currentBatchQty < quantity) {
-              throw new Error(`Insufficient batch quantity for ${item.batch}. Available: ${currentBatchQty}, Required: ${quantity}`);
-            }
-            newBatchQty = currentBatchQty - quantity;
-          }
-
-          await queryPromise(
-            "UPDATE batches SET quantity = ?, updated_at = ? WHERE id = ?",
-            [newBatchQty, new Date(), batch.id],
-            connection
-          );
-          console.log(`Updated batch ${item.batch} for product ${productId}: ${currentBatchQty} -> ${newBatchQty}`);
-        } else if (transactionType === 'Purchase') {
-          // Create new batch for purchase
-          const batchData = {
-            product_id: productId,
-            batch_number: item.batch,
-            quantity: quantity,
-            manufacturing_date: new Date(),
-            expiry_date: new Date(Date.now() + 365 * 24 * 60 * 60 * 1000), // 1 year from now
-            purchase_price: parseFloat(item.price) || 0,
-            created_at: new Date(),
-            updated_at: new Date()
-          };
-          
-          await queryPromise("INSERT INTO batches SET ?", batchData, connection);
-          console.log(`Created new batch ${item.batch} for product ${productId} with quantity=${quantity}`);
-        } else {
-          console.warn(`Batch ${item.batch} not found for product ${productId}`);
-        }
-      }
-    }
-
+    // Return the processed item with updated info
     return {
-      voucherId,
-      invoiceNumber,
-      taxType,
-      totalCGST,
-      totalSGST,
-      totalIGST,
-      batchDetails: JSON.parse(batchDetailsJson)
+      ...item,
+      product_id: productId,
+      batch_id: batchId,
+      batch_number: item.batch,
+      stock_entry_created: true,
+      opening_stock: currentBalance,
+      stock_out: stockOut,
+      new_balance: newBalanceStock
     };
 
   } catch (error) {
-    console.error(`Error in ${transactionType} transaction processing:`, error);
+    console.error(`❌ Error processing item ${item.product}:`, error);
     throw error;
   }
-};
+}
+
+// Enhanced main transaction processing function
+async function processTransaction(transactionData, transactionType, connection) {
+  try {
+    console.log(`\n🚀 Processing ${transactionType} transaction...`);
+    
+    // Get next voucher ID
+    const voucherCount = await executeQuery(connection, 'SELECT MAX(VoucherID) as maxId FROM voucher');
+    const nextVoucherId = (voucherCount[0].maxId || 0) + 1;
+    console.log(`Next available VoucherID: ${nextVoucherId}`);
+
+    let invoiceNumber = transactionData.invoiceNumber;
+    
+    // Generate invoice number if not provided
+    if (!invoiceNumber) {
+      if (transactionType === 'Sales') {
+        const lastInvoice = await executeQuery(
+          connection,
+          "SELECT MAX(CAST(SUBSTRING(InvoiceNumber, 4) AS UNSIGNED)) as maxNum FROM voucher WHERE TransactionType = 'Sales' AND InvoiceNumber LIKE 'INV%'"
+        );
+        const nextNum = (lastInvoice[0].maxNum || 0) + 1;
+        invoiceNumber = `INV${nextNum.toString().padStart(3, '0')}`;
+      }
+    }
+    
+    console.log(`Using ${transactionType} invoice number: ${invoiceNumber}`);
+
+    // Process each item individually and update stock/batches
+    console.log(`\n📋 Processing ${transactionData.items.length} items...`);
+    const processedItems = [];
+    
+    for (let i = 0; i < transactionData.items.length; i++) {
+      const item = transactionData.items[i];
+      console.log(`\n📦 Processing ${transactionType} item ${i + 1}:`, {
+        product: item.product,
+        quantity: item.quantity,
+        batch: item.batch
+      });
+
+      // Process the item (update stock/batches and create stock entry)
+      const processedItem = await processTransactionItem(item, connection, nextVoucherId, transactionData.invoiceDate);
+      processedItems.push(processedItem);
+      
+      console.log(`✅ Successfully processed item: ${item.product}`);
+    }
+
+    // Create enhanced batch details with all processed item information
+    const enhancedBatchDetails = processedItems.map(item => ({
+      product: item.product,
+      product_id: item.product_id,
+      description: item.description,
+      quantity: item.quantity,
+      price: item.price,
+      discount: item.discount,
+      gst: item.gst,
+      cgst: item.cgst,
+      sgst: item.sgst,
+      igst: item.igst,
+      cess: item.cess,
+      total: item.total,
+      batch: item.batch,
+      batch_id: item.batch_id,
+      batch_number: item.batch_number,
+      batchDetails: item.batchDetails,
+      stock_entry_created: item.stock_entry_created
+    }));
+
+    console.log(`📦 Enhanced batch details created with ${enhancedBatchDetails.length} items`);
+
+    // Insert voucher record with all item details in BatchDetails
+    const voucherSql = `
+      INSERT INTO voucher (
+        VoucherID, TransactionType, VchNo, InvoiceNumber, Date, PaymentTerms, 
+        PartyID, PartyName, BasicAmount, TaxAmount, Subtotal, TotalAmount,
+        CGSTAmount, SGSTAmount, IGSTAmount, BatchDetails, created_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW())
+    `;
+
+    const voucherValues = [
+      nextVoucherId,
+      transactionType,
+      transactionData.invoiceNumber || invoiceNumber,
+      invoiceNumber,
+      transactionData.invoiceDate,
+      transactionData.validityDate || '',
+      transactionData.selectedSupplierId || null,
+      transactionData.supplierInfo?.businessName || transactionData.supplierInfo?.name || '',
+      parseFloat(transactionData.taxableAmount) || 0,
+      parseFloat(transactionData.totalGST) || 0,
+      parseFloat(transactionData.taxableAmount) || 0,
+      parseFloat(transactionData.grandTotal) || 0,
+      parseFloat(transactionData.totalCGST) || 0,
+      parseFloat(transactionData.totalSGST) || 0,
+      parseFloat(transactionData.totalIGST) || 0,
+      JSON.stringify(enhancedBatchDetails)
+    ];
+
+    console.log(`Inserting ${transactionType} voucher data with VoucherID: ${nextVoucherId} Invoice No: ${invoiceNumber}`);
+    await executeQuery(connection, voucherSql, voucherValues);
+    console.log(`✅ ${transactionType} Voucher created with ID: ${nextVoucherId}`);
+
+    console.log(`\n🎉 ${transactionType} transaction completed successfully!`);
+    return {
+      voucherId: nextVoucherId,
+      invoiceNumber: invoiceNumber,
+      taxType: transactionData.taxType,
+      totalCGST: transactionData.totalCGST,
+      totalSGST: transactionData.totalSGST,
+      totalIGST: transactionData.totalIGST,
+      batchDetails: enhancedBatchDetails,
+      stockEntries: processedItems.length
+    };
+
+  } catch (error) {
+    console.error(`❌ Error in ${transactionType} transaction processing:`, error);
+    throw error;
+  }
+}
 
 // Create Sales Transaction and Update Stock
 router.post("/transaction", (req, res) => {
   const transactionData = req.body;
-  console.log('Received sales transaction data:', transactionData);
+  console.log('\n💰 Received sales transaction data:', {
+    invoiceNumber: transactionData.invoiceNumber,
+    itemsCount: transactionData.items?.length,
+    totalAmount: transactionData.grandTotal
+  });
   
   db.getConnection((err, connection) => {
     if (err) {
@@ -350,12 +409,13 @@ router.post("/transaction", (req, res) => {
               });
             }
             connection.release();
-            console.log('Sales transaction completed successfully');
+            console.log('✅ Sales transaction completed successfully');
             res.send({
               message: "Sales transaction completed successfully",
               voucherId: result.voucherId,
               invoiceNumber: result.invoiceNumber,
               stockUpdated: true,
+              stockEntriesCreated: result.stockEntries,
               taxType: result.taxType,
               gstBreakdown: {
                 cgst: result.totalCGST,
@@ -367,7 +427,7 @@ router.post("/transaction", (req, res) => {
           });
         })
         .catch((error) => {
-          console.error('Sales transaction error:', error);
+          console.error('❌ Sales transaction error:', error);
           connection.rollback(() => {
             connection.release();
             
@@ -390,189 +450,7 @@ router.post("/transaction", (req, res) => {
   });
 });
 
-// Create Purchase Transaction and Update Stock
-router.post("/purchase-transaction", (req, res) => {
-  const transactionData = req.body;
-  console.log('Received purchase transaction data:', transactionData);
-  
-  db.getConnection((err, connection) => {
-    if (err) {
-      console.error('Database connection error:', err);
-      return res.status(500).send({ error: 'Database connection failed' });
-    }
-
-    connection.beginTransaction((err) => {
-      if (err) {
-        connection.release();
-        console.error('Transaction begin error:', err);
-        return res.status(500).send({ error: 'Transaction failed to start' });
-      }
-
-      processTransaction(transactionData, 'Purchase', connection)
-        .then((result) => {
-          connection.commit((err) => {
-            if (err) {
-              console.error('Commit error:', err);
-              return connection.rollback(() => {
-                connection.release();
-                res.status(500).send({ error: 'Transaction commit failed', details: err.message });
-              });
-            }
-            connection.release();
-            console.log('Purchase transaction completed successfully');
-            res.send({
-              message: "Purchase transaction completed successfully",
-              voucherId: result.voucherId,
-              invoiceNumber: result.invoiceNumber,
-              stockUpdated: true,
-              taxType: result.taxType,
-              gstBreakdown: {
-                cgst: result.totalCGST,
-                sgst: result.totalSGST,
-                igst: result.totalIGST
-              },
-              batchDetails: result.batchDetails
-            });
-          });
-        })
-        .catch((error) => {
-          console.error('Purchase transaction error:', error);
-          connection.rollback(() => {
-            connection.release();
-            
-            if (error.code === 'ER_DUP_ENTRY') {
-              res.status(500).send({ 
-                error: 'Database error: Duplicate entry detected.',
-                details: 'VoucherID primary key conflict',
-                code: 'DUPLICATE_KEY_ERROR'
-              });
-            } else {
-              res.status(500).send({ 
-                error: 'Purchase transaction failed', 
-                details: error.message,
-                code: error.code
-              });
-            }
-          });
-        });
-    });
-  });
-});
-
-// Create Product Transaction and Update Stock
-router.post("/product-transaction", (req, res) => {
-  const transactionData = req.body;
-  console.log('Received product transaction data:', transactionData);
-  
-  db.getConnection((err, connection) => {
-    if (err) {
-      console.error('Database connection error:', err);
-      return res.status(500).send({ error: 'Database connection failed' });
-    }
-
-    connection.beginTransaction((err) => {
-      if (err) {
-        connection.release();
-        console.error('Transaction begin error:', err);
-        return res.status(500).send({ error: 'Transaction failed to start' });
-      }
-
-      processTransaction(transactionData, 'Product', connection)
-        .then((result) => {
-          connection.commit((err) => {
-            if (err) {
-              console.error('Commit error:', err);
-              return connection.rollback(() => {
-                connection.release();
-                res.status(500).send({ error: 'Transaction commit failed', details: err.message });
-              });
-            }
-            connection.release();
-            console.log('Product transaction completed successfully');
-            res.send({
-              message: "Product transaction completed successfully",
-              voucherId: result.voucherId,
-              invoiceNumber: result.invoiceNumber,
-              stockUpdated: true,
-              taxType: result.taxType,
-              gstBreakdown: {
-                cgst: result.totalCGST,
-                sgst: result.totalSGST,
-                igst: result.totalIGST
-              },
-              batchDetails: result.batchDetails
-            });
-          });
-        })
-        .catch((error) => {
-          console.error('Product transaction error:', error);
-          connection.rollback(() => {
-            connection.release();
-            
-            if (error.code === 'ER_DUP_ENTRY') {
-              res.status(500).send({ 
-                error: 'Database error: Duplicate entry detected.',
-                details: 'VoucherID primary key conflict',
-                code: 'DUPLICATE_KEY_ERROR'
-              });
-            } else {
-              res.status(500).send({ 
-                error: 'Product transaction failed', 
-                details: error.message,
-                code: error.code
-              });
-            }
-          });
-        });
-    });
-  });
-});
-
-// Get last sales invoice number
-router.get("/last-invoice", (req, res) => {
-  const query = "SELECT VchNo FROM voucher WHERE TransactionType = 'Sales' ORDER BY VoucherID DESC LIMIT 1";
-  
-  db.query(query, (err, results) => {
-    if (err) {
-      console.error('Error fetching last invoice number:', err);
-      return res.status(500).send(err);
-    }
-    
-    if (results.length === 0) {
-      return res.send({ lastInvoiceNumber: null });
-    }
-    
-    res.send({ lastInvoiceNumber: results[0].VchNo });
-  });
-});
-
-// Get last purchase invoice number
-router.get("/last-purchase-invoice", (req, res) => {
-  const query = `
-    SELECT InvoiceNumber 
-    FROM voucher 
-    WHERE TransactionType = 'Purchase' 
-    AND InvoiceNumber LIKE 'PINV%'
-    ORDER BY VoucherID DESC 
-    LIMIT 1`;
-  
-  db.query(query, (err, results) => {
-    if (err) {
-      console.error('Error fetching last purchase invoice number:', err);
-      return res.status(500).send(err);
-    }
-    
-    if (results.length === 0) {
-      return res.send({ lastInvoiceNumber: null });
-    }
-    
-    console.log('Last purchase invoice found:', results[0].InvoiceNumber);
-    res.send({ lastInvoiceNumber: results[0].InvoiceNumber });
-  });
-});
-
 // Get transaction with batch details
-// Get transaction with batch details - ENHANCED VERSION
 router.get("/transactions/:id", (req, res) => {
   const query = `
     SELECT 
@@ -613,31 +491,19 @@ router.get("/transactions/:id", (req, res) => {
     
     const transaction = results[0];
     
-    // Parse batch details from JSON string with better error handling
+    // Parse batch details from JSON string
     try {
       if (transaction.batch_details) {
-        // Handle both stringified JSON and already parsed JSON
         if (typeof transaction.batch_details === 'string') {
           transaction.batch_details = JSON.parse(transaction.batch_details);
         }
-        // If it's already an object, keep it as is
       } else {
         transaction.batch_details = [];
       }
     } catch (error) {
       console.error('Error parsing batch details:', error);
-      console.log('Raw batch_details:', transaction.batch_details);
       transaction.batch_details = [];
     }
-    
-    // Log for debugging
-    console.log('Transaction data:', {
-      VoucherID: transaction.VoucherID,
-      CGSTAmount: transaction.CGSTAmount,
-      SGSTAmount: transaction.SGSTAmount,
-      IGSTAmount: transaction.IGSTAmount,
-      batch_details_length: transaction.batch_details?.length
-    });
     
     res.json({
       success: true,
@@ -674,167 +540,7 @@ router.get("/transactions", (req, res) => {
   });
 });
 
-// Get stock history for a product with batch and voucher details
-router.get("/stock-history/:productId", (req, res) => {
-  const productId = req.params.productId;
-  
-  const query = `
-    SELECT s.*, p.goods_name, v.VchNo as invoice_number, v.TransactionType
-    FROM stock s 
-    JOIN products p ON s.product_id = p.id 
-    LEFT JOIN voucher v ON s.voucher_id = v.VoucherID
-    WHERE s.product_id = ? 
-    ORDER BY s.date DESC, s.id DESC
-  `;
-
-  db.query(query, [productId], (err, results) => {
-    if (err) {
-      console.error('Error fetching stock history:', err);
-      return res.status(500).send(err);
-    }
-    res.send(results);
-  });
-});
-
-// Get current stock status for all products
-router.get("/stock-status", (req, res) => {
-  const query = `
-    SELECT 
-      id,
-      goods_name,
-      opening_stock,
-      stock_in,
-      stock_out,
-      balance_stock,
-      (opening_stock + stock_in - stock_out) as calculated_balance
-    FROM products 
-    ORDER BY goods_name
-  `;
-
-  db.query(query, (err, results) => {
-    if (err) {
-      console.error('Error fetching stock status:', err);
-      return res.status(500).send(err);
-    }
-    res.send(results);
-  });
-});
-
-// Get purchase transactions
-router.get("/purchase-transactions", (req, res) => {
-  db.query("SELECT * FROM voucher WHERE TransactionType = 'Purchase' ORDER BY VoucherID DESC", (err, results) => {
-    if (err) {
-      console.error('Error fetching purchase transactions:', err);
-      return res.status(500).send(err);
-    }
-    res.send(results);
-  });
-});
-
-// Get product transactions
-router.get("/product-transactions", (req, res) => {
-  db.query("SELECT * FROM voucher WHERE TransactionType = 'Product' ORDER BY VoucherID DESC", (err, results) => {
-    if (err) {
-      console.error('Error fetching product transactions:', err);
-      return res.status(500).send(err);
-    }
-    res.send(results);
-  });
-});
-
-// Get single purchase transaction
-router.get("/purchase-transactions/:id", (req, res) => {
-  db.query("SELECT * FROM voucher WHERE VoucherID = ? AND TransactionType = 'Purchase'", [req.params.id], (err, results) => {
-    if (err) {
-      console.error('Error fetching purchase transaction:', err);
-      return res.status(500).send(err);
-    }
-    res.send(results[0] || {});
-  });
-});
-
-// Get single product transaction
-router.get("/product-transactions/:id", (req, res) => {
-  db.query("SELECT * FROM voucher WHERE VoucherID = ? AND TransactionType = 'Product'", [req.params.id], (err, results) => {
-    if (err) {
-      console.error('Error fetching product transaction:', err);
-      return res.status(500).send(err);
-    }
-    res.send(results[0] || {});
-  });
-});
-
-// Get stock status with purchase history
-router.get("/purchase-stock-status", (req, res) => {
-  const query = `
-    SELECT 
-      p.id,
-      p.goods_name,
-      p.opening_stock,
-      p.stock_in,
-      p.stock_out,
-      p.balance_stock,
-      (p.opening_stock + p.stock_in - p.stock_out) as calculated_balance,
-      COUNT(DISTINCT b.id) as batch_count
-    FROM products p
-    LEFT JOIN batches b ON p.id = b.product_id
-    GROUP BY p.id
-    ORDER BY p.goods_name
-  `;
-
-  db.query(query, (err, results) => {
-    if (err) {
-      console.error('Error fetching purchase stock status:', err);
-      return res.status(500).send(err);
-    }
-    res.send(results);
-  });
-});
-
-// Health check endpoint
-router.get("/health", (req, res) => {
-  res.send({ status: "OK", message: "Transaction service is running" });
-});
-
-// Check Voucher table status
-router.get("/voucher-status", (req, res) => {
-  const queries = [
-    "SHOW COLUMNS FROM voucher LIKE 'VoucherID'",
-    "SHOW COLUMNS FROM voucher LIKE 'BatchDetails'",
-    "SELECT MAX(VoucherID) as maxId FROM voucher",
-    "SHOW TABLE STATUS LIKE 'voucher'"
-  ];
-
-  db.query(queries.join(';'), (err, results) => {
-    if (err) {
-      console.error('Error checking voucher status:', err);
-      return res.status(500).send(err);
-    }
-    
-    res.send({
-      voucherIdColumn: results[0][0],
-      batchDetailsColumn: results[1][0],
-      maxId: results[2][0],
-      tableStatus: results[3][0]
-    });
-  });
-});
-
-// Check Stock table structure
-router.get("/stock-structure", (req, res) => {
-  const query = "SHOW COLUMNS FROM stock";
-  
-  db.query(query, (err, results) => {
-    if (err) {
-      console.error('Error checking stock structure:', err);
-      return res.status(500).send(err);
-    }
-    
-    res.send(results);
-  });
-});
-
-// Get last invoice number
+// Get last sales invoice number
 router.get("/last-invoice", (req, res) => {
   const query = "SELECT VchNo FROM voucher WHERE TransactionType = 'Sales' ORDER BY VoucherID DESC LIMIT 1";
   
@@ -851,111 +557,5 @@ router.get("/last-invoice", (req, res) => {
     res.send({ lastInvoiceNumber: results[0].VchNo });
   });
 });
-
-
-
-
-// ------------------------------
-// Get all vouchers for invoice number
-// ------------------------------
-  router.get('/invoices/:invoiceNumber', async (req, res) => {
-    let connection;
-    try {
-      connection = await new Promise((resolve, reject) => {
-        db.getConnection((err, conn) => {
-          if (err) reject(err);
-          else resolve(conn);
-        });
-      });
-
-      const { invoiceNumber } = req.params;
-      
-      const query = `
-        SELECT 
-          VoucherID,
-          TransactionType,
-          VchNo,
-          InvoiceNumber,
-          Date,
-          PaymentTerms,
-          Freight,
-          TotalQty,
-          TotalPacks,
-          TotalQty1,
-          TaxAmount,
-          Subtotal,
-          BillSundryAmount,
-          TotalAmount,
-          ChequeNo,
-          ChequeDate,
-          BankName,
-          AccountID,
-          AccountName,
-          PartyID,
-          PartyName,
-          BasicAmount,
-          ValueOfGoods,
-          EntryDate,
-          SGSTPercentage,
-          CGSTPercentage,
-          IGSTPercentage,
-          SGSTAmount,
-          CGSTAmount,
-          IGSTAmount,
-          TaxSystem,
-          BatchDetails,
-          paid_amount,
-          balance_amount,
-          receipt_number,
-          status,
-          paid_date,
-          created_at
-        FROM voucher 
-        WHERE InvoiceNumber = ?
-        ORDER BY 
-          CASE WHEN TransactionType = 'Sales' THEN 1 ELSE 2 END,
-          created_at ASC
-      `;
-      
-      const results = await new Promise((resolve, reject) => {
-        connection.execute(query, [invoiceNumber], (error, results) => {
-          if (error) reject(error);
-          else resolve(results);
-        });
-      });
-      
-      if (results.length === 0) {
-        return res.status(404).json({
-          success: false,
-          message: 'Invoice not found'
-        });
-      }
-      
-      // Separate sales and receipt entries
-      const salesEntry = results.find(item => item.TransactionType === 'Sales');
-      const receiptEntries = results.filter(item => item.TransactionType === 'Receipt');
-      
-      res.json({
-        success: true,
-        data: {
-          sales: salesEntry,
-          receipts: receiptEntries,
-          allEntries: results
-        }
-      });
-      
-    } catch (error) {
-      console.error('Error fetching invoice:', error);
-      res.status(500).json({
-        success: false,
-        message: 'Internal server error'
-      });
-    } finally {
-      if (connection) {
-        connection.release();
-      }
-    }
-  });
-
 
 module.exports = router;

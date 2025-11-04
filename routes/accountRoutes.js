@@ -133,12 +133,4 @@ router.delete("/accounts/:id", (req, res) => {
 });
 
 
-
-
-
-
-
-
-
-
 module.exports = router;

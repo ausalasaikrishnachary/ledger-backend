@@ -2,42 +2,14 @@ const express = require('express');
 const router = express.Router();
 const db = require('./../../db');
 
-// Get next batch number based on group_by - IMPROVED VERSION
+// Get next batch number based on group_by
 router.get('/batches/next-batch-number', async (req, res) => {
-  const { group_by, current_count = 0 } = req.query;
+  const { group_by, product_id } = req.query;
   const actualGroupBy = group_by || 'Salescatalog';
   
-  console.log('🔢 Fetching next batch number for group:', actualGroupBy, 'current_count:', current_count);
+  console.log('🔢 Fetching next batch number for group:', actualGroupBy, 'product_id:', product_id);
 
   try {
-    // Get the highest batch number from database for this group
-    const [lastBatchRow] = await db.promise().query(
-      `SELECT batch_number FROM batches 
-       WHERE group_by = ? 
-       ORDER BY 
-         CAST(REPLACE(batch_number, 'P', '') AS UNSIGNED) DESC,
-         CAST(REPLACE(batch_number, 'S', '') AS UNSIGNED) DESC
-       LIMIT 1`,
-      [actualGroupBy]
-    );
-
-    let highestBatchNumber = 0;
-    
-    if (lastBatchRow.length > 0) {
-      const lastBatch = lastBatchRow[0].batch_number;
-      console.log('📊 Last batch number found in DB:', lastBatch);
-      
-      // Extract numeric part from batch number (remove prefix)
-      const numericMatch = lastBatch.replace(/[^\d]/g, '');
-      if (numericMatch) {
-        highestBatchNumber = parseInt(numericMatch);
-        console.log('📈 Highest numeric value from DB:', highestBatchNumber);
-      }
-    } else {
-      console.log('📊 No existing batches found in DB, starting from 0');
-    }
-
-    // Determine prefix based on group type
     let prefix = '';
     if (actualGroupBy === 'Purchaseditems') {
       prefix = 'P';
@@ -45,21 +17,31 @@ router.get('/batches/next-batch-number', async (req, res) => {
       prefix = 'S';
     }
 
-    // Calculate next batch number: highest from DB + current count from frontend + 1
-    const nextBatchNumber = highestBatchNumber + parseInt(current_count) + 1;
-    const batchNumber = `${prefix}${String(nextBatchNumber).padStart(4, '0')}`;
+    const [allBatches] = await db.promise().query(
+      `SELECT batch_number FROM batches 
+       WHERE group_by = ? 
+       ORDER BY 
+         CAST(REPLACE(REPLACE(batch_number, 'S', ''), 'P', '') AS UNSIGNED) DESC,
+         id DESC
+       LIMIT 1`,
+      [actualGroupBy]
+    );
+
+    let nextBatchNumber = 1;
     
-    console.log('✅ Final batch number generated:', batchNumber, {
-      highestFromDB: highestBatchNumber,
-      currentCount: current_count,
-      calculatedNext: nextBatchNumber
-    });
+    if (allBatches.length > 0) {
+      const lastBatch = allBatches[0].batch_number;
+      const numericMatch = lastBatch.match(/\d+/);
+      if (numericMatch) {
+        nextBatchNumber = parseInt(numericMatch[0]) + 1;
+      }
+    }
+
+    const batchNumber = `${prefix}${String(nextBatchNumber).padStart(4, '0')}`;
     
     res.json({ 
       success: true, 
-      batch_number: batchNumber,
-      highest_from_db: highestBatchNumber,
-      current_count: parseInt(current_count)
+      batch_number: batchNumber
     });
   } catch (err) {
     console.error('❌ Error fetching next batch number:', err);
@@ -70,258 +52,101 @@ router.get('/batches/next-batch-number', async (req, res) => {
     });
   }
 });
-// Create purchase product with optional sales catalog - MAIN ENDPOINT
-// Create purchase product with optional sales catalog - MAIN ENDPOINT
-router.post('/products/purchase-with-sales', async (req, res) => {
-  const data = req.body;
-  const { create_sales_catalog, ...productData } = data;
 
-  console.log('\n========== CREATE PURCHASE WITH SALES REQUEST ==========');
-  console.log('Create Sales Catalog:', create_sales_catalog);
-
-  try {
-    // Set default values for purchase product
-    productData.balance_stock = parseFloat(productData.opening_stock) || 0;
-    productData.created_at = new Date();
-    productData.updated_at = new Date();
-    
-    const { batches, ...purchaseProductData } = productData;
-
-    // Insert purchase product
-    const purchaseColumns = Object.keys(purchaseProductData).join(', ');
-    const purchasePlaceholders = Object.keys(purchaseProductData).map(() => '?').join(', ');
-    const purchaseValues = Object.values(purchaseProductData);
-
-    const purchaseSql = `INSERT INTO products (${purchaseColumns}) VALUES (${purchasePlaceholders})`;
-    const [purchaseInsert] = await db.promise().query(purchaseSql, purchaseValues);
-
-    const purchaseProductId = purchaseInsert.insertId;
-    console.log('✅ Purchase product created with ID:', purchaseProductId);
-
-    // Handle batches for purchase product
-    let purchaseBatchCount = 0;
-    if (productData.maintain_batch && Array.isArray(batches) && batches.length > 0) {
-      // Get the last batch number for Purchaseditems
-      const [lastBatchRow] = await db.promise().query(
-        'SELECT batch_number FROM batches WHERE group_by = ? ORDER BY CAST(REPLACE(batch_number, "P", "") AS UNSIGNED) DESC LIMIT 1',
-        ['Purchaseditems']
-      );
-
-      let lastBatchNumber = 0;
-      if (lastBatchRow.length > 0) {
-        const lastBatch = lastBatchRow[0].batch_number;
-        const numericPart = lastBatch.replace(/[^\d]/g, '');
-        lastBatchNumber = parseInt(numericPart) || 0;
-        console.log('📊 Last purchase batch number:', lastBatch, '-> numeric:', lastBatchNumber);
-      }
-
-      const batchValues = [];
-      for (let index = 0; index < batches.length; index++) {
-        const batch = batches[index];
-        let barcode = batch.barcode;
-        const timestamp = Date.now();
-        
-        if (!barcode) {
-          barcode = `B${timestamp}${index}${Math.random().toString(36).substr(2, 5)}`;
-        }
-
-        // Verify barcode uniqueness
-        const [barcodeCheck] = await db.promise().query(
-          'SELECT COUNT(*) as count FROM batches WHERE barcode = ?',
-          [barcode]
-        );
-
-        if (barcodeCheck[0].count > 0) {
-          barcode = `B${timestamp}${index}${Math.random().toString(36).substr(2, 5)}`;
-        }
-
-        // Use P prefix for purchase batches - INCREMENT PROPERLY
-        const batchNumber = `P${String(lastBatchNumber + index + 1).padStart(4, '0')}`;
-        console.log('🔄 Creating purchase batch:', batchNumber);
-        
-        batchValues.push([
-          purchaseProductId,
-          batchNumber,
-          batch.mfg_date || batch.mfgDate || null,
-          batch.exp_date || batch.expDate || null,
-          parseFloat(batch.quantity) || 0,
-          parseFloat(batch.selling_price || batch.sellingPrice) || 0,
-          parseFloat(batch.purchase_price || batch.purchasePrice) || 0,
-          parseFloat(batch.mrp) || 0,
-          parseFloat(batch.batch_price || batch.batchPrice) || 0,
-          barcode,
-          'Purchaseditems',
-          new Date(),
-          new Date()
-        ]);
-      }
-
-      // Insert batches
-      const batchSql = `
-        INSERT INTO batches 
-        (product_id, batch_number, mfg_date, exp_date, quantity, selling_price, purchase_price, mrp, batch_price, barcode, group_by, created_at, updated_at)
-        VALUES ?
-      `;
-      await db.promise().query(batchSql, [batchValues]);
-      purchaseBatchCount = batches.length;
-      console.log('✅ Purchase batches created:', purchaseBatchCount);
-    }
-
-    // Create sales catalog entry if requested
-    let salesProductId = null;
-    let salesBatchCount = 0;
-    let salesBatchNumber = null; // DEFINE THIS VARIABLE HERE
-    
-    if (create_sales_catalog) {
-      // Create sales product data
-      const salesProductData = {
-        group_by: 'Salescatalog',
-        goods_name: purchaseProductData.goods_name,
-        category_id: purchaseProductData.category_id,
-        company_id: purchaseProductData.company_id,
-        price: purchaseProductData.price,
-        inclusive_gst: purchaseProductData.inclusive_gst,
-        gst_rate: purchaseProductData.gst_rate,
-        non_taxable: purchaseProductData.non_taxable,
-        net_price: purchaseProductData.net_price,
-        hsn_code: purchaseProductData.hsn_code,
-        unit: purchaseProductData.unit,
-        cess_rate: purchaseProductData.cess_rate,
-        cess_amount: purchaseProductData.cess_amount,
-        sku: purchaseProductData.sku,
-        opening_stock: purchaseProductData.opening_stock,
-        opening_stock_date: purchaseProductData.opening_stock_date,
-        min_stock_alert: purchaseProductData.min_stock_alert,
-        max_stock_alert: purchaseProductData.max_stock_alert,
-        description: purchaseProductData.description,
-        maintain_batch: false, // Sales catalog doesn't maintain batches from purchase
-        can_be_sold: true,
-        balance_stock: purchaseProductData.opening_stock || "0",
-        created_at: new Date(),
-        updated_at: new Date()
-      };
-
-      const salesColumns = Object.keys(salesProductData).join(', ');
-      const salesPlaceholders = Object.keys(salesProductData).map(() => '?').join(', ');
-      const salesValues = Object.values(salesProductData);
-
-      const salesSql = `INSERT INTO products (${salesColumns}) VALUES (${salesPlaceholders})`;
-      const [salesInsert] = await db.promise().query(salesSql, salesValues);
-      
-      salesProductId = salesInsert.insertId;
-      console.log('✅ Sales catalog product created with ID:', salesProductId);
-
-      // FIXED: Get the PROPER next batch number for Salescatalog
-      const [lastSalesBatchRow] = await db.promise().query(
-        'SELECT batch_number FROM batches WHERE group_by = ? ORDER BY CAST(REPLACE(batch_number, "S", "") AS UNSIGNED) DESC LIMIT 1',
-        ['Salescatalog']
-      );
-
-      let nextSalesBatchNumber = 1; // Start from 1 if no batches exist
-      
-      if (lastSalesBatchRow.length > 0) {
-        const lastBatch = lastSalesBatchRow[0].batch_number;
-        const numericPart = lastBatch.replace(/[^\d]/g, '');
-        const lastBatchNumber = parseInt(numericPart) || 0;
-        nextSalesBatchNumber = lastBatchNumber + 1; // Increment from the last batch
-        console.log('📊 Last sales batch number:', lastBatch, '-> numeric:', lastBatchNumber, '-> next:', nextSalesBatchNumber);
-      } else {
-        console.log('📊 No existing sales batches, starting from 1');
-      }
-
-      // Use S prefix for sales batches with PROPER INCREMENT
-      salesBatchNumber = `S${String(nextSalesBatchNumber).padStart(4, '0')}`; // ASSIGN TO THE VARIABLE DEFINED OUTSIDE
-      const salesBarcode = `BS${Date.now()}${Math.random().toString(36).substr(2, 5)}`;
-
-      console.log('🔄 Creating sales batch:', salesBatchNumber);
-
-      const salesBatchSql = `
-        INSERT INTO batches 
-        (product_id, batch_number, mfg_date, exp_date, quantity, selling_price, purchase_price, mrp, batch_price, barcode, group_by, created_at, updated_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-      `;
-      
-      await db.promise().query(salesBatchSql, [
-        salesProductId,
-        salesBatchNumber,
-        null, // mfg_date
-        null, // exp_date
-        parseFloat(salesProductData.opening_stock) || 0, // quantity
-        parseFloat(salesProductData.price) || 0, // selling_price
-        0, // purchase_price
-        0, // mrp
-        0, // batch_price
-        salesBarcode,
-        'Salescatalog',
-        new Date(),
-        new Date()
-      ]);
-      
-      salesBatchCount = 1;
-      console.log('✅ Sales catalog batch created:', salesBatchNumber);
-    }
-
-    console.log('========== REQUEST COMPLETED SUCCESSFULLY ==========\n');
-
-    // FIXED: Use the salesBatchNumber variable that's defined outside the if block
-    res.status(201).json({ 
-      success: true, 
-      purchase_product_id: purchaseProductId,
-      sales_product_id: salesProductId,
-      sales_catalog_created: !!create_sales_catalog,
-      purchase_batch_count: purchaseBatchCount,
-      sales_batch_count: salesBatchCount,
-      message: create_sales_catalog 
-        ? `Product added to both Purchase and Sales catalogs successfully! Sales batch: ${salesBatchNumber}`
-        : 'Product added to Purchase catalog successfully!'
-    });
-  } catch (err) {
-    console.error('❌ Error creating purchase product:', err);
-    res.status(500).json({ 
-      success: false, 
-      message: 'Failed to create purchase product', 
-      error: err.message 
-    });
-  }
-});
-// Create a new product (for sales catalog directly)
+// Create a new product (FIXED VERSION)
 router.post('/products', async (req, res) => {
   const data = req.body;
 
   try {
-    data.balance_stock = parseFloat(data.opening_stock) || 0;
-    data.created_at = new Date();
-    data.updated_at = new Date();
-    const { batches, ...productData } = data;
+    console.log('\n========== CREATE PRODUCT REQUEST ==========');
+    console.log('Maintain Batch:', data.maintain_batch);
+    console.log('Opening Stock:', data.opening_stock);
+    console.log('Batches count:', data.batches ? data.batches.length : 0);
+
+    // Calculate initial stock values
+    let openingStock = parseFloat(data.opening_stock || 0);
+    let stockIn = 0;
+    let stockOut = 0;
+    let balanceStock = openingStock;
+
+    // If product maintains batches, calculate from batches
+    if (data.maintain_batch && Array.isArray(data.batches) && data.batches.length > 0) {
+      const totalBatchQuantity = data.batches.reduce((total, batch) => {
+        return total + (parseFloat(batch.quantity) || 0);
+      }, 0);
+      
+      openingStock = totalBatchQuantity;
+      balanceStock = totalBatchQuantity;
+      
+      console.log('📊 Using batch-based stock calculation:', {
+        totalBatchQuantity,
+        openingStock,
+        balanceStock
+      });
+    }
+
+    const productData = {
+      ...data,
+      opening_stock: openingStock,
+      stock_in: stockIn,
+      stock_out: stockOut,
+      balance_stock: balanceStock,
+      created_at: new Date(),
+      updated_at: new Date()
+    };
+
+    const { batches, ...cleanProductData } = productData;
 
     // Insert product
-    const columns = Object.keys(productData).join(', ');
-    const placeholders = Object.keys(productData).map(() => '?').join(', ');
-    const values = Object.values(productData);
+    const columns = Object.keys(cleanProductData).join(', ');
+    const placeholders = Object.keys(cleanProductData).map(() => '?').join(', ');
+    const values = Object.values(cleanProductData);
 
     const productSql = `INSERT INTO products (${columns}) VALUES (${placeholders})`;
     const [productInsert] = await db.promise().query(productSql, values);
 
     const productId = productInsert.insertId;
 
+    console.log('✅ Product created with stock:', {
+      productId,
+      opening_stock: openingStock,
+      stock_in: stockIn,
+      stock_out: stockOut,
+      balance_stock: balanceStock,
+      maintain_batch: data.maintain_batch
+    });
+
     // Handle batches
     if (data.maintain_batch && Array.isArray(batches) && batches.length > 0) {
-      // Get the last batch number for the group_by
-      const [lastBatchRow] = await db.promise().query(
-        'SELECT batch_number FROM batches WHERE group_by = ? ORDER BY CAST(REPLACE(batch_number, "S", "") AS UNSIGNED) DESC LIMIT 1',
-        [data.group_by]
-      );
+      const batchValues = [];
+      let totalBatchQuantity = 0;
 
-      let lastBatchNumber = 0;
-      if (lastBatchRow.length > 0) {
-        const lastBatch = lastBatchRow[0].batch_number;
-        const numericPart = lastBatch.replace(/[^\d]/g, '');
-        lastBatchNumber = parseInt(numericPart) || 0;
+      // Get the starting batch number
+      let currentBatchNumber = 1;
+      try {
+        const [lastBatchRow] = await db.promise().query(
+          'SELECT batch_number FROM batches WHERE group_by = ? ORDER BY CAST(REPLACE(REPLACE(batch_number, "S", ""), "P", "") AS UNSIGNED) DESC LIMIT 1',
+          [data.group_by || 'Salescatalog']
+        );
+        
+        if (lastBatchRow.length > 0) {
+          const lastBatch = lastBatchRow[0].batch_number;
+          const numericMatch = lastBatch.match(/\d+/);
+          if (numericMatch) {
+            currentBatchNumber = parseInt(numericMatch[0]) + 1;
+          }
+        }
+      } catch (error) {
+        console.error('Error getting batch number:', error);
       }
 
-      const batchValues = [];
+      const prefix = data.group_by === 'Purchaseditems' ? 'P' : 'S';
+
       for (let index = 0; index < batches.length; index++) {
         const batch = batches[index];
+        const batchQuantity = parseFloat(batch.quantity || 0);
+        totalBatchQuantity += batchQuantity;
+        
         let barcode = batch.barcode;
         const timestamp = Date.now();
         if (!barcode) {
@@ -338,16 +163,14 @@ router.post('/products', async (req, res) => {
           barcode = `B${timestamp}${index}${Math.random().toString(36).substr(2, 5)}`;
         }
 
-        const prefix = data.group_by === 'Purchaseditems' ? 'P' : 'S';
-        const batchNumber = `${prefix}${String(lastBatchNumber + index + 1).padStart(4, '0')}`;
+        const batchNumber = `${prefix}${String(currentBatchNumber + index).padStart(4, '0')}`;
         
         batchValues.push([
           productId,
           batchNumber,
           batch.mfg_date || batch.mfgDate || null,
           batch.exp_date || batch.expDate || null,
-          parseFloat(batch.quantity) || 0,
-          
+          batchQuantity,
           parseFloat(batch.selling_price || batch.sellingPrice) || 0,
           parseFloat(batch.purchase_price || batch.purchasePrice) || 0,
           parseFloat(batch.mrp) || 0,
@@ -357,6 +180,8 @@ router.post('/products', async (req, res) => {
           new Date(),
           new Date()
         ]);
+
+        console.log(`✅ Prepared batch: ${batchNumber} with quantity: ${batchQuantity}`);
       }
 
       // Insert batches
@@ -367,17 +192,26 @@ router.post('/products', async (req, res) => {
       `;
       await db.promise().query(batchSql, [batchValues]);
 
-      res.status(201).json({ success: true, product_id: productId, batch_count: batches.length });
-    } else {
-      res.status(201).json({ success: true, product_id: productId, batch_count: 0 });
+      console.log('✅ Batches created:', batches.length);
     }
+
+    res.status(201).json({ 
+      success: true, 
+      product_id: productId,
+      opening_stock: openingStock,
+      balance_stock: balanceStock
+    });
   } catch (err) {
-    console.error('Error creating product:', err);
-    res.status(500).json({ success: false, message: 'Failed to create product', error: err.message });
+    console.error('❌ Error creating product:', err);
+    res.status(500).json({ 
+      success: false, 
+      message: 'Failed to create product', 
+      error: err.message 
+    });
   }
 });
 
-// Update a product - COMPLETELY FIXED VERSION
+// Update a product (COMPLETELY FIXED VERSION)
 router.put('/products/:id', async (req, res) => {
   const productId = req.params.id;
   const data = req.body;
@@ -387,9 +221,28 @@ router.put('/products/:id', async (req, res) => {
   console.log('Product ID:', productId);
   console.log('Maintain Batch:', data.maintain_batch);
   console.log('Batches received:', batches ? batches.length : 0);
-  console.log('Batches data:', JSON.stringify(batches, null, 2));
 
   try {
+    // Calculate stock values for non-batch products
+    if (!data.maintain_batch) {
+      const openingStock = parseFloat(data.opening_stock || 0);
+      const stockIn = 0;
+      const stockOut = parseFloat(productData.stock_out || 0);
+      const balanceStock = openingStock + stockIn - stockOut;
+      
+      productData.opening_stock = openingStock;
+      productData.stock_in = stockIn;
+      productData.stock_out = stockOut;
+      productData.balance_stock = balanceStock;
+      
+      console.log('📊 Non-batch product stock calculation:', {
+        opening_stock: openingStock,
+        stock_in: stockIn,
+        stock_out: stockOut,
+        balance_stock: balanceStock
+      });
+    }
+
     // Update product basic info
     if (Object.keys(productData).length > 0) {
       productData.updated_at = new Date();
@@ -399,11 +252,6 @@ router.put('/products/:id', async (req, res) => {
       await db.promise().query(updateSql, [...updateValues, productId]);
       console.log('✅ Product basic info updated');
     }
-
-    // Initialize batch counters
-    let batchesUpdated = 0;
-    let batchesInserted = 0;
-    let batchesDeleted = 0;
 
     // Handle batches if maintain_batch is true
     if (data.maintain_batch && Array.isArray(batches)) {
@@ -416,9 +264,6 @@ router.put('/products/:id', async (req, res) => {
       );
 
       console.log('📦 Existing batches in DB:', existingBatches.length);
-      existingBatches.forEach(batch => {
-        console.log(`  - ID: ${batch.id}, Batch No: ${batch.batch_number}`);
-      });
 
       // Create a map of existing batch IDs
       const existingBatchMap = new Map();
@@ -438,20 +283,12 @@ router.put('/products/:id', async (req, res) => {
         const numericPart = lastBatch.replace(/[^\d]/g, '');
         lastBatchNumber = parseInt(numericPart) || 0;
       }
-      console.log('📊 Last batch number for group:', lastBatchNumber);
 
       // Store IDs of batches that were processed in this request
       const processedBatchIds = [];
 
       // Process each batch from request
       for (const [index, batch] of batches.entries()) {
-        console.log(`\n🔍 Processing batch ${index}:`, {
-          id: batch.id,
-          isExisting: batch.isExisting,
-          batch_number: batch.batch_number || batch.batchNumber,
-          hasValidId: batch.id && !batch.id.toString().includes('temp_')
-        });
-
         // Generate or verify barcode
         let barcode = batch.barcode;
         if (!barcode) {
@@ -469,7 +306,6 @@ router.put('/products/:id', async (req, res) => {
           if (barcodeCheck[0].count > 0) {
             const timestamp = Date.now();
             barcode = `B${timestamp}${index}${Math.random().toString(36).substr(2, 5)}`;
-            console.log('⚠️ Barcode conflict, generated new:', barcode);
           }
         }
 
@@ -487,11 +323,9 @@ router.put('/products/:id', async (req, res) => {
           updated_at: new Date()
         };
 
-        // FIXED: Check if this is an existing batch
+        // Check if this is an existing batch
         const hasValidDatabaseId = batch.id && !batch.id.toString().includes('temp_');
         const isExistingBatch = batch.isExisting === true && hasValidDatabaseId;
-
-        console.log(`🔍 Batch detection - isExistingBatch: ${isExistingBatch}, ID: ${batch.id}, hasValidDatabaseId: ${hasValidDatabaseId}`);
 
         if (isExistingBatch) {
           // UPDATE existing batch
@@ -509,7 +343,6 @@ router.put('/products/:id', async (req, res) => {
             batchData.mfg_date,
             batchData.exp_date,
             batchData.quantity,
-           
             batchData.selling_price,
             batchData.purchase_price,
             batchData.mrp,
@@ -521,14 +354,15 @@ router.put('/products/:id', async (req, res) => {
           ];
           
           await db.promise().query(updateSql, updateValues);
-          batchesUpdated++;
-          processedBatchIds.push(parseInt(batch.id)); // Track this batch ID
+          processedBatchIds.push(parseInt(batch.id));
           console.log('✅ Updated batch ID:', batch.id);
           
         } else {
           // INSERT new batch
           const prefix = data.group_by === 'Purchaseditems' ? 'P' : 'S';
-          const newBatchNumber = `${prefix}${String(lastBatchNumber + batchesInserted + 1).padStart(4, '0')}`;
+          const newBatchNumber = `${prefix}${String(lastBatchNumber + 1).padStart(4, '0')}`;
+          lastBatchNumber++;
+          
           console.log('➕ INSERTING NEW batch with number:', newBatchNumber);
           
           const insertSql = `
@@ -545,7 +379,6 @@ router.put('/products/:id', async (req, res) => {
             batchData.mfg_date,
             batchData.exp_date,
             batchData.quantity,
-            
             batchData.selling_price,
             batchData.purchase_price,
             batchData.mrp,
@@ -557,39 +390,42 @@ router.put('/products/:id', async (req, res) => {
           ];
           
           const [insertResult] = await db.promise().query(insertSql, insertValues);
-          batchesInserted++;
-          processedBatchIds.push(insertResult.insertId); // Track the newly inserted batch ID
+          processedBatchIds.push(insertResult.insertId);
           console.log('✅ Inserted new batch with ID:', insertResult.insertId);
         }
       }
 
-      // FIXED: SMART DELETION LOGIC - Only delete batches that are not processed in this request
-      console.log('\n🗑️ Checking for batches to delete...');
-      
-      console.log('Processed batch IDs (updated + inserted):', processedBatchIds);
-      console.log('All existing batch IDs in DB:', Array.from(existingBatchMap.keys()));
-
+      // Delete batches that exist in DB but weren't processed in this request
       if (processedBatchIds.length > 0) {
-        // Delete batches that exist in DB but weren't processed in this request
         const placeholders = processedBatchIds.map(() => '?').join(',');
         const [deleteResult] = await db.promise().query(
           `DELETE FROM batches WHERE product_id = ? AND id NOT IN (${placeholders})`,
           [productId, ...processedBatchIds]
         );
-        batchesDeleted = deleteResult.affectedRows;
-        console.log('🗑️ Deleted', batchesDeleted, 'batches that were not in the current request');
+        console.log('🗑️ Deleted', deleteResult.affectedRows, 'batches that were not in the current request');
       } else if (batches.length === 0 && existingBatches.length > 0) {
         // If no batches in request but batches exist in DB, delete all
         const [deleteResult] = await db.promise().query(
           'DELETE FROM batches WHERE product_id = ?',
           [productId]
         );
-        batchesDeleted = deleteResult.affectedRows;
-        console.log('🗑️ No batches in request - deleted all', batchesDeleted, 'existing batches');
-      } else {
-        console.log('✅ No batches to delete');
+        console.log('🗑️ No batches in request - deleted all', deleteResult.affectedRows, 'existing batches');
       }
 
+      // Update product stock from batches
+      const [batchTotals] = await db.promise().query(
+        'SELECT SUM(quantity) as total_quantity FROM batches WHERE product_id = ?',
+        [productId]
+      );
+      
+      const totalBatchQuantity = parseFloat(batchTotals[0].total_quantity || 0);
+      
+      await db.promise().query(
+        'UPDATE products SET opening_stock = ?, balance_stock = ? WHERE id = ?',
+        [totalBatchQuantity, totalBatchQuantity, productId]
+      );
+      
+      console.log('✅ Updated product stock from batches:', totalBatchQuantity);
     } else if (!data.maintain_batch) {
       // Delete all batches if maintain_batch is false
       console.log('\n🗑️ Maintain batch is FALSE - deleting all batches');
@@ -597,33 +433,22 @@ router.put('/products/:id', async (req, res) => {
         'DELETE FROM batches WHERE product_id = ?',
         [productId]
       );
-      batchesDeleted = deleteResult.affectedRows;
-      console.log('🗑️ Deleted', batchesDeleted, 'batches');
+      console.log('🗑️ Deleted', deleteResult.affectedRows, 'batches');
     }
 
-    console.log('\n========== UPDATE SUMMARY ==========');
-    console.log('✅ Product updated successfully');
-    console.log('📊 Batches Updated:', batchesUpdated);
-    console.log('📊 Batches Inserted:', batchesInserted);
-    console.log('📊 Batches Deleted:', batchesDeleted);
-    console.log('========================================\n');
+    console.log('\n========== UPDATE COMPLETED ==========\n');
 
     res.json({
       success: true,
       message: 'Product updated successfully',
-      id: productId,
-      batchesUpdated,
-      batchesInserted,
-      batchesDeleted
+      id: productId
     });
   } catch (err) {
     console.error('❌ Error updating product:', err);
-    console.error('❌ Error stack:', err.stack);
     res.status(500).json({
       success: false,
       message: 'Failed to update product',
-      error: err.message,
-      sqlMessage: err.sqlMessage
+      error: err.message
     });
   }
 });
@@ -669,7 +494,6 @@ router.get('/products/:id', async (req, res) => {
 router.delete('/products/:id', async (req, res) => {
   const productId = req.params.id;
   try {
-    // Delete related records first
     await db.promise().query('DELETE FROM stock WHERE product_id = ?', [productId]);
     await db.promise().query('DELETE FROM batches WHERE product_id = ?', [productId]);
     await db.promise().query('DELETE FROM products WHERE id = ?', [productId]);
