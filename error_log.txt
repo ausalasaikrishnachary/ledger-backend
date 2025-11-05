@@ -24,3 +24,4 @@ Error: Unknown error
 Error: Unknown error
 Error: GSTIN details not found
 Error: GSTIN details not found
+Error: Unknown error

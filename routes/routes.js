@@ -70,7 +70,6 @@ router.post('/receipts', async (req, res) => {
       invoice_number
     } = req.body;
 
-    // Validate receipt_number
     if (!receipt_number || !receipt_number.match(/^REC\d+$/)) {
       throw new Error('Invalid receipt number format');
     }
@@ -93,7 +92,6 @@ router.post('/receipts', async (req, res) => {
 
     const receiptAmount = parseFloat(amount || 0);
 
-    // Step 1: Insert receipt in receipts table
     const receiptResult = await new Promise((resolve, reject) => {
       connection.execute(
         `INSERT INTO receipts (
@@ -119,7 +117,141 @@ router.post('/receipts', async (req, res) => {
       );
     });
 
-    // Step 2: Apply receipt to existing Sales vouchers
+    const receiptId = receiptResult.insertId; 
+    console.log('Receipt inserted with ID:', receiptId);
+
+    const cashBankAccountID = 1; 
+    const cashBankAccountName = bank_name ? `${bank_name} Bank` : 'Cash Account';
+
+    const cashBankBalance = await new Promise((resolve, reject) => {
+      connection.execute(
+        `SELECT balance_amount FROM ledger WHERE AccountID = ? ORDER BY created_at DESC, id DESC LIMIT 1`,
+        [cashBankAccountID],
+        (err, results) => {
+          if (err) reject(err);
+          else resolve(results.length > 0 ? parseFloat(results[0].balance_amount) : 0);
+        }
+      );
+    });
+
+    const newCashBankBalance = cashBankBalance + receiptAmount;
+
+    // Insert Debit entry for Cash/Bank
+    // await new Promise((resolve, reject) => {
+    //   connection.execute(
+    //     `INSERT INTO ledger (
+    //       voucherID, date, trantype, AccountID, AccountName, 
+    //       Amount, balance_amount, DC, created_at
+    //     ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    //     [
+    //       receiptId, // Use receipt table id as voucherID
+    //       receipt_date || new Date(),
+    //       'Receipt',
+    //       cashBankAccountID,
+    //       cashBankAccountName,
+    //       receiptAmount,
+    //       newCashBankBalance,
+    //       'D', // Debit for cash/bank
+    //       new Date()
+    //     ],
+    //     (err) => {
+    //       if (err) reject(err);
+    //       else resolve();
+    //     }
+    //   );
+    // });
+
+    // console.log('Cash/Bank ledger entry created with voucherID:', receiptId);
+
+    // LEDGER ENTRY 2: Customer Account (Credit)
+    if (retailer_id) {
+      // Get latest balance for customer account
+      const customerBalance = await new Promise((resolve, reject) => {
+        connection.execute(
+          `SELECT balance_amount FROM ledger WHERE AccountID = ? ORDER BY created_at DESC, id DESC LIMIT 1`,
+          [retailer_id],
+          (err, results) => {
+            if (err) reject(err);
+            else resolve(results.length > 0 ? parseFloat(results[0].balance_amount) : 0);
+          }
+        );
+      });
+
+      const newCustomerBalance = customerBalance - receiptAmount; // Credit reduces customer balance
+
+      // Insert Credit entry for Customer
+      await new Promise((resolve, reject) => {
+        connection.execute(
+          `INSERT INTO ledger (
+            voucherID, date, trantype, AccountID, AccountName, 
+            Amount, balance_amount, DC, created_at
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+          [
+            receiptId, // Use receipt table id as voucherID
+            receipt_date || new Date(),
+            'Receipt',
+            retailer_id,
+            retailer_name || 'Customer',
+            receiptAmount,
+            newCustomerBalance,
+            'C', // Credit for customer
+            new Date()
+          ],
+          (err) => {
+            if (err) reject(err);
+            else resolve();
+          }
+        );
+      });
+
+      console.log('Customer ledger entry created with voucherID:', receiptId);
+    } else {
+      const sundryDebtorsAccountID = 2; 
+      const sundryDebtorsAccountName = 'Sundry Debtors';
+
+      // Get latest balance for sundry debtors account
+      const sundryBalance = await new Promise((resolve, reject) => {
+        connection.execute(
+          `SELECT balance_amount FROM ledger WHERE AccountID = ? ORDER BY created_at DESC, id DESC LIMIT 1`,
+          [sundryDebtorsAccountID],
+          (err, results) => {
+            if (err) reject(err);
+            else resolve(results.length > 0 ? parseFloat(results[0].balance_amount) : 0);
+          }
+        );
+      });
+
+      const newSundryBalance = sundryBalance - receiptAmount;
+
+      // Insert Credit entry for Sundry Debtors
+      await new Promise((resolve, reject) => {
+        connection.execute(
+          `INSERT INTO ledger (
+            voucherID, date, trantype, AccountID, AccountName, 
+            Amount, balance_amount, DC, created_at
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+          [
+            receiptId, // Use receipt table id as voucherID
+            receipt_date || new Date(),
+            'Receipt',
+            sundryDebtorsAccountID,
+            sundryDebtorsAccountName,
+            receiptAmount,
+            newSundryBalance,
+            'C', // Credit for sundry debtors
+            new Date()
+          ],
+          (err) => {
+            if (err) reject(err);
+            else resolve();
+          }
+        );
+      });
+
+      console.log('Sundry Debtors ledger entry created with voucherID:', receiptId);
+    }
+
+    // Step 2: Update voucher table for receipt application (BUT DON'T CREATE LEDGER ENTRIES HERE)
     if (retailer_id) {
       let voucherQuery = `SELECT * FROM voucher WHERE PartyID = ? AND TransactionType='Sales'`;
       const queryParams = [retailer_id];
@@ -175,10 +307,7 @@ router.post('/receipts', async (req, res) => {
           remainingAmount -= amountToApply;
           const updatedBalanceAmount = currentBalance - amountToApply;
 
-          // FIXED: DO NOT update sales voucher at all - keep it original
-          // No UPDATE query for sales voucher
-
-          // FIXED: Create receipt entry with cumulative calculations
+          // Create receipt entry in voucher table ONLY (no ledger entries)
           await new Promise((resolve, reject) => {
             connection.execute(
               `INSERT INTO voucher (
@@ -202,7 +331,7 @@ router.post('/receipts', async (req, res) => {
                 0.00,
                 amountToApply,
                 0.00,
-                currentBalance, // TotalAmount = previous balance (not amount paid)
+                currentBalance,
                 null,
                 null,
                 bank_name || '',
@@ -221,8 +350,8 @@ router.post('/receipts', async (req, res) => {
                 0.00,
                 'GST',
                 '[]',
-                amountToApply, // paid_amount = amount paid in this receipt
-                updatedBalanceAmount, // balance_amount = remaining balance after this payment
+                amountToApply,
+                updatedBalanceAmount,
                 receipt_number,
                 updatedBalanceAmount <= 0.01 ? 'Paid' : 'Partial',
                 currentDate
@@ -251,7 +380,7 @@ router.post('/receipts', async (req, res) => {
                 'Receipt',
                 receipt_number,
                 currentDate,
-                previousBalance, // Show previous balance as TotalAmount
+                previousBalance,
                 bank_name,
                 retailer_id,
                 retailer_name,
@@ -285,9 +414,9 @@ router.post('/receipts', async (req, res) => {
               receipt_number,
               new Date(),
               receiptAmount,
-              bank_name,
-              retailer_id,
-              retailer_name,
+              bank_name || '',
+              retailer_id || null,
+              retailer_name || '',
               receiptAmount,
               receiptAmount,
               new Date(),
@@ -314,11 +443,36 @@ router.post('/receipts', async (req, res) => {
       });
     });
 
-    res.status(201).json({
-      id: receiptResult.insertId,
+    // Prepare response
+    const response = {
+      id: receiptId,
       message: 'Receipt created and applied to vouchers successfully',
-      receipt_number
-    });
+      receipt_number,
+      ledgerEntries: {
+        voucherID: receiptId, // The voucherID used in ledger entries
+        cashBank: { 
+          accountId: cashBankAccountID, 
+          accountName: cashBankAccountName,
+          balance: newCashBankBalance
+        },
+        customer: { 
+          accountId: retailer_id || 2,
+          accountName: retailer_name || 'Customer',
+          balance: retailer_id ? (await new Promise((resolve, reject) => {
+            connection.execute(
+              `SELECT balance_amount FROM ledger WHERE AccountID = ? ORDER BY created_at DESC, id DESC LIMIT 1`,
+              [retailer_id],
+              (err, results) => {
+                if (err) reject(err);
+                else resolve(results.length > 0 ? parseFloat(results[0].balance_amount) : 0);
+              }
+            );
+          })) - receiptAmount : 0
+        }
+      }
+    };
+
+    res.status(201).json(response);
 
   } catch (error) {
     if (connection) {
@@ -333,7 +487,6 @@ router.post('/receipts', async (req, res) => {
     if (connection) connection.release();
   }
 });
-
 
 
 
