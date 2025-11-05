@@ -21,8 +21,12 @@ const CustomerRoutes = require("./routes/Inventory/CustomerRoutes")
 const vochurRoutes = require("./routes/VochurRoutes")
 const receiptsRouter = require('./routes/routes');
 const retailerReportRoutes = require("./routes/retailerReportRoutes");
+const expenseReportRoutes = require("./routes/expenseReportRoutes");
+const salesReportRoutes = require("./routes/salesReportRoutes");
 
 const pdfRoutes = require('./routes/pdfRoutes'); // Add this line
+const creditnoteRoutes = require('./routes/creditnote');
+const voucher = require('./routes/voucher');
 const orderRoutes = require('./routes/orders');
 const categoriesRoutes = require('./routes/categories');
 const offersRoutes = require('./routes/Inventory/OffersRoutes');
@@ -55,10 +59,15 @@ app.use('/api', LogVisit); // ✅ mount LogVisit under /api
 app.use("/", expensiveRoutes);
 app.use('/api', receiptsRouter);
 app.use('/', pdfRoutes);
+app.use("/api", creditnoteRoutes);
+app.use('/api', voucher);
 app.use('/api', orderRoutes); 
 app.use('/api', categoriesRoutes);
 
 app.use("/api/reports", retailerReportRoutes);
+app.use("/api/reports", expenseReportRoutes);
+app.use("/api/reports", salesReportRoutes);
+
 
 app.use('/', pdfRoutes);
 

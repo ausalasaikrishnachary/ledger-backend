@@ -7,6 +7,7 @@ const nodemailer = require('nodemailer');
 router.post("/accounts", async (req, res) => {
   let { name, email, phone_number, password, role, assigned_staff, staffid, entity_type, group, ...otherData } = req.body;
 
+  // For SUPPLIERS group, set specific fields to NULL
   if (group === 'SUPPLIERS') {
     assigned_staff = assigned_staff || null;
     staffid = staffid || null;
@@ -14,6 +15,7 @@ router.post("/accounts", async (req, res) => {
     role = 'supplier';
   }
 
+  // Prepare data for insertion
   const data = { 
     name, 
     email, 
@@ -24,10 +26,10 @@ router.post("/accounts", async (req, res) => {
     staffid, 
     entity_type,
     group,
- discount: discount || 0, // Default to 0 if not provided
-    Target: Target || 100000,
-    ...otherData  };
+    ...otherData 
+  };
 
+  // Clean the data - remove undefined values
   Object.keys(data).forEach(key => {
     if (data[key] === undefined || data[key] === '') {
       data[key] = null;
@@ -39,55 +41,46 @@ router.post("/accounts", async (req, res) => {
   try {
     const [result] = await db.promise().query(sql, data);
 
-    // Send email ONLY if role is retailer
-    if (role === 'retailer') {
-      const transporter = nodemailer.createTransport({
-        service: "gmail",
-        auth: {
-          user: "bharathsiripuram98@gmail.com",
-          pass: "alsishqgybtzonoj",
-        },
-        tls: {
-          rejectUnauthorized: false,
-        },
-      });
+    // Email setup (your existing code)
+    const transporter = nodemailer.createTransport({
+      service: "gmail",
+      auth: {
+        user: "bharathsiripuram98@gmail.com",
+        pass: "alsishqgybtzonoj",
+      },
+      tls: {
+        rejectUnauthorized: false,
+      },
+    });
 
-      const mailOptions = {
-        from: "bharathsiripuram98@gmail.com",
-        to: email,
-        subject: "Your Retailer Account Details",
-        text: `
+    const mailOptions = {
+      from: "bharathsiripuram98@gmail.com",
+      to: email,
+      subject: "Your Account Details",
+      text: `
 Hello ${name},
 
-Your retailer account has been successfully created.
+Your account has been successfully created.
 Phone Number: ${phone_number}
 Role: ${role}
 Email: ${email}
 Password: ${password}
 
 Please keep this information secure.
-        `,
-      };
+      `,
+    };
 
-      try {
-        await transporter.sendMail(mailOptions);
-        res.status(201).json({
-          message: "Retailer added and email sent successfully!",
-          id: result.insertId,
-          ...data,
-        });
-      } catch (mailErr) {
-        console.error("Email Error:", mailErr);
-        res.status(201).json({
-          message: "Retailer added but failed to send email",
-          id: result.insertId,
-          ...data,
-        });
-      }
-    } else {
-      // For supplier or other roles, don't send email
+    try {
+      await transporter.sendMail(mailOptions);
       res.status(201).json({
-        message: "Supplier added successfully!",
+        message: "User added and email sent successfully!",
+        id: result.insertId,
+        ...data,
+      });
+    } catch (mailErr) {
+      console.error("Email Error:", mailErr);
+      res.status(201).json({
+        message: "User added but failed to send email",
         id: result.insertId,
         ...data,
       });
@@ -95,6 +88,7 @@ Please keep this information secure.
   } catch (dbErr) {
     console.error("DB Insert Error:", dbErr);
     
+    // Check if it's a NULL constraint violation
     if (dbErr.code === 'ER_BAD_NULL_ERROR') {
       return res.status(400).json({ 
         error: "Database constraint violation. Some required fields are missing.",
