@@ -121,27 +121,122 @@ router.get("/accounts/:id", (req, res) => {
   });
 });
 
+// GET account by ID
+router.get("/accounts/:id", (req, res) => {
+  const { id } = req.params;
+  
+  console.log('Fetching account with ID:', id);
+  
+  db.query("SELECT * FROM accounts WHERE id = ?", [id], (err, results) => {
+    if (err) {
+      console.error('Database error:', err);
+      return res.status(500).send({ 
+        error: 'Database query failed',
+        details: err.message 
+      });
+    }
+    
+    if (results.length === 0) {
+      return res.status(404).send({ error: 'Account not found' });
+    }
+    
+    res.send(results[0]);
+  });
+});
+
+// UPDATE account
 router.put("/accounts/:id", (req, res) => {
-  const data = req.body;
-  db.query("UPDATE accounts SET ? WHERE id = ?", [data, req.params.id], (err, result) => {
-    if (err) return res.status(500).send(err);
-    res.send({ id: req.params.id, ...data });
+  const { id } = req.params;
+  const updates = req.body;
+  
+  console.log('Updating account ID:', id);
+  console.log('Update data:', updates);
+  
+  // Remove id from updates to prevent updating primary key
+  delete updates.id;
+  
+  // Check if there are any fields to update
+  const fields = Object.keys(updates);
+  if (fields.length === 0) {
+    return res.status(400).send({ error: 'No fields to update' });
+  }
+  
+  // Build dynamic UPDATE query
+  const setClause = fields.map(key => `\`${key}\` = ?`).join(', ');
+  const values = fields.map(field => {
+    let value = updates[field];
+    // Convert empty strings to null for database
+    if (value === '') return null;
+    return value;
+  });
+  
+  const query = `UPDATE accounts SET ${setClause} WHERE id = ?`;
+  
+  console.log('Executing query:', query);
+  console.log('With values:', [...values, id]);
+  
+  db.query(query, [...values, id], (err, results) => {
+    if (err) {
+      console.error('Database error:', err);
+      return res.status(500).send({ 
+        error: 'Database update failed',
+        details: err.message,
+        sqlMessage: err.sqlMessage 
+      });
+    }
+    
+    if (results.affectedRows === 0) {
+      return res.status(404).send({ error: 'Account not found or no changes made' });
+    }
+    
+    res.send({ 
+      message: 'Account updated successfully', 
+      affectedRows: results.affectedRows 
+    });
   });
 });
 
+// DELETE account
 router.delete("/accounts/:id", (req, res) => {
-  db.query("DELETE FROM accounts WHERE id = ?", [req.params.id], (err, result) => {
-    if (err) return res.status(500).send(err);
-    res.send({ message: "Deleted successfully." });
+  const { id } = req.params;
+  
+  console.log('Deleting account ID:', id);
+  
+  db.query("DELETE FROM accounts WHERE id = ?", [id], (err, results) => {
+    if (err) {
+      console.error('Database error:', err);
+      return res.status(500).send({ 
+        error: 'Database delete failed',
+        details: err.message 
+      });
+    }
+    
+    if (results.affectedRows === 0) {
+      return res.status(404).send({ error: 'Account not found' });
+    }
+    
+    res.send({ 
+      message: 'Account deleted successfully',
+      affectedRows: results.affectedRows 
+    });
   });
 });
 
 
+// router.put("/accounts/:id", (req, res) => {
+//   const data = req.body;
+//   db.query("UPDATE accounts SET ? WHERE id = ?", [data, req.params.id], (err, result) => {
+//     if (err) return res.status(500).send(err);
+//     res.send({ id: req.params.id, ...data });
+//   });
+// });
 
-
-
-
-
+// router.delete("/accounts/:id", (req, res) => {
+//   db.query("DELETE FROM accounts WHERE id = ?", [req.params.id], (err, result) => {
+//     if (err) return res.status(500).send(err);
+//     res.send({ message: "Deleted successfully." });
+//   });
+// });
 
 
 
