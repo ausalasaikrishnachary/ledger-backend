@@ -65,7 +65,7 @@ router.post("/login", (req, res) => {
         route = "/staffdashboard";
         break;
       case 'retailer':
-        route = "/retailerdashboard";
+        route = "/retailer-home";
         break;
       default:
         route = "/dashboard";
