@@ -20,6 +20,8 @@ const CustomerRoutes = require("./routes/Inventory/CustomerRoutes")
 const vochurRoutes = require("./routes/VochurRoutes")
 const receiptsRouter = require('./routes/routes');
 const retailerReportRoutes = require("./routes/retailerReportRoutes");
+const expenseReportRoutes = require("./routes/expenseReportRoutes");
+const salesReportRoutes = require("./routes/salesReportRoutes");
 
 const pdfRoutes = require('./routes/pdfRoutes'); // Add this line
 
@@ -48,6 +50,9 @@ app.use("/", expensiveRoutes);
 app.use('/api', receiptsRouter);
 
 app.use("/api/reports", retailerReportRoutes);
+app.use("/api/reports", expenseReportRoutes);
+app.use("/api/reports", salesReportRoutes);
+
 
 app.use('/', pdfRoutes);
 

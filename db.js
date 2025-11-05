@@ -1,5 +1,15 @@
 const mysql = require("mysql2"); // No /promise
 
+// // Create pool
+// const db = mysql.createPool({
+//   host: "localhost",
+//   user: "root",
+//   password: "",
+//   database: "ledger",
+//   connectionLimit: 10, // optional
+//   port: 3306
+// });
+
 // Create pool
 const db = mysql.createPool({
   host: "localhost",
@@ -7,18 +17,8 @@ const db = mysql.createPool({
   password: "",
   database: "ledger",
   connectionLimit: 10, // optional
-  port: 3306
+  port: 3307
 });
-
-// Create pool
-// const db = mysql.createPool({
-//   host: "localhost",
-//   user: "root",
-//   password: "",
-//   database: "ledger",
-//   connectionLimit: 10, // optional
-//   port: 3307
-// });
 
 db.getConnection((err, connection) => {
   if (err) {
