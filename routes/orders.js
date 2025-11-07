@@ -596,6 +596,30 @@ router.get('/orders/user/:userId', (req, res) => {
   });
 });
 
+
+router.get("/retailerorder/:id", (req, res) => {
+  const { id } = req.params;
+
+  if (!id) {
+    return res.status(400).json({ error: "Order ID is required" });
+  }
+
+  const sql = "SELECT * FROM orders WHERE id = ?";
+
+  db.query(sql, [id], (err, result) => {
+    if (err) {
+      console.error("Database query error:", err);
+      return res.status(500).json({ error: "Database error", details: err.message });
+    }
+
+    if (result.length === 0) {
+      return res.status(404).json({ error: "Order not found" });
+    }
+
+    res.json(result[0]); // ✅ directly return the row as JSON
+  });
+});
+
 // PUT /api/orders/:id - Update an order
 // PUT /api/orders/:id - Update an order
 // router.put('/orders/:id', async (req, res) => {
@@ -713,199 +737,6 @@ router.get('/orders/user/:userId', (req, res) => {
 
 // PUT /api/orders/:id - Update an order with GST
 // UPDATE /api/orders/:id - Update an order
-// router.put('/orders/:id', (req, res) => {
-//   const { id } = req.params;
-//   const { 
-//     category, 
-//     product, 
-//     quantity, 
-//     price, 
-//     totalPrice, 
-//     status, 
-//     category_id, 
-//     product_id,
-//     basePrice,
-//     gstAmount,
-//     gstRate,
-//     taxType  // Make sure this matches frontend
-//   } = req.body;
-
-//   console.log('📝 Updating order with GST:', id, req.body);
-
-//   // Validate required fields
-//   if (!category || !product || !quantity || !price || !totalPrice) {
-//     return res.status(400).json({ 
-//       error: 'Missing required fields: category, product, quantity, price, totalPrice' 
-//     });
-//   }
-
-//   db.getConnection((err, connection) => {
-//     if (err) {
-//       console.error('❌ Database connection failed:', err);
-//       return res.status(500).json({ error: 'Database connection failed' });
-//     }
-
-//     // Step 1: Check if order exists
-//     connection.query('SELECT * FROM orders WHERE id = ?', [id], (err, existingOrders) => {
-//       if (err) {
-//         connection.release();
-//         console.error('❌ Error checking order existence:', err);
-//         return res.status(500).json({ error: 'Failed to check order existence' });
-//       }
-
-//       if (existingOrders.length === 0) {
-//         connection.release();
-//         return res.status(404).json({ error: 'Order not found' });
-//       }
-
-//       // Step 2: Check for optional columns
-//       const columnQuery = `
-//         SELECT COLUMN_NAME 
-//         FROM INFORMATION_SCHEMA.COLUMNS 
-//         WHERE TABLE_NAME = 'orders' 
-//         AND TABLE_SCHEMA = DATABASE()
-//       `;
-
-//       connection.query(columnQuery, (err, columns) => {
-//         if (err) {
-//           connection.release();
-//           console.error('❌ Failed to fetch table columns:', err);
-//           return res.status(500).json({ error: 'Failed to check table columns' });
-//         }
-
-//         const columnNames = columns.map(col => col.COLUMN_NAME);
-//         const hasCategoryId = columnNames.includes('category_id');
-//         const hasProductId = columnNames.includes('product_id');
-//         const hasBasePrice = columnNames.includes('base_price');
-//         const hasGstAmount = columnNames.includes('gst_amount');
-//         const hasGstRate = columnNames.includes('gst_rate');
-//         const hasTaxType = columnNames.includes('tax_type');
-
-//         console.log('📊 Table columns:', columnNames);
-//         console.log('📦 Received data for update:', {
-//           category_id, product_id, basePrice, gstAmount, gstRate, taxType
-//         });
-
-//         // Step 3: Build update query dynamically
-//         let setClause = `
-//           SET category = ?, product = ?, quantity = ?, price = ?, total_price = ?, 
-//               status = ?, updated_at = NOW()
-//         `;
-//         let values = [category, product, quantity, price, totalPrice, status || 'pending'];
-
-//         // Add optional fields if they exist in the table
-//         if (hasCategoryId) {
-//           setClause += ', category_id = ?';
-//           values.push(category_id || null);
-//         }
-//         if (hasProductId) {
-//           setClause += ', product_id = ?';
-//           values.push(product_id || null);
-//         }
-//         if (hasBasePrice) {
-//           setClause += ', base_price = ?';
-//           values.push(basePrice || 0);
-//         }
-//         if (hasGstAmount) {
-//           setClause += ', gst_amount = ?';
-//           values.push(gstAmount || 0);
-//         }
-//         if (hasGstRate) {
-//           setClause += ', gst_rate = ?';
-//           values.push(gstRate || 0);
-//         }
-//         if (hasTaxType) {
-//           setClause += ', tax_type = ?';
-//           values.push(taxType || 'exclusive');
-//         }
-
-//         const query = `UPDATE orders ${setClause} WHERE id = ?`;
-//         values.push(id);
-
-//         console.log('🚀 Executing update query:', query);
-//         console.log('📋 With values:', values);
-
-//         // Step 4: Run the update
-//         connection.query(query, values, (err, result) => {
-//           if (err) {
-//             connection.release();
-//             console.error('❌ Update error:', err);
-//             return res.status(500).json({
-//               error: 'Failed to update order',
-//               details: err.message,
-//               sqlMessage: err.sqlMessage
-//             });
-//           }
-
-//           if (result.affectedRows === 0) {
-//             connection.release();
-//             return res.status(404).json({ error: 'Order not found or no changes made' });
-//           }
-
-//           console.log('✅ Order updated, affected rows:', result.affectedRows);
-
-//           // Step 5: Fetch updated order
-//           let selectQuery = `
-//             SELECT id, category, product, quantity, price, total_price AS totalPrice, 
-//                    status, order_date AS date, user_id
-//           `;
-
-//           // Add all the GST and ID fields for the response
-//           if (hasBasePrice) selectQuery += ', base_price AS basePrice';
-//           if (hasGstAmount) selectQuery += ', gst_amount AS gstAmount';
-//           if (hasGstRate) selectQuery += ', gst_rate AS gstRate';
-//           if (hasTaxType) selectQuery += ', tax_type AS taxType';
-//           if (hasCategoryId) selectQuery += ', category_id';
-//           if (hasProductId) selectQuery += ', product_id';
-
-//           selectQuery += ' FROM orders WHERE id = ?';
-
-//           console.log('🔍 Fetching updated order with query:', selectQuery);
-
-//           connection.query(selectQuery, [id], (err, updatedOrders) => {
-//             connection.release();
-
-//             if (err) {
-//               console.error('❌ Fetch updated order error:', err);
-//               return res.status(500).json({ error: 'Failed to retrieve updated order' });
-//             }
-
-//             if (updatedOrders.length === 0) {
-//               return res.status(500).json({ error: 'Failed to retrieve updated order' });
-//             }
-
-//             const updatedOrder = updatedOrders[0];
-            
-//             // Parse all numeric fields
-//             const parsedOrder = {
-//               id: updatedOrder.id,
-//               category: updatedOrder.category,
-//               product: updatedOrder.product,
-//               quantity: updatedOrder.quantity,
-//               price: parseFloat(updatedOrder.price),
-//               totalPrice: parseFloat(updatedOrder.totalPrice),
-//               status: updatedOrder.status,
-//               date: updatedOrder.order_date ? updatedOrder.order_date.toISOString().split('T')[0] : new Date().toISOString().split('T')[0],
-//               user_id: updatedOrder.user_id
-//             };
-
-//             // Add optional fields if they exist
-//             if (hasBasePrice) parsedOrder.basePrice = parseFloat(updatedOrder.basePrice || 0);
-//             if (hasGstAmount) parsedOrder.gstAmount = parseFloat(updatedOrder.gstAmount || 0);
-//             if (hasGstRate) parsedOrder.gstRate = parseFloat(updatedOrder.gstRate || 0);
-//             if (hasTaxType) parsedOrder.taxType = updatedOrder.taxType || 'exclusive';
-//             if (hasCategoryId) parsedOrder.category_id = updatedOrder.category_id;
-//             if (hasProductId) parsedOrder.product_id = updatedOrder.product_id;
-
-//             console.log('✅ Order updated successfully:', parsedOrder);
-//             res.json(parsedOrder);
-//           });
-//         });
-//       });
-//     });
-//   });
-// });
-
 router.put('/orders/:id', (req, res) => {
   const { id } = req.params;
   const { 
@@ -920,16 +751,12 @@ router.put('/orders/:id', (req, res) => {
     basePrice,
     gstAmount,
     gstRate,
-    taxType
+    taxType  // Make sure this matches frontend
   } = req.body;
 
-  console.log('📝 Updating order:', id, req.body);
+  console.log('📝 Updating order with GST:', id, req.body);
 
-  if (!category || !product || !quantity || !price || !totalPrice) {
-    return res.status(400).json({ 
-      error: 'Missing required fields: category, product, quantity, price, totalPrice' 
-    });
-  }
+
 
   db.getConnection((err, connection) => {
     if (err) {
@@ -937,61 +764,33 @@ router.put('/orders/:id', (req, res) => {
       return res.status(500).json({ error: 'Database connection failed' });
     }
 
-    // Start transaction
-    connection.beginTransaction(async (err) => {
+    // Step 1: Check if order exists
+    connection.query('SELECT * FROM orders WHERE id = ?', [id], (err, existingOrders) => {
       if (err) {
         connection.release();
-        console.error('❌ Transaction start error:', err);
-        return res.status(500).json({ error: 'Failed to start transaction' });
+        console.error('❌ Error checking order existence:', err);
+        return res.status(500).json({ error: 'Failed to check order existence' });
       }
 
-      try {
-        // Step 1: Get old order data to revert stock
-        const oldOrderResult = await new Promise((resolve, reject) => {
-          connection.query(
-            'SELECT quantity, product_id FROM orders WHERE id = ?', 
-            [id], 
-            (err, result) => {
-              if (err) reject(err);
-              else resolve(result);
-            }
-          );
-        });
+      if (existingOrders.length === 0) {
+        connection.release();
+        return res.status(404).json({ error: 'Order not found' });
+      }
 
-        if (oldOrderResult.length === 0) {
-          connection.rollback(() => {
-            connection.release();
-            return res.status(404).json({ error: 'Order not found' });
-          });
-          return;
+      // Step 2: Check for optional columns
+      const columnQuery = `
+        SELECT COLUMN_NAME 
+        FROM INFORMATION_SCHEMA.COLUMNS 
+        WHERE TABLE_NAME = 'orders' 
+        AND TABLE_SCHEMA = DATABASE()
+      `;
+
+      connection.query(columnQuery, (err, columns) => {
+        if (err) {
+          connection.release();
+          console.error('❌ Failed to fetch table columns:', err);
+          return res.status(500).json({ error: 'Failed to check table columns' });
         }
-
-        const oldOrder = oldOrderResult[0];
-        const oldQuantity = parseInt(oldOrder.quantity);
-        const newQuantity = parseInt(quantity);
-        const quantityDifference = newQuantity - oldQuantity;
-
-        console.log('📊 Stock difference calculation:', {
-          oldQuantity,
-          newQuantity,
-          quantityDifference,
-          product_id: oldOrder.product_id
-        });
-
-        // Step 2: Update the order
-        const columnQuery = `
-          SELECT COLUMN_NAME 
-          FROM INFORMATION_SCHEMA.COLUMNS 
-          WHERE TABLE_NAME = 'orders' 
-          AND TABLE_SCHEMA = DATABASE()
-        `;
-
-        const columns = await new Promise((resolve, reject) => {
-          connection.query(columnQuery, (err, results) => {
-            if (err) reject(err);
-            else resolve(results);
-          });
-        });
 
         const columnNames = columns.map(col => col.COLUMN_NAME);
         const hasCategoryId = columnNames.includes('category_id');
@@ -1001,12 +800,19 @@ router.put('/orders/:id', (req, res) => {
         const hasGstRate = columnNames.includes('gst_rate');
         const hasTaxType = columnNames.includes('tax_type');
 
+        console.log('📊 Table columns:', columnNames);
+        console.log('📦 Received data for update:', {
+          category_id, product_id, basePrice, gstAmount, gstRate, taxType
+        });
+
+        // Step 3: Build update query dynamically
         let setClause = `
           SET category = ?, product = ?, quantity = ?, price = ?, total_price = ?, 
               status = ?, updated_at = NOW()
         `;
         let values = [category, product, quantity, price, totalPrice, status || 'pending'];
 
+        // Add optional fields if they exist in the table
         if (hasCategoryId) {
           setClause += ', category_id = ?';
           values.push(category_id || null);
@@ -1035,196 +841,405 @@ router.put('/orders/:id', (req, res) => {
         const query = `UPDATE orders ${setClause} WHERE id = ?`;
         values.push(id);
 
-        console.log('🚀 Updating order with values:', values);
+        console.log('🚀 Executing update query:', query);
+        console.log('📋 With values:', values);
 
-        const updateResult = await new Promise((resolve, reject) => {
-          connection.query(query, values, (err, result) => {
-            if (err) reject(err);
-            else resolve(result);
-          });
-        });
+        // Step 4: Run the update
+        connection.query(query, values, (err, result) => {
+          if (err) {
+            connection.release();
+            console.error('❌ Update error:', err);
+            return res.status(500).json({
+              error: 'Failed to update order',
+              details: err.message,
+              sqlMessage: err.sqlMessage
+            });
+          }
 
-        if (updateResult.affectedRows === 0) {
-          connection.rollback(() => {
+          if (result.affectedRows === 0) {
             connection.release();
             return res.status(404).json({ error: 'Order not found or no changes made' });
-          });
-          return;
-        }
-
-        console.log('✅ Order updated, affected rows:', updateResult.affectedRows);
-
-        // Step 3: Update stock - always update to reflect the change
-        // Get current stock information from products table
-        const productResult = await new Promise((resolve, reject) => {
-          connection.query(
-            'SELECT opening_stock, balance_stock FROM products WHERE id = ?', 
-            [oldOrder.product_id], 
-            (err, result) => {
-              if (err) reject(err);
-              else resolve(result);
-            }
-          );
-        });
-
-        let openingStock = 0;
-        let currentBalanceStock = 0;
-        
-        if (productResult.length > 0) {
-          openingStock = parseFloat(productResult[0].opening_stock) || 0;
-          currentBalanceStock = parseFloat(productResult[0].balance_stock) || 0;
-        }
-
-        // Calculate new balance stock: revert old quantity and apply new quantity
-        // First add back the old quantity (revert), then subtract the new quantity
-        const revertedStock = currentBalanceStock + oldQuantity;
-        const newBalanceStock = revertedStock - newQuantity;
-
-        console.log('📊 Stock adjustment:', {
-          product_id: oldOrder.product_id,
-          current_balance: currentBalanceStock,
-          old_quantity_reverted: oldQuantity,
-          reverted_stock: revertedStock,
-          new_quantity_applied: newQuantity,
-          new_balance: newBalanceStock,
-          net_change: quantityDifference
-        });
-
-        // Insert stock record to track this adjustment
-        const stockQuery = `
-          INSERT INTO stock (product_id, price_per_unit, opening_stock, stock_out, balance_stock, date, notes)
-          VALUES (?, ?, ?, ?, ?, CURDATE(), ?)
-        `;
-
-        const stockOutValue = newQuantity; // Show the new order quantity as stock_out
-        const notes = `Order #${id} updated: ${oldQuantity} → ${newQuantity} units`;
-
-        const stockResult = await new Promise((resolve, reject) => {
-          connection.query(stockQuery, [
-            oldOrder.product_id,
-            price,
-            openingStock,      // Direct opening_stock value from products
-            stockOutValue,     // stock_out - the new order quantity
-            newBalanceStock,   // balance_stock after adjustment
-            notes             // Add notes to explain the adjustment
-          ], (err, result) => {
-            if (err) reject(err);
-            else resolve(result);
-          });
-        });
-
-        console.log('✅ Stock adjustment record inserted with ID:', stockResult.insertId);
-
-        // Update products table balance_stock
-        const updateProductQuery = `
-          UPDATE products 
-          SET balance_stock = ?, updated_at = NOW()
-          WHERE id = ?
-        `;
-
-        const updateProductResult = await new Promise((resolve, reject) => {
-          connection.query(updateProductQuery, [
-            newBalanceStock,
-            oldOrder.product_id
-          ], (err, result) => {
-            if (err) reject(err);
-            else resolve(result);
-          });
-        });
-
-        console.log('✅ Product balance stock updated:', updateProductResult.affectedRows);
-
-        // Commit transaction
-        await new Promise((resolve, reject) => {
-          connection.commit((err) => {
-            if (err) reject(err);
-            else resolve();
-          });
-        });
-
-        console.log('✅ Transaction committed successfully');
-
-        // Fetch updated order
-        let selectQuery = `
-          SELECT id, category, product, quantity, price, total_price AS totalPrice, 
-                 status, order_date, user_id
-        `;
-
-        if (hasBasePrice) selectQuery += ', base_price AS basePrice';
-        if (hasGstAmount) selectQuery += ', gst_amount AS gstAmount';
-        if (hasGstRate) selectQuery += ', gst_rate AS gstRate';
-        if (hasTaxType) selectQuery += ', tax_type AS taxType';
-        if (hasCategoryId) selectQuery += ', category_id';
-        if (hasProductId) selectQuery += ', product_id';
-
-        selectQuery += ' FROM orders WHERE id = ?';
-
-        const updatedOrders = await new Promise((resolve, reject) => {
-          connection.query(selectQuery, [id], (err, results) => {
-            if (err) reject(err);
-            else resolve(results);
-          });
-        });
-
-        connection.release();
-
-        if (updatedOrders.length === 0) {
-          return res.status(500).json({ error: 'Failed to retrieve updated order' });
-        }
-
-        const updatedOrder = updatedOrders[0];
-        
-        // Safely handle date formatting
-        let orderDate;
-        if (updatedOrder.order_date) {
-          if (updatedOrder.order_date instanceof Date) {
-            orderDate = updatedOrder.order_date.toISOString().split('T')[0];
-          } else if (typeof updatedOrder.order_date === 'string') {
-            orderDate = updatedOrder.order_date.split('T')[0];
-          } else {
-            orderDate = new Date().toISOString().split('T')[0];
           }
-        } else {
-          orderDate = new Date().toISOString().split('T')[0];
-        }
 
-        const parsedOrder = {
-          id: updatedOrder.id,
-          category: updatedOrder.category,
-          product: updatedOrder.product,
-          quantity: updatedOrder.quantity,
-          price: parseFloat(updatedOrder.price),
-          totalPrice: parseFloat(updatedOrder.totalPrice),
-          status: updatedOrder.status,
-          date: orderDate,
-          user_id: updatedOrder.user_id
-        };
+          console.log('✅ Order updated, affected rows:', result.affectedRows);
 
-        if (hasBasePrice) parsedOrder.basePrice = parseFloat(updatedOrder.basePrice || 0);
-        if (hasGstAmount) parsedOrder.gstAmount = parseFloat(updatedOrder.gstAmount || 0);
-        if (hasGstRate) parsedOrder.gstRate = parseFloat(updatedOrder.gstRate || 0);
-        if (hasTaxType) parsedOrder.taxType = updatedOrder.taxType || 'exclusive';
-        if (hasCategoryId) parsedOrder.category_id = updatedOrder.category_id;
-        if (hasProductId) parsedOrder.product_id = updatedOrder.product_id;
+          // Step 5: Fetch updated order
+          let selectQuery = `
+            SELECT id, category, product, quantity, price, total_price AS totalPrice, 
+                   status, order_date AS date, user_id
+          `;
 
-        console.log('✅ Order updated successfully:', parsedOrder);
-        res.json(parsedOrder);
+          // Add all the GST and ID fields for the response
+          if (hasBasePrice) selectQuery += ', base_price AS basePrice';
+          if (hasGstAmount) selectQuery += ', gst_amount AS gstAmount';
+          if (hasGstRate) selectQuery += ', gst_rate AS gstRate';
+          if (hasTaxType) selectQuery += ', tax_type AS taxType';
+          if (hasCategoryId) selectQuery += ', category_id';
+          if (hasProductId) selectQuery += ', product_id';
 
-      } catch (error) {
-        // Rollback transaction on error
-        connection.rollback(() => {
-          connection.release();
-          console.error('❌ Transaction error, rolled back:', error);
-          res.status(500).json({
-            error: 'Failed to update order',
-            details: error.message,
-            sqlMessage: error.sqlMessage
+          selectQuery += ' FROM orders WHERE id = ?';
+
+          console.log('🔍 Fetching updated order with query:', selectQuery);
+
+          connection.query(selectQuery, [id], (err, updatedOrders) => {
+            connection.release();
+
+            if (err) {
+              console.error('❌ Fetch updated order error:', err);
+              return res.status(500).json({ error: 'Failed to retrieve updated order' });
+            }
+
+            if (updatedOrders.length === 0) {
+              return res.status(500).json({ error: 'Failed to retrieve updated order' });
+            }
+
+            const updatedOrder = updatedOrders[0];
+            
+            // Parse all numeric fields
+            const parsedOrder = {
+              id: updatedOrder.id,
+              category: updatedOrder.category,
+              product: updatedOrder.product,
+              quantity: updatedOrder.quantity,
+              price: parseFloat(updatedOrder.price),
+              totalPrice: parseFloat(updatedOrder.totalPrice),
+              status: updatedOrder.status,
+              date: updatedOrder.order_date ? updatedOrder.order_date.toISOString().split('T')[0] : new Date().toISOString().split('T')[0],
+              user_id: updatedOrder.user_id
+            };
+
+            // Add optional fields if they exist
+            if (hasBasePrice) parsedOrder.basePrice = parseFloat(updatedOrder.basePrice || 0);
+            if (hasGstAmount) parsedOrder.gstAmount = parseFloat(updatedOrder.gstAmount || 0);
+            if (hasGstRate) parsedOrder.gstRate = parseFloat(updatedOrder.gstRate || 0);
+            if (hasTaxType) parsedOrder.taxType = updatedOrder.taxType || 'exclusive';
+            if (hasCategoryId) parsedOrder.category_id = updatedOrder.category_id;
+            if (hasProductId) parsedOrder.product_id = updatedOrder.product_id;
+
+            console.log('✅ Order updated successfully:', parsedOrder);
+            res.json(parsedOrder);
           });
         });
-      }
+      });
     });
   });
 });
+
+// router.put('/orders/:id', (req, res) => {
+//   const { id } = req.params;
+//   const { 
+//     category, 
+//     product, 
+//     quantity, 
+//     price, 
+//     totalPrice, 
+//     status, 
+//     category_id, 
+//     product_id,
+//     basePrice,
+//     gstAmount,
+//     gstRate,
+//     taxType
+//   } = req.body;
+
+//   console.log('📝 Updating order:', id, req.body);
+
+ 
+
+//   db.getConnection((err, connection) => {
+//     if (err) {
+//       console.error('❌ Database connection failed:', err);
+//       return res.status(500).json({ error: 'Database connection failed' });
+//     }
+
+//     // Start transaction
+//     connection.beginTransaction(async (err) => {
+//       if (err) {
+//         connection.release();
+//         console.error('❌ Transaction start error:', err);
+//         return res.status(500).json({ error: 'Failed to start transaction' });
+//       }
+
+//       try {
+//         // Step 1: Get old order data to revert stock
+//         const oldOrderResult = await new Promise((resolve, reject) => {
+//           connection.query(
+//             'SELECT quantity, product_id FROM orders WHERE id = ?', 
+//             [id], 
+//             (err, result) => {
+//               if (err) reject(err);
+//               else resolve(result);
+//             }
+//           );
+//         });
+
+//         if (oldOrderResult.length === 0) {
+//           connection.rollback(() => {
+//             connection.release();
+//             return res.status(404).json({ error: 'Order not found' });
+//           });
+//           return;
+//         }
+
+//         const oldOrder = oldOrderResult[0];
+//         const oldQuantity = parseInt(oldOrder.quantity);
+//         const newQuantity = parseInt(quantity);
+//         const quantityDifference = newQuantity - oldQuantity;
+
+//         console.log('📊 Stock difference calculation:', {
+//           oldQuantity,
+//           newQuantity,
+//           quantityDifference,
+//           product_id: oldOrder.product_id
+//         });
+
+//         // Step 2: Update the order
+//         const columnQuery = `
+//           SELECT COLUMN_NAME 
+//           FROM INFORMATION_SCHEMA.COLUMNS 
+//           WHERE TABLE_NAME = 'orders' 
+//           AND TABLE_SCHEMA = DATABASE()
+//         `;
+
+//         const columns = await new Promise((resolve, reject) => {
+//           connection.query(columnQuery, (err, results) => {
+//             if (err) reject(err);
+//             else resolve(results);
+//           });
+//         });
+
+//         const columnNames = columns.map(col => col.COLUMN_NAME);
+//         const hasCategoryId = columnNames.includes('category_id');
+//         const hasProductId = columnNames.includes('product_id');
+//         const hasBasePrice = columnNames.includes('base_price');
+//         const hasGstAmount = columnNames.includes('gst_amount');
+//         const hasGstRate = columnNames.includes('gst_rate');
+//         const hasTaxType = columnNames.includes('tax_type');
+
+//         let setClause = `
+//           SET category = ?, product = ?, quantity = ?, price = ?, total_price = ?, 
+//               status = ?, updated_at = NOW()
+//         `;
+//         let values = [category, product, quantity, price, totalPrice, status || 'pending'];
+
+//         if (hasCategoryId) {
+//           setClause += ', category_id = ?';
+//           values.push(category_id || null);
+//         }
+//         if (hasProductId) {
+//           setClause += ', product_id = ?';
+//           values.push(product_id || null);
+//         }
+//         if (hasBasePrice) {
+//           setClause += ', base_price = ?';
+//           values.push(basePrice || 0);
+//         }
+//         if (hasGstAmount) {
+//           setClause += ', gst_amount = ?';
+//           values.push(gstAmount || 0);
+//         }
+//         if (hasGstRate) {
+//           setClause += ', gst_rate = ?';
+//           values.push(gstRate || 0);
+//         }
+//         if (hasTaxType) {
+//           setClause += ', tax_type = ?';
+//           values.push(taxType || 'exclusive');
+//         }
+
+//         const query = `UPDATE orders ${setClause} WHERE id = ?`;
+//         values.push(id);
+
+//         console.log('🚀 Updating order with values:', values);
+
+//         const updateResult = await new Promise((resolve, reject) => {
+//           connection.query(query, values, (err, result) => {
+//             if (err) reject(err);
+//             else resolve(result);
+//           });
+//         });
+
+//         if (updateResult.affectedRows === 0) {
+//           connection.rollback(() => {
+//             connection.release();
+//             return res.status(404).json({ error: 'Order not found or no changes made' });
+//           });
+//           return;
+//         }
+
+//         console.log('✅ Order updated, affected rows:', updateResult.affectedRows);
+
+//         // Step 3: Update stock - always update to reflect the change
+//         // Get current stock information from products table
+//         const productResult = await new Promise((resolve, reject) => {
+//           connection.query(
+//             'SELECT opening_stock, balance_stock FROM products WHERE id = ?', 
+//             [oldOrder.product_id], 
+//             (err, result) => {
+//               if (err) reject(err);
+//               else resolve(result);
+//             }
+//           );
+//         });
+
+//         let openingStock = 0;
+//         let currentBalanceStock = 0;
+        
+//         if (productResult.length > 0) {
+//           openingStock = parseFloat(productResult[0].opening_stock) || 0;
+//           currentBalanceStock = parseFloat(productResult[0].balance_stock) || 0;
+//         }
+
+//         // Calculate new balance stock: revert old quantity and apply new quantity
+//         // First add back the old quantity (revert), then subtract the new quantity
+//         const revertedStock = currentBalanceStock + oldQuantity;
+//         const newBalanceStock = revertedStock - newQuantity;
+
+//         console.log('📊 Stock adjustment:', {
+//           product_id: oldOrder.product_id,
+//           current_balance: currentBalanceStock,
+//           old_quantity_reverted: oldQuantity,
+//           reverted_stock: revertedStock,
+//           new_quantity_applied: newQuantity,
+//           new_balance: newBalanceStock,
+//           net_change: quantityDifference
+//         });
+
+//         // Insert stock record to track this adjustment
+//         const stockQuery = `
+//           INSERT INTO stock (product_id, price_per_unit, opening_stock, stock_out, balance_stock, date, notes)
+//           VALUES (?, ?, ?, ?, ?, CURDATE(), ?)
+//         `;
+
+//         const stockOutValue = newQuantity; // Show the new order quantity as stock_out
+//         const notes = `Order #${id} updated: ${oldQuantity} → ${newQuantity} units`;
+
+//         const stockResult = await new Promise((resolve, reject) => {
+//           connection.query(stockQuery, [
+//             oldOrder.product_id,
+//             price,
+//             openingStock,      // Direct opening_stock value from products
+//             stockOutValue,     // stock_out - the new order quantity
+//             newBalanceStock,   // balance_stock after adjustment
+//             notes             // Add notes to explain the adjustment
+//           ], (err, result) => {
+//             if (err) reject(err);
+//             else resolve(result);
+//           });
+//         });
+
+//         console.log('✅ Stock adjustment record inserted with ID:', stockResult.insertId);
+
+//         // Update products table balance_stock
+//         const updateProductQuery = `
+//           UPDATE products 
+//           SET balance_stock = ?, updated_at = NOW()
+//           WHERE id = ?
+//         `;
+
+//         const updateProductResult = await new Promise((resolve, reject) => {
+//           connection.query(updateProductQuery, [
+//             newBalanceStock,
+//             oldOrder.product_id
+//           ], (err, result) => {
+//             if (err) reject(err);
+//             else resolve(result);
+//           });
+//         });
+
+//         console.log('✅ Product balance stock updated:', updateProductResult.affectedRows);
+
+//         // Commit transaction
+//         await new Promise((resolve, reject) => {
+//           connection.commit((err) => {
+//             if (err) reject(err);
+//             else resolve();
+//           });
+//         });
+
+//         console.log('✅ Transaction committed successfully');
+
+//         // Fetch updated order
+//         let selectQuery = `
+//           SELECT id, category, product, quantity, price, total_price AS totalPrice, 
+//                  status, order_date, user_id
+//         `;
+
+//         if (hasBasePrice) selectQuery += ', base_price AS basePrice';
+//         if (hasGstAmount) selectQuery += ', gst_amount AS gstAmount';
+//         if (hasGstRate) selectQuery += ', gst_rate AS gstRate';
+//         if (hasTaxType) selectQuery += ', tax_type AS taxType';
+//         if (hasCategoryId) selectQuery += ', category_id';
+//         if (hasProductId) selectQuery += ', product_id';
+
+//         selectQuery += ' FROM orders WHERE id = ?';
+
+//         const updatedOrders = await new Promise((resolve, reject) => {
+//           connection.query(selectQuery, [id], (err, results) => {
+//             if (err) reject(err);
+//             else resolve(results);
+//           });
+//         });
+
+//         connection.release();
+
+//         if (updatedOrders.length === 0) {
+//           return res.status(500).json({ error: 'Failed to retrieve updated order' });
+//         }
+
+//         const updatedOrder = updatedOrders[0];
+        
+//         // Safely handle date formatting
+//         let orderDate;
+//         if (updatedOrder.order_date) {
+//           if (updatedOrder.order_date instanceof Date) {
+//             orderDate = updatedOrder.order_date.toISOString().split('T')[0];
+//           } else if (typeof updatedOrder.order_date === 'string') {
+//             orderDate = updatedOrder.order_date.split('T')[0];
+//           } else {
+//             orderDate = new Date().toISOString().split('T')[0];
+//           }
+//         } else {
+//           orderDate = new Date().toISOString().split('T')[0];
+//         }
+
+//         const parsedOrder = {
+//           id: updatedOrder.id,
+//           category: updatedOrder.category,
+//           product: updatedOrder.product,
+//           quantity: updatedOrder.quantity,
+//           price: parseFloat(updatedOrder.price),
+//           totalPrice: parseFloat(updatedOrder.totalPrice),
+//           status: updatedOrder.status,
+//           date: orderDate,
+//           user_id: updatedOrder.user_id
+//         };
+
+//         if (hasBasePrice) parsedOrder.basePrice = parseFloat(updatedOrder.basePrice || 0);
+//         if (hasGstAmount) parsedOrder.gstAmount = parseFloat(updatedOrder.gstAmount || 0);
+//         if (hasGstRate) parsedOrder.gstRate = parseFloat(updatedOrder.gstRate || 0);
+//         if (hasTaxType) parsedOrder.taxType = updatedOrder.taxType || 'exclusive';
+//         if (hasCategoryId) parsedOrder.category_id = updatedOrder.category_id;
+//         if (hasProductId) parsedOrder.product_id = updatedOrder.product_id;
+
+//         console.log('✅ Order updated successfully:', parsedOrder);
+//         res.json(parsedOrder);
+
+//       } catch (error) {
+//         // Rollback transaction on error
+//         connection.rollback(() => {
+//           connection.release();
+//           console.error('❌ Transaction error, rolled back:', error);
+//           res.status(500).json({
+//             error: 'Failed to update order',
+//             details: error.message,
+//             sqlMessage: error.sqlMessage
+//           });
+//         });
+//       }
+//     });
+//   });
+// });
 
 
 

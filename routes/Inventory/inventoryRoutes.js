@@ -577,4 +577,158 @@ router.get('/products/search/:query', async (req, res) => {
   }
 });
 
+
+
+router.get('/products/:id/with-batches', async (req, res) => {
+  try {
+    // Query to get product details, batches, and stock data
+    const query = `
+      SELECT 
+        p.id,
+        p.group_by,
+        p.goods_name,
+        p.category_id,
+        p.company_id,
+        p.price,
+        p.inclusive_gst,
+        p.gst_rate,
+        p.non_taxable,
+        p.net_price,
+        p.hsn_code,
+        p.unit,
+        p.cess_rate,
+        p.cess_amount,
+        p.sku,
+        p.opening_stock,
+        p.stock_in,
+        p.stock_out,
+        p.balance_stock,
+        p.opening_stock_date,
+        p.min_stock_alert,
+        p.max_stock_alert,
+        p.description,
+        p.maintain_batch,
+        p.can_be_sold,
+        p.created_at,
+        p.updated_at,
+        b.id as batch_id,
+        b.batch_number as batch_batch_number,
+        b.group_by as batch_group_by,
+        b.mfg_date,
+        b.exp_date,
+        b.quantity as batch_quantity,
+        b.cost_price,
+        b.selling_price,
+        b.purchase_price,
+        b.mrp,
+        b.batch_price,
+        b.barcode,
+        b.created_at as batch_created_at,
+        b.updated_at as batch_updated_at,
+        s.id as stock_id,
+        s.product_id as stock_product_id,
+        s.price_per_unit,
+        s.opening_stock as stock_opening_stock,
+        s.stock_in as stock_stock_in,
+        s.stock_out as stock_stock_out,
+        s.balance_stock as stock_balance_stock,
+        s.batch_number as stock_batch_number,
+        s.voucher_id,
+        s.date
+      FROM products p
+      LEFT JOIN batches b ON p.id = b.product_id
+      LEFT JOIN stock s ON p.id = s.product_id
+      WHERE p.id = ?
+      ORDER BY b.created_at DESC, s.date DESC
+    `;
+    
+    const [results] = await db.promise().query(query, [req.params.id]);
+    
+    // If no product found
+    if (results.length === 0) {
+      return res.status(404).json({ message: 'Product not found' });
+    }
+    
+    // Get unique stock records to avoid duplicates from JOIN
+    const uniqueStocks = [];
+    const seenStockIds = new Set();
+    
+    results.forEach(row => {
+      if (row.stock_id && !seenStockIds.has(row.stock_id)) {
+        seenStockIds.add(row.stock_id);
+        uniqueStocks.push({
+          id: row.stock_id,
+          product_id: row.stock_product_id,
+          price_per_unit: row.price_per_unit,
+          opening_stock: row.stock_opening_stock,
+          stock_in: row.stock_stock_in,
+          stock_out: row.stock_stock_out,
+          balance_stock: row.stock_balance_stock,
+          batch_number: row.stock_batch_number,
+          voucher_id: row.voucher_id,
+          date: row.date
+        });
+      }
+    });
+    
+    // Structure the response
+    const response = {
+      id: results[0].id,
+      group_by: results[0].group_by,
+      goods_name: results[0].goods_name,
+      category_id: results[0].category_id,
+      company_id: results[0].company_id,
+      price: results[0].price,
+      inclusive_gst: results[0].inclusive_gst,
+      gst_rate: results[0].gst_rate,
+      non_taxable: results[0].non_taxable,
+      net_price: results[0].net_price,
+      hsn_code: results[0].hsn_code,
+      unit: results[0].unit,
+      cess_rate: results[0].cess_rate,
+      cess_amount: results[0].cess_amount,
+      sku: results[0].sku,
+      opening_stock: results[0].opening_stock,
+      stock_in: results[0].stock_in,
+      stock_out: results[0].stock_out,
+      balance_stock: results[0].balance_stock,
+      opening_stock_date: results[0].opening_stock_date,
+      min_stock_alert: results[0].min_stock_alert,
+      max_stock_alert: results[0].max_stock_alert,
+      description: results[0].description,
+      maintain_batch: results[0].maintain_batch,
+      can_be_sold: results[0].can_be_sold,
+      created_at: results[0].created_at,
+      updated_at: results[0].updated_at,
+      batches: results.filter(row => row.batch_id !== null)
+        .reduce((unique, row) => {
+          if (!unique.find(b => b.id === row.batch_id)) {
+            unique.push({
+              id: row.batch_id,
+              batch_number: row.batch_batch_number,
+              group_by: row.batch_group_by,
+              mfg_date: row.mfg_date,
+              exp_date: row.exp_date,
+              quantity: row.batch_quantity,
+              cost_price: row.cost_price,
+              selling_price: row.selling_price,
+              purchase_price: row.purchase_price,
+              mrp: row.mrp,
+              batch_price: row.batch_price,
+              barcode: row.barcode,
+              created_at: row.batch_created_at,
+              updated_at: row.batch_updated_at
+            });
+          }
+          return unique;
+        }, []),
+      stock: uniqueStocks
+    };
+    
+    res.json(response);
+  } catch (err) {
+    console.error('Error fetching product:', err);
+    res.status(500).json({ message: 'Failed to fetch product' });
+  }
+});
 module.exports = router;
