@@ -21,12 +21,7 @@ const db = mysql.createPool({
   // port: 3306
 });
 
-  //port: 3307
 
-  //port: 4306
-  // port: 3306
-
-// });
 
 db.getConnection((err, connection) => {
   if (err) {
