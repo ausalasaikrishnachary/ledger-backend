@@ -879,12 +879,11 @@ const processTransaction = async (transactionData, transactionType, connection) 
             newBatchQty = currentBatchQty - quantity;
           }
 
-        await queryPromise(
-  "UPDATE batches SET quantity = ?, stock_out = ?, updated_at = ? WHERE id = ?",
-  [newBatchQty, newStockOut, new Date(), batch.id],
-  connection
-);
-
+          await queryPromise(
+            "UPDATE batches SET quantity = ?, updated_at = ? WHERE id = ?",
+            [newBatchQty, new Date(), batch.id],
+            connection
+          );
           
           updatedBatchQuantity = newBatchQty;
           console.log(`Updated batch ${item.batch} for product ${productId}: ${currentBatchQty} -> ${newBatchQty}`);
@@ -1099,6 +1098,8 @@ router.get("/last-invoice", (req, res) => {
   });
 });
 
+// Update transaction endpoint - COMPLETELY FIXED VERSION
+// Update transaction endpoint - FIXED VERSION with proper batch opening stock
 router.put("/transactions/:id", async (req, res) => {
   const voucherId = req.params.id;
   const updateData = req.body;

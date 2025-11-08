@@ -661,6 +661,9 @@ router.post("/transaction", (req, res) => {
 
 // Helper function to process transactions
 // Helper function to process transactions
+// Helper function to process transactions - FIXED VERSION
+// Helper function to process transactions - COMPLETELY FIXED VERSION
+// Helper function to process transactions - FIXED VERSION WITH CONSTANT OPENING STOCK
 const processTransaction = async (transactionData, transactionType, connection) => {
   try {
     // Get the next available VoucherID
@@ -680,7 +683,7 @@ const processTransaction = async (transactionData, transactionType, connection) 
     const totalIGST = parseFloat(transactionData.totalIGST) || 0;
     const taxType = transactionData.taxType || "CGST/SGST";
 
-    // Parse batch details - FIXED: Use batchDetails instead of items
+    // Parse batch details
     let batchDetails = [];
     let batchDetailsJson = '[]';
     
@@ -699,8 +702,8 @@ const processTransaction = async (transactionData, transactionType, connection) 
           batch_id: item.batch_id || null,
           quantity: parseFloat(item.quantity) || 0,
           price: parseFloat(item.price) || 0,
-          discount: parseFloat(item.discount) || 0, // Ensure discount is included
-          gst: parseFloat(item.gst) || 0, // Ensure GST is included
+          discount: parseFloat(item.discount) || 0,
+          gst: parseFloat(item.gst) || 0,
           cgst: parseFloat(item.cgst) || 0,
           sgst: parseFloat(item.sgst) || 0,
           igst: parseFloat(item.igst) || 0,
@@ -741,7 +744,7 @@ const processTransaction = async (transactionData, transactionType, connection) 
 
     console.log(`Using ${transactionType} invoice number:`, invoiceNumber);
 
-    // Calculate totals from batchDetails instead of items - FIXED
+    // Calculate totals from batchDetails
     const totalQty = batchDetails.reduce((sum, item) => {
       return sum + (parseFloat(item.quantity) || 0);
     }, 0);
@@ -783,14 +786,13 @@ const processTransaction = async (transactionData, transactionType, connection) 
     };
 
     console.log(`Inserting ${transactionType} voucher data with VoucherID:`, nextVoucherId, 'Invoice No:', invoiceNumber);
-    console.log('BatchDetails being stored:', batchDetailsJson);
 
     // Insert into Voucher table
     const voucherResult = await queryPromise("INSERT INTO voucher SET ?", voucherData, connection);
     const voucherId = voucherResult.insertId || nextVoucherId;
     console.log(`${transactionType} Voucher created with ID:`, voucherId);
 
-    // Process each item from batchDetails instead of items - FIXED
+    // Process each item from batchDetails
     for (const [index, item] of batchDetails.entries()) {
       console.log(`Processing ${transactionType} item ${index + 1}:`, item);
 
@@ -803,7 +805,7 @@ const processTransaction = async (transactionData, transactionType, connection) 
 
       // Find product by name
       const productResult = await queryPromise(
-        "SELECT id, balance_stock, stock_out, stock_in, opening_stock FROM products WHERE goods_name = ?",
+        "SELECT id, balance_stock, stock_out, stock_in, opening_stock, maintain_batch FROM products WHERE goods_name = ?",
         [item.product],
         connection
       );
@@ -814,8 +816,9 @@ const processTransaction = async (transactionData, transactionType, connection) 
 
       const product = productResult[0];
       const productId = product.id;
+      const maintainBatch = product.maintain_batch;
 
-      console.log(`Product found: ID=${productId}, Current balance=${product.balance_stock}, Quantity=${quantity}`);
+      console.log(`Product found: ID=${productId}, Current balance=${product.balance_stock}, Maintain Batch=${maintainBatch}, Quantity=${quantity}`);
 
       let newStockIn, newStockOut, newBalanceStock;
 
@@ -855,9 +858,9 @@ const processTransaction = async (transactionData, transactionType, connection) 
 
       console.log(`Updated product ${productId}: stock_in=${newStockIn}, stock_out=${newStockOut}, balance_stock=${newBalanceStock}`);
 
-      // Handle batch operations
-      let updatedBatchQuantity = 0;
-      if (item.batch) {
+      // Handle batch operations and stock table insertion
+      if (maintainBatch && item.batch) {
+        // ========== FIXED: BATCH PRODUCT STOCK LOGIC ==========
         const batchResult = await queryPromise(
           "SELECT id, quantity FROM batches WHERE product_id = ? AND batch_number = ?",
           [productId, item.batch],
@@ -865,7 +868,6 @@ const processTransaction = async (transactionData, transactionType, connection) 
         );
 
         if (batchResult.length > 0) {
-          // Update existing batch
           const batch = batchResult[0];
           const currentBatchQty = parseFloat(batch.quantity) || 0;
           let newBatchQty;
@@ -879,15 +881,63 @@ const processTransaction = async (transactionData, transactionType, connection) 
             newBatchQty = currentBatchQty - quantity;
           }
 
-        await queryPromise(
-  "UPDATE batches SET quantity = ?, stock_out = ?, updated_at = ? WHERE id = ?",
-  [newBatchQty, newStockOut, new Date(), batch.id],
-  connection
-);
-
+          await queryPromise(
+            "UPDATE batches SET quantity = ?, updated_at = ? WHERE id = ?",
+            [newBatchQty, new Date(), batch.id],
+            connection
+          );
           
-          updatedBatchQuantity = newBatchQty;
           console.log(`Updated batch ${item.batch} for product ${productId}: ${currentBatchQty} -> ${newBatchQty}`);
+
+          // ========== FIXED: CONSTANT OPENING STOCK FOR BATCHES ==========
+          // Get the ORIGINAL opening stock from the FIRST stock record for this batch
+          const originalStockResult = await queryPromise(
+            "SELECT opening_stock FROM stock WHERE product_id = ? AND batch_number = ? ORDER BY date ASC, id ASC LIMIT 1",
+            [productId, item.batch],
+            connection
+          );
+
+          let openingStockForStockTable;
+          if (originalStockResult.length > 0) {
+            // Use the ORIGINAL opening stock (constant value)
+            openingStockForStockTable = parseFloat(originalStockResult[0].opening_stock) || 0;
+          } else {
+            // If no previous record, use current batch quantity as opening stock
+            openingStockForStockTable = currentBatchQty + quantity; // Add back the quantity we're about to deduct
+          }
+
+          const stockIn = transactionType === 'Purchase' ? quantity : 0;
+          const stockOut = transactionType === 'Purchase' ? 0 : quantity;
+          
+          // Calculate cumulative stock_out for this batch
+          const cumulativeStockOutResult = await queryPromise(
+            "SELECT COALESCE(SUM(stock_out), 0) as total_stock_out FROM stock WHERE product_id = ? AND batch_number = ?",
+            [productId, item.batch],
+            connection
+          );
+          
+          const cumulativeStockOut = parseFloat(cumulativeStockOutResult[0].total_stock_out) || 0;
+          const totalStockOutForThisEntry = cumulativeStockOut + stockOut;
+          
+          // Balance stock = Opening stock - Cumulative stock_out
+          const balanceStockForStockTable = openingStockForStockTable - totalStockOutForThisEntry;
+
+          const stockData = {
+            product_id: productId,
+            price_per_unit: parseFloat(item.price) || 0,
+            opening_stock: openingStockForStockTable, // CONSTANT opening stock
+            stock_in: stockIn,
+            stock_out: stockOut,
+            balance_stock: balanceStockForStockTable, // Opening stock - cumulative stock_out
+            batch_number: item.batch,
+            voucher_id: voucherId,
+            date: new Date()
+          };
+
+          await queryPromise("INSERT INTO stock SET ?", stockData, connection);
+          console.log(`Created stock record for batch product ${productId}, batch ${item.batch}`);
+          console.log(`Stock calculation: Opening=${openingStockForStockTable}, StockIn=${stockIn}, StockOut=${stockOut}, CumulativeStockOut=${totalStockOutForThisEntry}, Balance=${balanceStockForStockTable}`);
+
         } else if (transactionType === 'Purchase') {
           // Create new batch for purchase
           const batchData = {
@@ -895,71 +945,69 @@ const processTransaction = async (transactionData, transactionType, connection) 
             batch_number: item.batch,
             quantity: quantity,
             manufacturing_date: new Date(),
-            expiry_date: new Date(Date.now() + 365 * 24 * 60 * 60 * 1000), // 1 year from now
+            expiry_date: new Date(Date.now() + 365 * 24 * 60 * 60 * 1000),
             purchase_price: parseFloat(item.price) || 0,
             created_at: new Date(),
             updated_at: new Date()
           };
           
           await queryPromise("INSERT INTO batches SET ?", batchData, connection);
-          updatedBatchQuantity = quantity;
           console.log(`Created new batch ${item.batch} for product ${productId} with quantity=${quantity}`);
+
+          // Stock table entry for new batch purchase
+          const stockData = {
+            product_id: productId,
+            price_per_unit: parseFloat(item.price) || 0,
+            opening_stock: quantity, // Opening stock = initial quantity
+            stock_in: quantity,
+            stock_out: 0,
+            balance_stock: quantity, // Balance = opening stock (since no stock_out yet)
+            batch_number: item.batch,
+            voucher_id: voucherId,
+            date: new Date()
+          };
+
+          await queryPromise("INSERT INTO stock SET ?", stockData, connection);
         } else {
           console.warn(`Batch ${item.batch} not found for product ${productId}`);
         }
-      }
-
-      // FIXED: Handle stock table - GET BATCH QUANTITY AFTER UPDATING BATCH TABLE
-      let batchOpeningStock = 0;
-      if (item.batch) {
-        // Get the updated batch quantity after the batch operation
-        if (updatedBatchQuantity > 0) {
-          batchOpeningStock = updatedBatchQuantity;
-        } else {
-          // Fallback: query the batch table again to get the current quantity
-          const batchResult = await queryPromise(
-            "SELECT quantity FROM batches WHERE product_id = ? AND batch_number = ?",
-            [productId, item.batch],
-            connection
-          );
-          
-          if (batchResult.length > 0) {
-            batchOpeningStock = parseFloat(batchResult[0].quantity) || 0;
-          }
-        }
-      }
-
-      // Calculate correct balance stock using the formula: opening_stock + stock_in - stock_out
-      const stockIn = transactionType === 'Purchase' ? quantity : 0;
-      const stockOut = transactionType === 'Purchase' ? 0 : quantity;
-      
-      // FIXED: For sales, we need to use the batch quantity BEFORE the sale as opening stock
-      let calculatedBalanceStock;
-      if (transactionType === 'Sales' && item.batch) {
-        // For sales: opening_stock should be the batch quantity BEFORE the sale
-        // balance_stock should be the batch quantity AFTER the sale
-        const openingStockForSales = batchOpeningStock + quantity; // Add back the sold quantity to get the original opening
-        calculatedBalanceStock = batchOpeningStock; // Current batch quantity after sale
-        batchOpeningStock = openingStockForSales; // Use the original quantity as opening stock
       } else {
-        calculatedBalanceStock = batchOpeningStock + stockIn - stockOut;
+        // ========== FIXED: NON-BATCH PRODUCT STOCK LOGIC ==========
+        // For non-batch products, use the CONSTANT opening_stock from products table
+        const openingStockForNonBatch = parseFloat(product.opening_stock) || 0;
+        
+        const stockIn = transactionType === 'Purchase' ? quantity : 0;
+        const stockOut = transactionType === 'Purchase' ? 0 : quantity;
+        
+        // Calculate cumulative stock_out for this product
+        const cumulativeStockOutResult = await queryPromise(
+          "SELECT COALESCE(SUM(stock_out), 0) as total_stock_out FROM stock WHERE product_id = ? AND batch_number = '-'",
+          [productId],
+          connection
+        );
+        
+        const cumulativeStockOut = parseFloat(cumulativeStockOutResult[0].total_stock_out) || 0;
+        const totalStockOutForThisEntry = cumulativeStockOut + stockOut;
+        
+        // Balance stock = Opening stock - Cumulative stock_out
+        const balanceStockForNonBatch = openingStockForNonBatch - totalStockOutForThisEntry;
+
+        const stockData = {
+          product_id: productId,
+          price_per_unit: parseFloat(item.price) || 0,
+          opening_stock: openingStockForNonBatch, // CONSTANT opening stock from products table
+          stock_in: stockIn,
+          stock_out: stockOut,
+          balance_stock: balanceStockForNonBatch, // Opening stock - cumulative stock_out
+          batch_number: '-',
+          voucher_id: voucherId,
+          date: new Date()
+        };
+
+        await queryPromise("INSERT INTO stock SET ?", stockData, connection);
+        console.log(`Created stock record for non-batch product ${productId}`);
+        console.log(`Stock calculation: Opening=${openingStockForNonBatch}, StockIn=${stockIn}, StockOut=${stockOut}, CumulativeStockOut=${totalStockOutForThisEntry}, Balance=${balanceStockForNonBatch}`);
       }
-
-      const stockData = {
-        product_id: productId,
-        price_per_unit: parseFloat(item.price) || 0,
-        opening_stock: batchOpeningStock,
-        stock_in: stockIn,
-        stock_out: stockOut,
-        balance_stock: calculatedBalanceStock, // Use the calculated balance
-        batch_number: item.batch || null,
-        voucher_id: voucherId,
-        date: new Date()
-      };
-
-      await queryPromise("INSERT INTO stock SET ?", stockData, connection);
-      console.log(`Created new ${transactionType} stock record for product ${productId}, batch ${item.batch}`);
-      console.log(`Stock calculation: Opening=${batchOpeningStock}, StockIn=${stockIn}, StockOut=${stockOut}, Balance=${calculatedBalanceStock}`);
     }
 
     return {
@@ -1099,6 +1147,8 @@ router.get("/last-invoice", (req, res) => {
   });
 });
 
+// Update transaction endpoint - COMPLETELY FIXED VERSION
+// Update transaction endpoint - FIXED VERSION with proper batch opening stock
 router.put("/transactions/:id", async (req, res) => {
   const voucherId = req.params.id;
   const updateData = req.body;
