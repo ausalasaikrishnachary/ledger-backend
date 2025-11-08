@@ -40,6 +40,10 @@ app.use(cors());
 // Serve static files from uploads directory
 app.use('/uploads', express.static('uploads'));
 
+// Increase payload size limit for PDF storage
+app.use(express.json({ limit: '50mb' }));
+app.use(express.urlencoded({ limit: '50mb', extended: true }));
+
 // Middleware to parse JSON
 app.use(express.json());
 app.use('/', accountsRoutes);
