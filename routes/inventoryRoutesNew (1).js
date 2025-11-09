@@ -32,6 +32,8 @@ router.get('/batches/check-batch-number', async (req, res) => {
     });
   }
 });
+// Create a new product (FIXED VERSION)
+// Create a new product (FIXED VERSION - No auto-increment)
 router.post('/products', async (req, res) => {
   const data = req.body;
 
@@ -52,10 +54,10 @@ router.post('/products', async (req, res) => {
       const totalBatchQuantity = data.batches.reduce((total, batch) => {
         return total + (parseFloat(batch.quantity) || 0);
       }, 0);
-
+      
       openingStock = totalBatchQuantity;
       balanceStock = totalBatchQuantity;
-
+      
       console.log('📊 Using batch-based stock calculation:', {
         totalBatchQuantity,
         openingStock,
@@ -103,7 +105,7 @@ router.post('/products', async (req, res) => {
         const batch = batches[index];
         const batchQuantity = parseFloat(batch.quantity || 0);
         totalBatchQuantity += batchQuantity;
-
+        
         let barcode = batch.barcode;
         const timestamp = Date.now();
         if (!barcode) {
@@ -132,21 +134,13 @@ router.post('/products', async (req, res) => {
             message: `Batch number "${batch.batch_number}" already exists in ${data.group_by || 'Salescatalog'}. Please use a unique batch number.`
           });
         }
-
-        // 🆕 Add new fields: opening_stock, stock_in, stock_out
-        const opening_stock_value = batch.opening_stock || batchQuantity;
-        const stock_in_value = batch.stock_in || 0;
-        const stock_out_value = batch.stock_out || 0;
-
+        
         batchValues.push([
           productId,
-          batch.batch_number,
+          batch.batch_number, // Use the manually entered batch number
           batch.mfg_date || batch.mfgDate || null,
           batch.exp_date || batch.expDate || null,
           batchQuantity,
-          opening_stock_value,
-          stock_in_value,
-          stock_out_value,
           parseFloat(batch.selling_price || batch.sellingPrice) || 0,
           parseFloat(batch.purchase_price || batch.purchasePrice) || 0,
           parseFloat(batch.mrp) || 0,
@@ -160,11 +154,10 @@ router.post('/products', async (req, res) => {
         console.log(`✅ Prepared batch: ${batch.batch_number} with quantity: ${batchQuantity}`);
       }
 
-      // 🆕 Updated batch insert query (added new columns)
+      // Insert batches
       const batchSql = `
         INSERT INTO batches 
-        (product_id, batch_number, mfg_date, exp_date, quantity, opening_stock, stock_in, stock_out, 
-         selling_price, purchase_price, mrp, batch_price, barcode, group_by, created_at, updated_at)
+        (product_id, batch_number, mfg_date, exp_date, quantity, selling_price, purchase_price, mrp, batch_price, barcode, group_by, created_at, updated_at)
         VALUES ?
       `;
       await db.promise().query(batchSql, [batchValues]);
@@ -172,24 +165,23 @@ router.post('/products', async (req, res) => {
       console.log('✅ Batches created:', batches.length);
     }
 
-    res.status(201).json({
-      success: true,
+    res.status(201).json({ 
+      success: true, 
       product_id: productId,
       opening_stock: openingStock,
       balance_stock: balanceStock
     });
   } catch (err) {
     console.error('❌ Error creating product:', err);
-    res.status(500).json({
-      success: false,
-      message: 'Failed to create product',
-      error: err.message
+    res.status(500).json({ 
+      success: false, 
+      message: 'Failed to create product', 
+      error: err.message 
     });
   }
 });
-
-
-
+// Update a product (COMPLETELY FIXED VERSION)
+// Update a product (FIXED VERSION - No auto-increment)
 router.put('/products/:id', async (req, res) => {
   const productId = req.params.id;
   const data = req.body;
@@ -254,6 +246,7 @@ router.put('/products/:id', async (req, res) => {
 
       // Process each batch from request
       for (const [index, batch] of batches.entries()) {
+        // Generate or verify barcode
         let barcode = batch.barcode;
         if (!barcode) {
           const timestamp = Date.now();
@@ -586,37 +579,30 @@ router.get('/products/:id/with-batches', async (req, res) => {
         p.can_be_sold,
         p.created_at,
         p.updated_at,
-        
-        -- ✅ Include all batch fields (with new ones)
-        b.id AS batch_id,
-        b.batch_number AS batch_batch_number,
-        b.group_by AS batch_group_by,
+        b.id as batch_id,
+        b.batch_number as batch_batch_number,
+        b.group_by as batch_group_by,
         b.mfg_date,
         b.exp_date,
-        b.quantity AS batch_quantity,
-        b.opening_stock AS batch_opening_stock,  -- ✅ new field
-        b.stock_in AS batch_stock_in,            -- ✅ new field
-        b.stock_out AS batch_stock_out,          -- ✅ new field
+        b.quantity as batch_quantity,
         b.cost_price,
         b.selling_price,
         b.purchase_price,
         b.mrp,
         b.batch_price,
         b.barcode,
-        b.created_at AS batch_created_at,
-        b.updated_at AS batch_updated_at,
-
-        s.id AS stock_id,
-        s.product_id AS stock_product_id,
+        b.created_at as batch_created_at,
+        b.updated_at as batch_updated_at,
+        s.id as stock_id,
+        s.product_id as stock_product_id,
         s.price_per_unit,
-        s.opening_stock AS stock_opening_stock,
-        s.stock_in AS stock_stock_in,
-        s.stock_out AS stock_stock_out,
-        s.balance_stock AS stock_balance_stock,
-        s.batch_number AS stock_batch_number,
+        s.opening_stock as stock_opening_stock,
+        s.stock_in as stock_stock_in,
+        s.stock_out as stock_stock_out,
+        s.balance_stock as stock_balance_stock,
+        s.batch_number as stock_batch_number,
         s.voucher_id,
         s.date
-
       FROM products p
       LEFT JOIN batches b ON p.id = b.product_id
       LEFT JOIN stock s ON p.id = s.product_id
@@ -626,11 +612,12 @@ router.get('/products/:id/with-batches', async (req, res) => {
     
     const [results] = await db.promise().query(query, [req.params.id]);
     
+    // If no product found
     if (results.length === 0) {
       return res.status(404).json({ message: 'Product not found' });
     }
     
-    // Unique stock records
+    // Get unique stock records to avoid duplicates from JOIN
     const uniqueStocks = [];
     const seenStockIds = new Set();
     
@@ -681,8 +668,6 @@ router.get('/products/:id/with-batches', async (req, res) => {
       can_be_sold: results[0].can_be_sold,
       created_at: results[0].created_at,
       updated_at: results[0].updated_at,
-      
-      // ✅ Add new fields inside batches response
       batches: results.filter(row => row.batch_id !== null)
         .reduce((unique, row) => {
           if (!unique.find(b => b.id === row.batch_id)) {
@@ -693,9 +678,6 @@ router.get('/products/:id/with-batches', async (req, res) => {
               mfg_date: row.mfg_date,
               exp_date: row.exp_date,
               quantity: row.batch_quantity,
-              opening_stock: row.batch_opening_stock,  // ✅
-              stock_in: row.batch_stock_in,            // ✅
-              stock_out: row.batch_stock_out,          // ✅
               cost_price: row.cost_price,
               selling_price: row.selling_price,
               purchase_price: row.purchase_price,
@@ -708,105 +690,13 @@ router.get('/products/:id/with-batches', async (req, res) => {
           }
           return unique;
         }, []),
-      
       stock: uniqueStocks
     };
     
     res.json(response);
   } catch (err) {
-    console.error('❌ Error fetching product:', err);
+    console.error('Error fetching product:', err);
     res.status(500).json({ message: 'Failed to fetch product' });
   }
 });
-
-// Get vouchers by product_id
-router.get("/vouchers/by-product/:product_id", (req, res) => {
-  const productId = req.params.product_id;
-  
-  if (!productId) {
-    return res.status(400).send({ error: 'Product ID is required' });
-  }
-
-  db.getConnection((err, connection) => {
-    if (err) {
-      console.error('Database connection error:', err);
-      return res.status(500).send({ error: 'Database connection failed' });
-    }
-
-    // Query to get vouchers that contain the specific product_id
-    const query = `
-      SELECT 
-        v.*,
-        JSON_UNQUOTE(JSON_EXTRACT(v.BatchDetails, '$')) as parsed_batch_details
-      FROM voucher v
-      WHERE 
-        v.product_id LIKE ? 
-        OR v.product_id = ?
-        OR v.product_id LIKE ?
-        OR v.product_id LIKE ?
-      ORDER BY v.Date DESC, v.EntryDate DESC
-    `;
-
-    // Search patterns for comma-separated product_ids
-    const searchPatterns = [
-      `%${productId}%`,  // Contains the product_id anywhere
-      productId,         // Exact match
-      `${productId},%`,  // Starts with product_id
-      `%,${productId}%`  // Contains product_id with comma
-    ];
-
-    connection.query(query, searchPatterns, (err, results) => {
-      connection.release();
-
-      if (err) {
-        console.error('Database query error:', err);
-        return res.status(500).send({ error: 'Failed to fetch vouchers', details: err.message });
-      }
-
-      // Parse BatchDetails and filter to only include items with matching product_id
-      const filteredResults = results.map(voucher => {
-        try {
-          let batchDetails = [];
-          if (voucher.BatchDetails) {
-            batchDetails = typeof voucher.BatchDetails === 'string' 
-              ? JSON.parse(voucher.BatchDetails) 
-              : voucher.BatchDetails;
-          }
-
-          // Filter batch details to only include items with matching product_id
-          const filteredBatchDetails = batchDetails.filter(item => 
-            item.product_id && item.product_id.toString() === productId.toString()
-          );
-
-          return {
-            ...voucher,
-            batchDetails: filteredBatchDetails,
-            totalItems: filteredBatchDetails.length,
-            totalQuantity: filteredBatchDetails.reduce((sum, item) => sum + (parseFloat(item.quantity) || 0), 0),
-            totalAmount: filteredBatchDetails.reduce((sum, item) => sum + (parseFloat(item.total) || 0), 0)
-          };
-        } catch (parseError) {
-          console.error('Error parsing batch details for voucher:', voucher.VoucherID, parseError);
-          return {
-            ...voucher,
-            batchDetails: [],
-            totalItems: 0,
-            totalQuantity: 0,
-            totalAmount: 0
-          };
-        }
-      }).filter(voucher => voucher.totalItems > 0); // Only return vouchers that have matching items
-
-      console.log(`Found ${filteredResults.length} vouchers for product ID: ${productId}`);
-
-      res.send({
-        success: true,
-        productId: productId,
-        totalVouchers: filteredResults.length,
-        vouchers: filteredResults
-      });
-    });
-  });
-});
-
 module.exports = router;

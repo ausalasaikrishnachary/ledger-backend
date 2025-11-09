@@ -746,40 +746,43 @@ const processTransaction = async (transactionData, transactionType, connection) 
     }, 0);
 
     // Prepare voucher data
-    const voucherData = {
-      VoucherID: nextVoucherId,
-      TransactionType: transactionType,
-      VchNo: invoiceNumber,
-      InvoiceNumber: invoiceNumber,
-      Date: transactionData.invoiceDate || new Date().toISOString().split('T')[0],
-      PaymentTerms: 'Immediate',
-      Freight: 0,
-      TotalQty: totalQty,
-      TotalPacks: batchDetails.length,
-      TotalQty1: totalQty,
-      TaxAmount: parseFloat(transactionData.totalGST) || 0,
-      Subtotal: parseFloat(transactionData.taxableAmount) || 0,
-      BillSundryAmount: 0,
-      TotalAmount: parseFloat(transactionData.grandTotal) || 0,
-      ChequeNo: null,
-      ChequeDate: null,
-      BankName: null,
-      AccountID: transactionData.selectedSupplierId || null,
-      AccountName: transactionData.supplierInfo?.businessName || '',
-      PartyID: transactionData.selectedSupplierId || null,
-      PartyName: transactionData.supplierInfo?.name || '',
-      BasicAmount: parseFloat(transactionData.taxableAmount) || 0,
-      ValueOfGoods: parseFloat(transactionData.taxableAmount) || 0,
-      EntryDate: new Date(),
-      SGSTPercentage: taxType === "CGST/SGST" ? (totalSGST > 0 ? 50 : 0) : 0,
-      CGSTPercentage: taxType === "CGST/SGST" ? (totalCGST > 0 ? 50 : 0) : 0,
-      IGSTPercentage: taxType === "IGST" ? 100 : 0,
-      SGSTAmount: totalSGST,
-      CGSTAmount: totalCGST,
-      IGSTAmount: totalIGST,
-      TaxSystem: 'GST',
-      BatchDetails: batchDetailsJson
-    };
+const voucherData = {
+  VoucherID: nextVoucherId,
+  TransactionType: transactionType,
+  VchNo: invoiceNumber,
+  InvoiceNumber: invoiceNumber,
+  Date: transactionData.invoiceDate || new Date().toISOString().split('T')[0],
+  PaymentTerms: 'Immediate',
+  Freight: 0,
+  TotalQty: totalQty,
+  TotalPacks: batchDetails.length,
+  TotalQty1: totalQty,
+  TaxAmount: parseFloat(transactionData.totalGST) || 0,
+  Subtotal: parseFloat(transactionData.taxableAmount) || 0,
+  BillSundryAmount: 0,
+  TotalAmount: parseFloat(transactionData.grandTotal) || 0,
+  ChequeNo: null,
+  ChequeDate: null,
+  BankName: null,
+  AccountID: transactionData.selectedSupplierId || null,
+  AccountName: transactionData.supplierInfo?.businessName || '',
+  PartyID: transactionData.selectedSupplierId || null,
+  PartyName: transactionData.supplierInfo?.name || '',
+  BasicAmount: parseFloat(transactionData.taxableAmount) || 0,
+  ValueOfGoods: parseFloat(transactionData.taxableAmount) || 0,
+  EntryDate: new Date(),
+  SGSTPercentage: taxType === "CGST/SGST" ? (totalSGST > 0 ? 50 : 0) : 0,
+  CGSTPercentage: taxType === "CGST/SGST" ? (totalCGST > 0 ? 50 : 0) : 0,
+  IGSTPercentage: taxType === "IGST" ? 100 : 0,
+  SGSTAmount: totalSGST,
+  CGSTAmount: totalCGST,
+  IGSTAmount: totalIGST,
+  TaxSystem: 'GST',
+  BatchDetails: batchDetailsJson,
+  // Add product_id and batch_id fields
+  product_id: transactionData.primaryProductId || batchDetails[0]?.product_id || null,
+  batch_id: transactionData.primaryBatchId || batchDetails[0]?.batch_id || null
+};
 
     console.log(`Inserting ${transactionType} voucher data with VoucherID:`, nextVoucherId, 'Invoice No:', invoiceNumber);
 
@@ -1500,6 +1503,7 @@ router.put("/transactions/:id", async (req, res) => {
   })
 
 })
+
 
 
 module.exports = router;

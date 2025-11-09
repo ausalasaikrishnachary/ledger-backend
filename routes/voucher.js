@@ -850,5 +850,39 @@ router.delete('/purchase-vouchers/:id', async (req, res) => {
     }
   });
 
+// GET /api/sales-receipt-totals
+router.get('/sales-receipt-totals', (req, res) => {
+  const sqlQuery = `
+    SELECT 
+      COALESCE(SUM(CASE WHEN TransactionType = 'Sales' THEN TotalAmount ELSE 0 END), 0) as totalSales,
+      COALESCE(SUM(CASE WHEN TransactionType = 'Receipt' THEN BasicAmount ELSE 0 END), 0) as totalReceipts
+    FROM voucher 
+    WHERE TransactionType IN ('Sales', 'Receipt')
+  `;
+
+  db.query(sqlQuery, (err, results) => {
+    if (err) {
+      console.error('Database error:', err);
+      return res.status(500).json({
+        success: false,
+        error: 'Failed to fetch sales and receipt totals',
+        details: err.message
+      });
+    }
+
+    const totalSales = parseFloat(results[0].totalSales) || 0;
+    const totalReceipts = parseFloat(results[0].totalReceipts) || 0;
+
+    res.json({
+      success: true,
+      data: {
+        totalSales: totalSales,
+        totalReceipts: totalReceipts,
+        netAmount: totalSales - totalReceipts
+      }
+    });
+  });
+});
+
 
 module.exports = router;
