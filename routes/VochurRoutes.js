@@ -1430,7 +1430,8 @@ router.put("/transactions/:id", async (req, res) => {
 
 
 
- router.get("/ledger", (req, res) => {
+router.get("/ledger", (req, res) => {
+  // First, get all transactions ordered by AccountID and date
   const query = `
     SELECT 
       id,
@@ -1440,11 +1441,10 @@ router.put("/transactions/:id", async (req, res) => {
       AccountID,
       AccountName,
       Amount,
-      balance_amount,
       DC,
       created_at
     FROM ledger
-    ORDER BY AccountID, id DESC
+    ORDER BY AccountID, date ASC, id ASC
   `;
 
   db.query(query, (err, results) => {
@@ -1453,11 +1453,56 @@ router.put("/transactions/:id", async (req, res) => {
       return res.status(500).json({ message: "Database error", error: err });
     }
 
-    res.status(200).json(results);
+    // Recalculate running balances for all accounts
+    const dataWithRecalculatedBalances = recalculateRunningBalances(results);
+    
+    res.status(200).json(dataWithRecalculatedBalances);
+  });
+});
 
-  })
+// Function to recalculate running balances
+function recalculateRunningBalances(transactions) {
+  const accounts = {};
+  
+  // Group transactions by AccountID
+  transactions.forEach(transaction => {
+    if (!accounts[transaction.AccountID]) {
+      accounts[transaction.AccountID] = [];
+    }
+    accounts[transaction.AccountID].push(transaction);
+  });
 
-})
+  const results = [];
+
+  // Calculate running balance for each account
+  Object.keys(accounts).forEach(accountId => {
+    let runningBalance = 0;
+    const accountTransactions = accounts[accountId];
+
+    accountTransactions.forEach(transaction => {
+      // Calculate based on DC type
+      if (transaction.DC === 'D') {
+        runningBalance += parseFloat(transaction.Amount);
+      } else if (transaction.DC === 'C') {
+        runningBalance -= parseFloat(transaction.Amount);
+      }
+
+      // Add to results with recalculated balance
+      results.push({
+        ...transaction,
+        balance_amount: runningBalance.toFixed(2)
+      });
+    });
+  });
+
+  // Sort by AccountID and ID DESC for final output (to show latest first)
+  return results.sort((a, b) => {
+    if (a.AccountID !== b.AccountID) {
+      return a.AccountID - b.AccountID;
+    }
+    return b.id - a.id;
+  });
+}
 
 
 module.exports = router;
