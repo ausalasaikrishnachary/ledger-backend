@@ -112,8 +112,28 @@ router.post('/receipts', upload.single('transaction_proof'), async (req, res) =>
       bank_name,
       transaction_date,
       reconciliation_option,
-      invoice_number
+      invoice_number,
+      product_id,        // Add these
+      batch_id           // Add these
     } = req.body;
+
+    // Log the incoming data to verify
+    console.log('Frontend data:', {
+      receipt_number,
+      retailer_id,
+      retailer_name,
+      amount,
+      currency,
+      payment_method,
+      receipt_date,
+      note,
+      bank_name,
+      transaction_date,
+      reconciliation_option,
+      invoice_number,
+      product_id,        // This should be 157
+      batch_id           // This should be "S0004"
+    });
 
     // Get uploaded file info
     let transaction_proof_filename = null;
@@ -285,7 +305,7 @@ router.post('/receipts', upload.single('transaction_proof'), async (req, res) =>
       console.log('Sundry Debtors ledger entry created with voucherID:', receiptId);
     }
 
-    // Step 2: Update voucher table for receipt application (BUT DON'T CREATE LEDGER ENTRIES HERE)
+    // Step 2: Update voucher table for receipt application
     if (retailer_id) {
       let voucherQuery = `SELECT * FROM voucher WHERE PartyID = ? AND TransactionType='Sales'`;
       const queryParams = [retailer_id];
@@ -341,21 +361,23 @@ router.post('/receipts', upload.single('transaction_proof'), async (req, res) =>
           remainingAmount -= amountToApply;
           const updatedBalanceAmount = currentBalance - amountToApply;
 
-          // Create receipt entry in voucher table ONLY (no ledger entries)
+          // Use the actual product_id and batch_id from request body
           await new Promise((resolve, reject) => {
             connection.execute(
               `INSERT INTO voucher (
-                TransactionType, VchNo, InvoiceNumber, Date, PaymentTerms, Freight,
+                TransactionType, VchNo, InvoiceNumber, product_id, batch_id, Date, PaymentTerms, Freight,
                 TotalQty, TotalPacks, TotalQty1, TaxAmount, Subtotal, BillSundryAmount,
                 TotalAmount, ChequeNo, ChequeDate, BankName, AccountID, AccountName,
                 PartyID, PartyName, BasicAmount, ValueOfGoods, EntryDate,
                 SGSTPercentage, CGSTPercentage, IGSTPercentage, SGSTAmount, CGSTAmount, IGSTAmount,
                 TaxSystem, BatchDetails, paid_amount, balance_amount, receipt_number, status, paid_date
-              ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+              ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
               [
                 'Receipt',
                 receipt_number,
                 voucher.InvoiceNumber,
+                product_id || null,        // Use actual product_id
+                batch_id || null,          // Use actual batch_id
                 currentDate,
                 'Immediate',
                 0.00,
@@ -390,10 +412,7 @@ router.post('/receipts', upload.single('transaction_proof'), async (req, res) =>
                 updatedBalanceAmount <= 0.01 ? 'Paid' : 'Partial',
                 currentDate
               ],
-              (err) => {
-                if (err) reject(err);
-                else resolve();
-              }
+              err => (err ? reject(err) : resolve())
             );
           });
 
@@ -406,15 +425,17 @@ router.post('/receipts', upload.single('transaction_proof'), async (req, res) =>
           await new Promise((resolve, reject) => {
             connection.execute(
               `INSERT INTO voucher (
-                TransactionType, VchNo, Date, TotalAmount, BankName,
+                TransactionType, VchNo, product_id, batch_id, Date, TotalAmount, BankName,
                 PartyID, PartyName, BasicAmount, ValueOfGoods, EntryDate,
                 paid_amount, balance_amount, receipt_number, status, paid_date
-              ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+              ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
               [
                 'Receipt',
                 receipt_number,
+                product_id || null,        // Use actual product_id
+                batch_id || null,          // Use actual batch_id
                 currentDate,
-                previousBalance,
+                remainingAmount,
                 bank_name,
                 retailer_id,
                 retailer_name,
@@ -427,10 +448,7 @@ router.post('/receipts', upload.single('transaction_proof'), async (req, res) =>
                 'Paid',
                 currentDate
               ],
-              (err) => {
-                if (err) reject(err);
-                else resolve();
-              }
+              err => (err ? reject(err) : resolve())
             );
           });
         }
@@ -439,13 +457,15 @@ router.post('/receipts', upload.single('transaction_proof'), async (req, res) =>
         await new Promise((resolve, reject) => {
           connection.execute(
             `INSERT INTO voucher (
-              TransactionType, VchNo, Date, TotalAmount, BankName,
+              TransactionType, VchNo, product_id, batch_id, Date, TotalAmount, BankName,
               PartyID, PartyName, BasicAmount, ValueOfGoods, EntryDate,
               paid_amount, balance_amount, receipt_number, status, paid_date
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
             [
               'Receipt',
               receipt_number,
+              product_id || null,        // Use actual product_id
+              batch_id || null,          // Use actual batch_id
               new Date(),
               receiptAmount,
               bank_name || '',
@@ -460,10 +480,7 @@ router.post('/receipts', upload.single('transaction_proof'), async (req, res) =>
               'Paid',
               new Date()
             ],
-            (err) => {
-              if (err) reject(err);
-              else resolve();
-            }
+            err => (err ? reject(err) : resolve())
           );
         });
       }
@@ -483,8 +500,10 @@ router.post('/receipts', upload.single('transaction_proof'), async (req, res) =>
       message: 'Receipt created and applied to vouchers successfully',
       receipt_number,
       transaction_proof_filename: transaction_proof_filename,
+      product_id: product_id,      // Include in response
+      batch_id: batch_id,          // Include in response
       ledgerEntries: {
-        voucherID: receiptId, // The voucherID used in ledger entries
+        voucherID: receiptId,
         cashBank: { 
           accountId: cashBankAccountID, 
           accountName: cashBankAccountName,
