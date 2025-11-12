@@ -567,7 +567,7 @@ router.get('/offers/:id', async (req, res) => {
   }
 });
 
-// CREATE new offer - UPDATED to handle product_id
+// CREATE new offer - UPDATED to handle company_id and company_name
 router.post('/offers', upload.single('image'), handleMulterError, async (req, res) => {
   try {
     const {
@@ -579,8 +579,11 @@ router.post('/offers', upload.single('image'), handleMulterError, async (req, re
       validUntil,
       offerType,
       category,
+      categoryName,
       productName,
-      productId, // NEW: product ID from products table
+      productId,
+      company, // NEW: company ID
+      companyName, // NEW: company name
       status = 'active'
     } = req.body;
 
@@ -589,7 +592,9 @@ router.post('/offers', upload.single('image'), handleMulterError, async (req, re
       offerType,
       category,
       productName,
-      productId
+      productId,
+      company,
+      companyName
     });
 
     // Validate required fields
@@ -602,14 +607,20 @@ router.post('/offers', upload.single('image'), handleMulterError, async (req, re
       return res.status(400).json({ error: 'Category is required for category-specific offers' });
     }
 
+    // Validate company and product for product-specific offers
+    if (offerType === 'product' && (!company || !productId)) {
+      return res.status(400).json({ error: 'Company and Product are required for product-specific offers' });
+    }
+
     const image_url = req.file ? `/uploads/offers/${req.file.filename}` : null;
 
     const query = `
       INSERT INTO offers (
         title, description, discount_percentage, minimum_amount,
-        valid_from, valid_until, image_url, offer_type, category_id,
-        product_name, product_id, status
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        valid_from, valid_until, image_url, offer_type, status,
+        category_id, category_name, product_name, product_id,
+        company_id, company_name, created_at, updated_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW(), NOW())
     `;
 
     const result = await new Promise((resolve, reject) => {
@@ -622,10 +633,13 @@ router.post('/offers', upload.single('image'), handleMulterError, async (req, re
         validUntil,
         image_url,
         offerType,
+        status,
         offerType === 'category' ? category : null,
+        offerType === 'category' ? categoryName : null,
         productName || null,
-        productId || null, // NEW: store product ID
-        status
+        productId || null,
+        company || null, // NEW: company ID
+        companyName || null, // NEW: company name
       ], (error, results) => {
         if (error) {
           console.error('❌ Database error:', error);
@@ -646,7 +660,7 @@ router.post('/offers', upload.single('image'), handleMulterError, async (req, re
   }
 });
 
-// UPDATE offer - UPDATED to handle product_id
+// UPDATE offer - UPDATED to handle company_id and company_name
 router.put('/offers/:id', upload.single('image'), handleMulterError, async (req, res) => {
   try {
     const { id } = req.params;
@@ -659,8 +673,11 @@ router.put('/offers/:id', upload.single('image'), handleMulterError, async (req,
       validUntil,
       offerType,
       category,
+      categoryName,
       productName,
-      productId, // NEW: product ID from products table
+      productId,
+      company, // NEW: company ID
+      companyName, // NEW: company name
       status,
       removeImage
     } = req.body;
@@ -671,6 +688,8 @@ router.put('/offers/:id', upload.single('image'), handleMulterError, async (req,
       category,
       productName,
       productId,
+      company,
+      companyName,
       removeImage
     });
 
@@ -692,6 +711,11 @@ router.put('/offers/:id', upload.single('image'), handleMulterError, async (req,
     // Validate category for category-specific offers
     if (offerType === 'category' && !category) {
       return res.status(400).json({ error: 'Category is required for category-specific offers' });
+    }
+
+    // Validate company and product for product-specific offers
+    if (offerType === 'product' && (!company || !productId)) {
+      return res.status(400).json({ error: 'Company and Product are required for product-specific offers' });
     }
 
     let image_url = existingOffers[0].image_url;
@@ -719,8 +743,9 @@ router.put('/offers/:id', upload.single('image'), handleMulterError, async (req,
     const query = `
       UPDATE offers SET
         title = ?, description = ?, discount_percentage = ?, minimum_amount = ?,
-        valid_from = ?, valid_until = ?, image_url = ?, offer_type = ?, category_id = ?,
-        product_name = ?, product_id = ?, status = ?, updated_at = CURRENT_TIMESTAMP
+        valid_from = ?, valid_until = ?, image_url = ?, offer_type = ?, status = ?,
+        category_id = ?, category_name = ?, product_name = ?, product_id = ?,
+        company_id = ?, company_name = ?, updated_at = NOW()
       WHERE id = ?
     `;
 
@@ -734,10 +759,13 @@ router.put('/offers/:id', upload.single('image'), handleMulterError, async (req,
         validUntil,
         image_url,
         offerType,
-        offerType === 'category' ? category : null,
-        productName || null,
-        productId || null, // NEW: store product ID
         status,
+        offerType === 'category' ? category : null,
+        offerType === 'category' ? categoryName : null,
+        productName || null,
+        productId || null,
+        company || null, // NEW: company ID
+        companyName || null, // NEW: company name
         id
       ], (error, results) => {
         if (error) {
