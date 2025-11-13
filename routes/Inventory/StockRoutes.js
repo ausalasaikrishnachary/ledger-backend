@@ -3,13 +3,22 @@ const router = express.Router();
 const db = require("./../../db");
 
 
-// POST /stock/:productId
+// Add Stock
 router.post('/stock/:productId', async (req, res) => {
   try {
     const { productId } = req.params;
-    const { stock_in, stock_out, date, remark } = req.body;
+    const { quantity, remark, batchId, batch_number } = req.body;
 
-    console.log('Received request:', { productId, stock_in, stock_out, date, remark });
+    console.log('Received request:', { productId, quantity, remark, batchId, batch_number });
+
+    // Handle the case where quantity might be an object
+    let actualQuantity;
+    if (typeof quantity === 'object' && quantity !== null) {
+      actualQuantity = parseInt(quantity.quantity) || 0;
+      console.log('Quantity is object, extracted value:', actualQuantity);
+    } else {
+      actualQuantity = parseInt(quantity) || 0;
+    }
 
     // Validate required fields
     if (!productId) {
@@ -19,93 +28,122 @@ router.post('/stock/:productId', async (req, res) => {
       });
     }
 
-    // Validate that at least one stock value is provided
-    const stockIn = parseInt(stock_in) || 0;
-    const stockOut = parseInt(stock_out) || 0;
+    const quantityToAdd = actualQuantity;
     
-    if (stockIn === 0 && stockOut === 0) {
+    if (quantityToAdd <= 0) {
       return res.status(400).json({
         success: false,
-        message: 'Either stock_in or stock_out must be provided with a value greater than 0'
+        message: 'Quantity must be greater than 0'
       });
     }
 
-    // Get current date for timestamps
     const currentTimestamp = new Date().toISOString().slice(0, 19).replace('T', ' ');
 
-    // First, get the existing batch record for this product
-    const getBatchQuery = 'SELECT * FROM batches WHERE product_id = ? ORDER BY id DESC LIMIT 1';
-    const [existingBatch] = await db.query(getBatchQuery, [productId]);
-
-    if (existingBatch.length === 0) {
-      return res.status(404).json({
+    let batch;
+    
+    // If batchId is provided, use it to find the batch
+    if (batchId) {
+      const getBatchByIdQuery = 'SELECT * FROM batches WHERE id = ? AND product_id = ?';
+      const [existingBatch] = await db.promise().query(getBatchByIdQuery, [batchId, productId]);
+      
+      if (!existingBatch || existingBatch.length === 0) {
+        return res.status(404).json({
+          success: false,
+          message: `No batch found with ID: ${batchId} for this product`
+        });
+      }
+      batch = existingBatch[0];
+    } 
+    // If batch_number is provided, use it to find the batch
+    else if (batch_number) {
+      const getBatchByNumberQuery = 'SELECT * FROM batches WHERE product_id = ? AND batch_number = ?';
+      const [existingBatch] = await db.promise().query(getBatchByNumberQuery, [productId, batch_number]);
+      
+      if (!existingBatch || existingBatch.length === 0) {
+        return res.status(404).json({
+          success: false,
+          message: `No batch found with batch number: ${batch_number} for this product`
+        });
+      }
+      batch = existingBatch[0];
+    } 
+    // If no batch identifier provided, return error
+    else {
+      return res.status(400).json({
         success: false,
-        message: 'No existing batch found for this product'
+        message: 'Either batchId or batch_number is required'
       });
     }
 
-    const batch = existingBatch[0];
+    // Calculate new quantities
+    const currentQuantity = parseInt(batch.quantity) || 0;
+    const currentStockIn = parseInt(batch.stock_in) || 0;
+    const currentOpeningStock = parseInt(batch.opening_stock) || 0;
     
-    // Calculate new quantity
-    const newQuantity = batch.quantity + stockIn - stockOut;
-    const newStockIn = batch.stock_in + stockIn;
-    const newStockOut = batch.stock_out + stockOut;
+    const newQuantity = currentQuantity + quantityToAdd;
+    const newStockIn = currentStockIn + quantityToAdd;
+    const newOpeningStock = currentOpeningStock + quantityToAdd;
 
     console.log('Updating batch:', {
-      existingQuantity: batch.quantity,
-      stockIn,
-      stockOut,
-      newQuantity
+      batchId: batch.id,
+      batchNumber: batch.batch_number,
+      existingQuantity: currentQuantity,
+      quantityToAdd: quantityToAdd,
+      newQuantity: newQuantity,
+      existingStockIn: currentStockIn,
+      newStockIn: newStockIn,
+      existingOpeningStock: currentOpeningStock,
+      newOpeningStock: newOpeningStock
     });
 
-    // Update the existing batch record
+    // Update the batch record - including opening_stock
     const updateQuery = `
       UPDATE batches 
       SET 
         quantity = ?,
-        stock_in = ?,
-        stock_out = ?,
-        updated_at = ?
-      WHERE id = ?
+       
+        opening_stock = ?,
+        updated_at = ?,
+        remark = ?
+      WHERE id = ? AND product_id = ?
     `;
 
-    const values = [
-      newQuantity,
-      newStockIn,
-      newStockOut,
-      currentTimestamp,
-      batch.id
-    ];
-
-    console.log('Executing update query...');
-
-    const result = await db.query(updateQuery, values);
-    console.log('Database result:', result);
+    const [result] = await db.promise().query(updateQuery, [
+      newQuantity, 
+     
+      newOpeningStock,
+      currentTimestamp, 
+      remark || batch.remark,
+      batch.id, 
+      productId
+    ]);
 
     if (result.affectedRows > 0) {
       res.status(200).json({
         success: true,
-        message: 'Stock updated successfully',
+        message: 'Stock added successfully',
         data: {
           id: batch.id,
-          product_id: parseInt(productId),
           batch_number: batch.batch_number,
-          old_quantity: batch.quantity,
+          old_quantity: currentQuantity,
           new_quantity: newQuantity,
-          stock_in_added: stockIn,
-          stock_out_added: stockOut,
-          remark: remark
+          quantity_added: quantityToAdd,
+          old_stock_in: currentStockIn,
+          new_stock_in: newStockIn,
+          old_opening_stock: currentOpeningStock,
+          new_opening_stock: newOpeningStock,
+          remark: remark || batch.remark
         }
       });
     } else {
       res.status(500).json({
         success: false,
-        message: 'Failed to update stock - no rows affected'
+        message: 'Failed to add stock - no rows affected'
       });
     }
 
   } catch (error) {
-    console.error('Error updating stock:', error);
+    console.error('Error adding stock:', error);
     res.status(500).json({
       success: false,
       message: 'Internal server error',
@@ -113,6 +151,144 @@ router.post('/stock/:productId', async (req, res) => {
     });
   }
 });
+
+// Deduct Quantity
+router.post('/stock-deducted/:productId', async (req, res) => {
+  try {
+    const { productId } = req.params;
+    const { quantity, batchId, batch_number, remark } = req.body;
+
+    // Convert quantity to integer
+    let actualQuantity = parseInt(quantity) || 0;
+    if (actualQuantity <= 0) {
+      return res.status(400).json({ success: false, message: 'Quantity must be greater than 0' });
+    }
+
+    let batch;
+
+    // Find batch by ID or batch_number
+    if (batchId) {
+      const [existingBatch] = await db.promise().query(
+        'SELECT * FROM batches WHERE id = ? AND product_id = ?',
+        [batchId, productId]
+      );
+      if (!existingBatch || existingBatch.length === 0) {
+        return res.status(404).json({ success: false, message: `No batch found with ID: ${batchId}` });
+      }
+      batch = existingBatch[0];
+    } else if (batch_number) {
+      const [existingBatch] = await db.promise().query(
+        'SELECT * FROM batches WHERE product_id = ? AND batch_number = ?',
+        [productId, batch_number]
+      );
+      if (!existingBatch || existingBatch.length === 0) {
+        return res.status(404).json({ success: false, message: `No batch found with batch number: ${batch_number}` });
+      }
+      batch = existingBatch[0];
+    } else {
+      return res.status(400).json({ success: false, message: 'Either batchId or batch_number is required' });
+    }
+
+    // Get current values
+    const currentQuantity = parseInt(batch.quantity) || 0;
+    const currentOpeningStock = parseInt(batch.opening_stock) || 0;
+
+    // Validate deduction
+    if (actualQuantity > currentQuantity) {
+      return res.status(400).json({ 
+        success: false, 
+        message: `Cannot deduct more than available quantity (${currentQuantity})` 
+      });
+    }
+
+    // Calculate new values
+    const newQuantity = currentQuantity - actualQuantity;
+    const newOpeningStock = currentOpeningStock - actualQuantity;
+
+    const currentTimestamp = new Date().toISOString().slice(0, 19).replace('T', ' ');
+
+    // Update quantity, opening_stock and remark
+    const updateQuery = `
+      UPDATE batches
+      SET quantity = ?, opening_stock = ?, updated_at = ?, remark = ?
+      WHERE id = ? AND product_id = ?
+    `;
+    const [result] = await db.promise().query(updateQuery, [
+      newQuantity,
+      newOpeningStock,
+      currentTimestamp,
+      remark || batch.remark,
+      batch.id,
+      productId
+    ]);
+
+    if (result.affectedRows > 0) {
+      res.status(200).json({
+        success: true,
+        message: 'Quantity deducted successfully',
+        data: {
+          id: batch.id,
+          batch_number: batch.batch_number,
+          old_quantity: currentQuantity,
+          new_quantity: newQuantity,
+          quantity_deducted: actualQuantity,
+          old_opening_stock: currentOpeningStock,
+          new_opening_stock: newOpeningStock,
+          remark: remark || batch.remark,
+        }
+      });
+    } else {
+      res.status(500).json({ success: false, message: 'Failed to deduct quantity - no rows affected' });
+    }
+
+  } catch (error) {
+    console.error('Error deducting quantity:', error);
+    res.status(500).json({ success: false, message: 'Internal server error', error: error.message });
+  }
+});
+
+
+// Get batches by product_id
+router.get('/batch/product/:productId', async (req, res) => {
+  try {
+    const { productId } = req.params;
+
+    if (!productId) {
+      return res.status(400).json({
+        success: false,
+        message: 'Product ID is required'
+      });
+    }
+
+    const query = `
+      SELECT id, product_id, batch_number, quantity
+      FROM batches 
+      WHERE product_id = ? 
+      ORDER BY created_at DESC, batch_number ASC
+    `;
+
+    const [batches] = await db.promise().query(query, [productId]);
+
+    res.status(200).json({
+      success: true,
+      message: 'Batches fetched successfully',
+      data: batches
+    });
+
+  } catch (error) {
+    console.error('Error fetching batches:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Internal server error',
+      error: error.message
+    });
+  }
+});
+
+
+
+
+
 
 // Get Stock History for a Product - FIXED VERSION (Show individual batches properly)
 router.get("/stock/:productId", async (req, res) => {
