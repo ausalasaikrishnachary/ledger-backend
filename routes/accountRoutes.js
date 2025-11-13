@@ -5,31 +5,45 @@ const nodemailer = require('nodemailer');
 
 // Create Account
 router.post("/accounts", async (req, res) => {
-  let { name, email, phone_number, password, role, assigned_staff, staffid, entity_type, group, ...otherData } = req.body;
+  let {
+    name,
+    email,
+    phone_number,
+    password,
+    role,
+    assigned_staff,
+    staffid,
+    entity_type,
+    group,
+    discount,
+    Target,
+    ...otherData
+  } = req.body;
 
-  if (group === 'SUPPLIERS') {
+  if (group === "SUPPLIERS") {
     assigned_staff = assigned_staff || null;
     staffid = staffid || null;
     entity_type = entity_type || null;
-    role = 'supplier';
+    role = "supplier";
   }
 
-  const data = { 
-    name, 
-    email, 
-    phone_number, 
-    password, 
-    role, 
-    assigned_staff, 
-    staffid, 
+  const data = {
+    name,
+    email,
+    phone_number,
+    password,
+    role,
+    assigned_staff,
+    staffid,
     entity_type,
     group,
- discount: discount || 0, // Default to 0 if not provided
+    discount: discount || 0,
     Target: Target || 100000,
-    ...otherData  };
+    ...otherData,
+  };
 
-  Object.keys(data).forEach(key => {
-    if (data[key] === undefined || data[key] === '') {
+  Object.keys(data).forEach((key) => {
+    if (data[key] === undefined || data[key] === "") {
       data[key] = null;
     }
   });
@@ -37,19 +51,17 @@ router.post("/accounts", async (req, res) => {
   const sql = "INSERT INTO accounts SET ?";
 
   try {
+    console.log("Data being inserted:", data);
     const [result] = await db.promise().query(sql, data);
 
-    // Send email ONLY if role is retailer
-    if (role === 'retailer') {
+    if (role === "retailer") {
       const transporter = nodemailer.createTransport({
         service: "gmail",
         auth: {
           user: "bharathsiripuram98@gmail.com",
           pass: "alsishqgybtzonoj",
         },
-        tls: {
-          rejectUnauthorized: false,
-        },
+        tls: { rejectUnauthorized: false },
       });
 
       const mailOptions = {
@@ -85,7 +97,6 @@ Please keep this information secure.
         });
       }
     } else {
-      // For supplier or other roles, don't send email
       res.status(201).json({
         message: "Supplier added successfully!",
         id: result.insertId,
@@ -94,19 +105,18 @@ Please keep this information secure.
     }
   } catch (dbErr) {
     console.error("DB Insert Error:", dbErr);
-    
-    if (dbErr.code === 'ER_BAD_NULL_ERROR') {
-      return res.status(400).json({ 
+    if (dbErr.code === "ER_BAD_NULL_ERROR") {
+      return res.status(400).json({
         error: "Database constraint violation. Some required fields are missing.",
-        details: dbErr.sqlMessage 
+        details: dbErr.sqlMessage,
       });
     }
-    
+
     res.status(500).json({ error: "Failed to add user to database" });
   }
 });
 
-// Other routes (Get All Accounts, Get Single Account, Update Account, Delete Account) remain unchanged
+
 router.get("/accounts", (req, res) => {
   db.query("SELECT * FROM accounts", (err, results) => {
     if (err) return res.status(500).send(err);
