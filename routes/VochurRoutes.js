@@ -99,6 +99,9 @@ router.post("/transactions/:id/pdf", async (req, res) => {
   }
 });
 
+
+
+
 // Get PDF data for invoice
 router.get("/transactions/:id/pdf", (req, res) => {
   const voucherId = req.params.id;
@@ -395,6 +398,90 @@ router.get("/transactions/:id", (req, res) => {
   });
 });
 
+// ✅ Get transaction with batch details by voucherid (from voucherdetails table)
+// router.get("/transactions/:id", (req, res) => {
+//   const voucherId = req.params.id;
+
+//   // 1️⃣ Fetch voucher + account info
+//   const voucherQuery = `
+//     SELECT 
+//       v.*, 
+//       a.billing_address_line1,
+//       a.billing_address_line2,
+//       a.billing_city,
+//       a.billing_pin_code,
+//       a.billing_state,
+//       a.shipping_address_line1,
+//       a.shipping_address_line2,
+//       a.shipping_city,
+//       a.shipping_pin_code,
+//       a.shipping_state,
+//       a.gstin
+//     FROM voucher v
+//     LEFT JOIN accounts a ON v.PartyID = a.id
+//     WHERE v.VoucherID = ?
+//   `;
+
+//   db.query(voucherQuery, [voucherId], (err, voucherResults) => {
+//     if (err) {
+//       console.error("Error fetching voucher:", err);
+//       return res.status(500).json({
+//         success: false,
+//         message: "Database error fetching voucher",
+//         error: err.message,
+//       });
+//     }
+
+//     if (voucherResults.length === 0) {
+//       return res.status(404).json({
+//         success: false,
+//         message: "Voucher not found",
+//       });
+//     }
+
+//     const transaction = voucherResults[0];
+
+//     // 2️⃣ Fetch batch details from voucherdetails table
+//     const detailsQuery = `
+//       SELECT 
+//         product, 
+//         product_id, 
+//         batch, 
+//         quantity, 
+//         price, 
+//         discount, 
+//         gst, 
+//         cgst, 
+//         sgst, 
+//         igst, 
+//         cess, 
+//         total
+//       FROM voucherdetails
+//       WHERE voucherid = ?
+//     `;
+
+//     db.query(detailsQuery, [voucherId], (detailsErr, detailsResults) => {
+//       if (detailsErr) {
+//         console.error("Error fetching batch details:", detailsErr);
+//         return res.status(500).json({
+//           success: false,
+//           message: "Database error fetching batch details",
+//           error: detailsErr.message,
+//         });
+//       }
+
+//       // Attach batch details to transaction
+//       transaction.batch_details = detailsResults || [];
+
+//       res.json({
+//         success: true,
+//         data: transaction,
+//       });
+//     });
+//   });
+// });
+
+
 // Get all transactions with batch details
 router.get("/transactions", (req, res) => {
   const query = "SELECT *, JSON_UNQUOTE(BatchDetails) as batch_details FROM voucher ORDER BY VoucherID DESC";
@@ -639,6 +726,169 @@ router.get("/transactions", (req, res) => {
 // });
 
 // POST /transaction - create sales transaction and update batch stock
+// router.post("/transaction", (req, res) => {
+//   const transactionData = req.body;
+//   console.log("Received sales transaction data:", transactionData);
+
+//   db.getConnection((err, connection) => {
+//     if (err) {
+//       console.error("Database connection error:", err);
+//       return res.status(500).send({ error: "Database connection failed" });
+//     }
+
+//     connection.beginTransaction(async (err) => {
+//       if (err) {
+//         connection.release();
+//         console.error("Transaction begin error:", err);
+//         return res.status(500).send({ error: "Transaction failed to start" });
+//       }
+
+//       try {
+//         const result = await processTransaction(transactionData, "Sales", connection);
+
+//         // Commit transaction
+//         connection.commit((commitErr) => {
+//           if (commitErr) {
+//             console.error("Commit error:", commitErr);
+//             return connection.rollback(() => {
+//               connection.release();
+//               res.status(500).send({
+//                 error: "Transaction commit failed",
+//                 details: commitErr.message,
+//               });
+//             });
+//           }
+
+//           connection.release();
+//           res.send({
+//             message: "Sales transaction completed and batch stock updated successfully",
+//             voucherId: result.voucherId,
+//             invoiceNumber: result.invoiceNumber,
+//             batchDetails: result.batchDetails,
+//           });
+//         });
+//       } catch (error) {
+//         console.error("Sales transaction error:", error);
+//         connection.rollback(() => {
+//           connection.release();
+//           res.status(500).send({
+//             error: "Sales transaction failed",
+//             details: error.message,
+//           });
+//         });
+//       }
+//     });
+//   });
+// });
+
+// const processTransaction = async (transactionData, transactionType, connection) => {
+//   // 1️⃣ Get next VoucherID
+//   const maxIdResult = await queryPromise(
+//     "SELECT COALESCE(MAX(VoucherID), 0) + 1 AS nextId FROM voucher",
+//     [],
+//     connection
+//   );
+//   const nextVoucherId = maxIdResult[0].nextId;
+//   console.log("Next available VoucherID:", nextVoucherId);
+
+//   // 2️⃣ Parse batch details
+//   const batchDetails = (Array.isArray(transactionData.batchDetails)
+//     ? transactionData.batchDetails
+//     : JSON.parse(transactionData.batchDetails || "[]")
+//   ).map((item) => ({
+//     product: item.product || "",
+//     product_id: item.product_id || null,
+//     batch: item.batch || "",
+//     quantity: parseFloat(item.quantity) || 0,
+//     price: parseFloat(item.price) || 0,
+//     discount: parseFloat(item.discount) || 0,
+//     gst: parseFloat(item.gst) || 0,
+//     cgst: parseFloat(item.cgst) || 0,
+//     sgst: parseFloat(item.sgst) || 0,
+//     igst: parseFloat(item.igst) || 0,
+//     cess: parseFloat(item.cess) || 0,
+//     total: parseFloat(item.total) || 0,
+//   }));
+
+//   // 3️⃣ Insert voucher
+//   const totalQty = batchDetails.reduce((sum, item) => sum + item.quantity, 0);
+//   const invoiceNumber = transactionData.invoiceNumber || "INV001";
+
+// const voucherData = {
+//   VoucherID: nextVoucherId,
+//   TransactionType: transactionType,
+//   VchNo: invoiceNumber,
+//   InvoiceNumber: invoiceNumber,
+//   Date: transactionData.invoiceDate || new Date().toISOString().split("T")[0],
+//   PaymentTerms: 'Immediate',
+//   Freight: 0,
+//   TotalQty: totalQty,
+//   TotalPacks: batchDetails.length,
+//   TotalQty1: totalQty,
+//   TaxAmount: parseFloat(transactionData.totalGST) || 0,
+//   Subtotal: parseFloat(transactionData.taxableAmount) || 0,
+//   BillSundryAmount: 0,
+//   TotalAmount: parseFloat(transactionData.grandTotal) || 0,
+//   paid_amount: parseFloat(transactionData.grandTotal) || 0,
+//   AccountID: transactionData.selectedSupplierId || null,
+//   AccountName: transactionData.supplierInfo?.businessName || '',
+//   PartyID: transactionData.selectedSupplierId || null,
+//   PartyName: transactionData.supplierInfo?.name || '',
+//   BasicAmount: parseFloat(transactionData.taxableAmount) || 0,
+//   ValueOfGoods: parseFloat(transactionData.taxableAmount) || 0,
+//   EntryDate: new Date(),
+//   SGSTPercentage: transactionData.taxType === "CGST/SGST" && parseFloat(transactionData.totalSGST) > 0 ? 50 : 0,
+//   CGSTPercentage: transactionData.taxType === "CGST/SGST" && parseFloat(transactionData.totalCGST) > 0 ? 50 : 0,
+//   IGSTPercentage: transactionData.taxType === "IGST" ? 100 : 0,
+//   SGSTAmount: parseFloat(transactionData.totalSGST) || 0,
+//   CGSTAmount: parseFloat(transactionData.totalCGST) || 0,
+//   IGSTAmount: parseFloat(transactionData.totalIGST) || 0,
+//   TaxSystem: 'GST',
+//   product_id: batchDetails.length > 0 ? batchDetails[0].product_id : null,
+//   batch_id: batchDetails.length > 0 ? batchDetails[0].batch : null,
+//   DC: "D",
+//   BatchDetails: JSON.stringify(batchDetails),
+// };
+
+//   const voucherResult = await queryPromise("INSERT INTO voucher SET ?", voucherData, connection);
+//   const voucherId = voucherResult.insertId || nextVoucherId;
+
+//   // 4️⃣ Update batches safely
+//   for (const item of batchDetails) {
+//     if (!item.batch || !item.product_id) {
+//       throw new Error(`Invalid batch data: ${JSON.stringify(item)}`);
+//     }
+
+//     const quantity = item.quantity;
+//     if (quantity <= 0) continue;
+
+//     // Update batch quantity and stock_out atomically
+//     const updateQuery = `
+//       UPDATE batches
+//       SET quantity = quantity - ?,
+//           stock_out = stock_out + ?,
+//           updated_at = NOW()
+//       WHERE product_id = ? AND batch_number = ? AND quantity >= ?
+//     `;
+//     const updateResult = await queryPromise(updateQuery, [
+//       quantity,
+//       quantity,
+//       item.product_id,
+//       item.batch,
+//       quantity,
+//     ], connection);
+
+//     if (updateResult.affectedRows === 0) {
+//       throw new Error(`Insufficient quantity in batch ${item.batch} for product_id ${item.product_id}`);
+//     }
+
+//     console.log(`Batch ${item.batch} updated: sold=${quantity}`);
+//   }
+
+//   return { voucherId, invoiceNumber, batchDetails };
+// };
+
+
 router.post("/transaction", (req, res) => {
   const transactionData = req.body;
   console.log("Received sales transaction data:", transactionData);
@@ -657,9 +907,37 @@ router.post("/transaction", (req, res) => {
       }
 
       try {
+        // 🧾 Step 1: Create voucher + update batches
         const result = await processTransaction(transactionData, "Sales", connection);
+        const { voucherId, invoiceNumber, batchDetails } = result;
 
-        // Commit transaction
+        // 🧱 Step 2: Insert each batch detail into voucherdetails table
+        const insertDetailQuery = `
+          INSERT INTO voucherdetails (
+            voucher_id, product, product_id, batch, quantity, price, discount,
+            gst, cgst, sgst, igst, cess, total, created_at
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW())
+        `;
+
+        for (const item of batchDetails) {
+          await queryPromise(insertDetailQuery, [
+            voucherId,
+            item.product,
+            item.product_id,
+            item.batch,
+            item.quantity,
+            item.price,
+            item.discount,
+            item.gst,
+            item.cgst,
+            item.sgst,
+            item.igst,
+            item.cess,
+            item.total,
+          ], connection);
+        }
+
+        // ✅ Step 3: Commit everything
         connection.commit((commitErr) => {
           if (commitErr) {
             console.error("Commit error:", commitErr);
@@ -674,10 +952,11 @@ router.post("/transaction", (req, res) => {
 
           connection.release();
           res.send({
-            message: "Sales transaction completed and batch stock updated successfully",
-            voucherId: result.voucherId,
-            invoiceNumber: result.invoiceNumber,
-            batchDetails: result.batchDetails,
+            success: true,
+            message: "Sales transaction completed successfully and voucher details stored",
+            voucherId,
+            invoiceNumber,
+            batchDetails,
           });
         });
       } catch (error) {
@@ -695,6 +974,9 @@ router.post("/transaction", (req, res) => {
 });
 
 
+// =========================
+// 🔧 processTransaction()
+// =========================
 const processTransaction = async (transactionData, transactionType, connection) => {
   // 1️⃣ Get next VoucherID
   const maxIdResult = await queryPromise(
@@ -724,91 +1006,59 @@ const processTransaction = async (transactionData, transactionType, connection) 
     total: parseFloat(item.total) || 0,
   }));
 
-  // 3️⃣ Insert voucher
+  // 3️⃣ Prepare voucher data
   const totalQty = batchDetails.reduce((sum, item) => sum + item.quantity, 0);
   const invoiceNumber = transactionData.invoiceNumber || "INV001";
 
-const voucherData = {
-  VoucherID: nextVoucherId,
-  TransactionType: transactionType,
-  VchNo: invoiceNumber,
-  InvoiceNumber: invoiceNumber,
-  Date: transactionData.invoiceDate || new Date().toISOString().split("T")[0],
-  PaymentTerms: 'Immediate',
-  Freight: 0,
-  TotalQty: totalQty,
-  TotalPacks: batchDetails.length,
-  TotalQty1: totalQty,
-  TaxAmount: parseFloat(transactionData.totalGST) || 0,
-  Subtotal: parseFloat(transactionData.taxableAmount) || 0,
-  BillSundryAmount: 0,
-  TotalAmount: parseFloat(transactionData.grandTotal) || 0,
-  paid_amount: parseFloat(transactionData.grandTotal) || 0,
-  AccountID: transactionData.selectedSupplierId || null,
-  AccountName: transactionData.supplierInfo?.businessName || '',
-  PartyID: transactionData.selectedSupplierId || null,
-  PartyName: transactionData.supplierInfo?.name || '',
-  BasicAmount: parseFloat(transactionData.taxableAmount) || 0,
-  ValueOfGoods: parseFloat(transactionData.taxableAmount) || 0,
-  EntryDate: new Date(),
-  SGSTPercentage: transactionData.taxType === "CGST/SGST" && parseFloat(transactionData.totalSGST) > 0 ? 50 : 0,
-  CGSTPercentage: transactionData.taxType === "CGST/SGST" && parseFloat(transactionData.totalCGST) > 0 ? 50 : 0,
-  IGSTPercentage: transactionData.taxType === "IGST" ? 100 : 0,
-  SGSTAmount: parseFloat(transactionData.totalSGST) || 0,
-  CGSTAmount: parseFloat(transactionData.totalCGST) || 0,
-  IGSTAmount: parseFloat(transactionData.totalIGST) || 0,
-  TaxSystem: 'GST',
-  product_id: batchDetails.length > 0 ? batchDetails[0].product_id : null,
-  batch_id: batchDetails.length > 0 ? batchDetails[0].batch : null,
-  DC: "D",
-  BatchDetails: JSON.stringify(batchDetails),
-};
+  const voucherData = {
+    VoucherID: nextVoucherId,
+    TransactionType: transactionType,
+    VchNo: invoiceNumber,
+    InvoiceNumber: invoiceNumber,
+    Date: transactionData.invoiceDate || new Date().toISOString().split("T")[0],
+    PaymentTerms: "Immediate",
+    Freight: 0,
+    TotalQty: totalQty,
+    TotalPacks: batchDetails.length,
+    TotalQty1: totalQty,
+    TaxAmount: parseFloat(transactionData.totalGST) || 0,
+    Subtotal: parseFloat(transactionData.taxableAmount) || 0,
+    BillSundryAmount: 0,
+    TotalAmount: parseFloat(transactionData.grandTotal) || 0,
+    paid_amount: parseFloat(transactionData.grandTotal) || 0,
+    AccountID: transactionData.selectedSupplierId || null,
+    AccountName: transactionData.supplierInfo?.businessName || "",
+    PartyID: transactionData.selectedSupplierId || null,
+    PartyName: transactionData.supplierInfo?.name || "",
+    BasicAmount: parseFloat(transactionData.taxableAmount) || 0,
+    ValueOfGoods: parseFloat(transactionData.taxableAmount) || 0,
+    EntryDate: new Date(),
+    SGSTPercentage:
+      transactionData.taxType === "CGST/SGST" &&
+      parseFloat(transactionData.totalSGST) > 0
+        ? 50
+        : 0,
+    CGSTPercentage:
+      transactionData.taxType === "CGST/SGST" &&
+      parseFloat(transactionData.totalCGST) > 0
+        ? 50
+        : 0,
+    IGSTPercentage: transactionData.taxType === "IGST" ? 100 : 0,
+    SGSTAmount: parseFloat(transactionData.totalSGST) || 0,
+    CGSTAmount: parseFloat(transactionData.totalCGST) || 0,
+    IGSTAmount: parseFloat(transactionData.totalIGST) || 0,
+    TaxSystem: "GST",
+    product_id: batchDetails.length > 0 ? batchDetails[0].product_id : null,
+    batch_id: batchDetails.length > 0 ? batchDetails[0].batch : null,
+    DC: "D",
+    BatchDetails: JSON.stringify(batchDetails),
+  };
 
-// const voucherData = {
-//   VoucherID: nextVoucherId,
-//   TransactionType: transactionType,
-//   VchNo: invoiceNumber,
-//   InvoiceNumber: invoiceNumber,
-//   Date: transactionData.invoiceDate || new Date().toISOString().split('T')[0],
-//   PaymentTerms: 'Immediate',
-//   Freight: 0,
-//   TotalQty: totalQty,
-//   TotalPacks: batchDetails.length,
-//   TotalQty1: totalQty,
-//   TaxAmount: parseFloat(transactionData.totalGST) || 0,
-//   Subtotal: parseFloat(transactionData.taxableAmount) || 0,
-//   BillSundryAmount: 0,
-//   TotalAmount: parseFloat(transactionData.grandTotal) || 0,
-//   ChequeNo: null,
-//   ChequeDate: null,
-//   BankName: null,
-//   AccountID: transactionData.selectedSupplierId || null,
-//   AccountName: transactionData.supplierInfo?.businessName || '',
-//   PartyID: transactionData.selectedSupplierId || null,
-//   PartyName: transactionData.supplierInfo?.name || '',
-//   BasicAmount: parseFloat(transactionData.taxableAmount) || 0,
-//   ValueOfGoods: parseFloat(transactionData.taxableAmount) || 0,
-//   EntryDate: new Date(),
-//   SGSTPercentage: taxType === "CGST/SGST" ? (totalSGST > 0 ? 50 : 0) : 0,
-//   CGSTPercentage: taxType === "CGST/SGST" ? (totalCGST > 0 ? 50 : 0) : 0,
-//   IGSTPercentage: taxType === "IGST" ? 100 : 0,
-//   SGSTAmount: totalSGST,
-//   CGSTAmount: totalCGST,
-//   IGSTAmount: totalIGST,
-//   TaxSystem: 'GST',
-  
-//   // NEW: Add product_id and batch_id fields
-//   product_id: batchDetails.length > 0 ? batchDetails[0].product_id : null,
-//   batch_id: batchDetails.length > 0 ? batchDetails[0].batch : null,
-  
-//   DC: "D",
-//   BatchDetails: JSON.stringify(batchDetails),
-// };
-
+  // 4️⃣ Insert voucher
   const voucherResult = await queryPromise("INSERT INTO voucher SET ?", voucherData, connection);
   const voucherId = voucherResult.insertId || nextVoucherId;
 
-  // 4️⃣ Update batches safely
+  // 5️⃣ Update batches
   for (const item of batchDetails) {
     if (!item.batch || !item.product_id) {
       throw new Error(`Invalid batch data: ${JSON.stringify(item)}`);
@@ -817,7 +1067,6 @@ const voucherData = {
     const quantity = item.quantity;
     if (quantity <= 0) continue;
 
-    // Update batch quantity and stock_out atomically
     const updateQuery = `
       UPDATE batches
       SET quantity = quantity - ?,
@@ -825,6 +1074,7 @@ const voucherData = {
           updated_at = NOW()
       WHERE product_id = ? AND batch_number = ? AND quantity >= ?
     `;
+
     const updateResult = await queryPromise(updateQuery, [
       quantity,
       quantity,
@@ -834,7 +1084,9 @@ const voucherData = {
     ], connection);
 
     if (updateResult.affectedRows === 0) {
-      throw new Error(`Insufficient quantity in batch ${item.batch} for product_id ${item.product_id}`);
+      throw new Error(
+        `Insufficient quantity in batch ${item.batch} for product_id ${item.product_id}`
+      );
     }
 
     console.log(`Batch ${item.batch} updated: sold=${quantity}`);
@@ -842,9 +1094,6 @@ const voucherData = {
 
   return { voucherId, invoiceNumber, batchDetails };
 };
-
-
-
 
 
 // Get all vouchers for invoice number
