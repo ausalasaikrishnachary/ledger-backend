@@ -855,7 +855,7 @@ router.get('/sales-receipt-totals', (req, res) => {
   const sqlQuery = `
     SELECT 
       COALESCE(SUM(CASE WHEN TransactionType = 'Sales' THEN TotalAmount ELSE 0 END), 0) as totalSales,
-      COALESCE(SUM(CASE WHEN TransactionType = 'Receipt' THEN BasicAmount ELSE 0 END), 0) as totalReceipts
+      COALESCE(SUM(CASE WHEN TransactionType = 'Receipt' THEN paid_amount ELSE 0 END), 0) as totalReceipts
     FROM voucher 
     WHERE TransactionType IN ('Sales', 'Receipt')
   `;

@@ -34,14 +34,14 @@ router.get("/next-invoice-number", async (req, res) => {
 });
 
 // Helper function for database queries
-const queryPromise = (sql, params = [], connection = db) => {
-  return new Promise((resolve, reject) => {
-    connection.query(sql, params, (err, results) => {
-      if (err) reject(err);
-      else resolve(results);
-    });
-  });
-};
+// const queryPromise = (sql, params = [], connection = db) => {
+//   return new Promise((resolve, reject) => {
+//     connection.query(sql, params, (err, results) => {
+//       if (err) reject(err);
+//       else resolve(results);
+//     });
+//   });
+// };
 
 // Store PDF data for invoice
 router.post("/transactions/:id/pdf", async (req, res) => {
@@ -199,27 +199,37 @@ router.get("/transactions/:id/download-pdf", (req, res) => {
   });
 });
 
-// Delete invoice
+// Helper function to wrap connection.query in a promise
+function queryPromise(sql, params, connection) {
+  return new Promise((resolve, reject) => {
+    connection.query(sql, params, (err, results) => {
+      if (err) return reject(err);
+      resolve(results);
+    });
+  });
+}
+
+// DELETE invoice / transaction
 router.delete("/transactions/:id", async (req, res) => {
   const voucherId = req.params.id;
-  
-  console.log('Deleting transaction with VoucherID:', voucherId);
+
+  console.log("Deleting transaction with VoucherID:", voucherId);
 
   db.getConnection((err, connection) => {
     if (err) {
-      console.error('Database connection error:', err);
-      return res.status(500).send({ error: 'Database connection failed' });
+      console.error("Database connection error:", err);
+      return res.status(500).send({ error: "Database connection failed" });
     }
 
     connection.beginTransaction(async (err) => {
       if (err) {
         connection.release();
-        console.error('Transaction begin error:', err);
-        return res.status(500).send({ error: 'Transaction failed to start' });
+        console.error("Transaction begin error:", err);
+        return res.status(500).send({ error: "Transaction failed to start" });
       }
 
       try {
-        // First, get the transaction data to reverse stock changes
+        // 1️⃣ Get voucher
         const voucherResult = await queryPromise(
           "SELECT * FROM voucher WHERE VoucherID = ?",
           [voucherId],
@@ -227,132 +237,101 @@ router.delete("/transactions/:id", async (req, res) => {
         );
 
         if (voucherResult.length === 0) {
-          throw new Error('Transaction not found');
+          throw new Error("Transaction not found");
         }
 
         const voucherData = voucherResult[0];
-        console.log('Transaction to delete:', voucherData);
 
-        // Parse batch details to get items and quantities
+        // 2️⃣ Parse batch details
         let batchDetails = [];
-        try {
-          if (voucherData.BatchDetails) {
-            batchDetails = typeof voucherData.BatchDetails === 'string' 
-              ? JSON.parse(voucherData.BatchDetails) 
+        if (voucherData.BatchDetails) {
+          batchDetails =
+            typeof voucherData.BatchDetails === "string"
+              ? JSON.parse(voucherData.BatchDetails)
               : voucherData.BatchDetails;
-          }
-        } catch (error) {
-          console.error('Error parsing batch details:', error);
         }
 
-        // Reverse stock changes for each item
-        for (const item of batchDetails) {
-          const productResult = await queryPromise(
-            "SELECT id, balance_stock, stock_out, stock_in FROM products WHERE goods_name = ?",
-            [item.product],
-            connection
-          );
+        // 3️⃣ Reverse batch stock for Sales transactions
+        if (voucherData.TransactionType === "Sales") {
+          for (const item of batchDetails) {
+            if (!item.product_id || !item.batch) continue;
 
-          if (productResult.length > 0) {
-            const product = productResult[0];
-            const quantity = parseFloat(item.quantity) || 0;
-            
-            // Reverse the stock operation based on transaction type
-            if (voucherData.TransactionType === 'Sales') {
-              // For sales, add back the stock that was deducted
-              const currentStockOut = parseFloat(product.stock_out) || 0;
-              const currentBalance = parseFloat(product.balance_stock) || 0;
-              
-              const newStockOut = Math.max(0, currentStockOut - quantity);
-              const newBalanceStock = currentBalance + quantity;
+            // Get batch record
+            const batchResult = await queryPromise(
+              "SELECT id, opening_stock, stock_in, stock_out FROM batches WHERE product_id = ? AND batch_number = ?",
+              [item.product_id, item.batch],
+              connection
+            );
+
+            if (batchResult.length > 0) {
+              const batch = batchResult[0];
+              const qty = parseFloat(item.quantity) || 0;
+
+              // Reverse stock_out
+              const newStockOut = (parseFloat(batch.stock_out) || 0) - qty;
+
+              // Recalculate quantity using proper formula
+              const batchOpening = parseFloat(batch.opening_stock) || 0;
+              const batchIn = parseFloat(batch.stock_in) || 0;
+              const newQuantity = batchOpening + batchIn - newStockOut;
 
               await queryPromise(
-                "UPDATE products SET stock_out = ?, balance_stock = ? WHERE id = ?",
-                [newStockOut, newBalanceStock, product.id],
+                "UPDATE batches SET quantity = ?, stock_out = ?, updated_at = NOW() WHERE id = ?",
+                [newQuantity, newStockOut, batch.id],
                 connection
               );
 
-              console.log(`Reversed sales stock for ${item.product}: ${currentBalance} -> ${newBalanceStock}`);
-
-              // Reverse batch changes for sales
-              if (item.batch) {
-                const batchResult = await queryPromise(
-                  "SELECT id, quantity FROM batches WHERE product_id = ? AND batch_number = ?",
-                  [product.id, item.batch],
-                  connection
-                );
-
-                if (batchResult.length > 0) {
-                  const batch = batchResult[0];
-                  const currentBatchQty = parseFloat(batch.quantity) || 0;
-                  const newBatchQty = currentBatchQty + quantity;
-
-                  await queryPromise(
-                    "UPDATE batches SET quantity = ?, updated_at = ? WHERE id = ?",
-                    [newBatchQty, new Date(), batch.id],
-                    connection
-                  );
-
-                  console.log(`Reversed batch for ${item.batch}: ${currentBatchQty} -> ${newBatchQty}`);
-                }
-              }
+              console.log(
+                `Reversed batch ${item.batch} for product ${item.product_id}: quantity -> ${newQuantity}, stock_out -> ${newStockOut}`
+              );
             }
           }
         }
 
-        // Delete associated stock records - DELETE SEPARATE BATCH ENTRIES
-        await queryPromise(
-          "DELETE FROM stock WHERE voucher_id = ?",
-          [voucherId],
-          connection
-        );
+        // 4️⃣ Delete stock records for this voucher
+        // await queryPromise("DELETE FROM stock WHERE voucher_id = ?", [voucherId], connection);
 
-        // Delete ledger entry if exists
-        await queryPromise(
-          "DELETE FROM ledger WHERE voucherID = ?",
-          [voucherId],
-          connection
-        );
+        // 6️⃣ Delete voucher
+        await queryPromise("DELETE FROM voucher WHERE VoucherID = ?", [voucherId], connection);
 
-        // Finally, delete the voucher record
-        await queryPromise(
-          "DELETE FROM voucher WHERE VoucherID = ?",
-          [voucherId],
-          connection
-        );
-
-        // Commit the transaction
+        // 7️⃣ Commit transaction
         connection.commit((commitErr) => {
           if (commitErr) {
-            console.error('Commit error:', commitErr);
+            console.error("Commit error:", commitErr);
             return connection.rollback(() => {
               connection.release();
-              res.status(500).send({ error: 'Transaction commit failed', details: commitErr.message });
+              res
+                .status(500)
+                .send({ error: "Transaction commit failed", details: commitErr.message });
             });
           }
+
           connection.release();
-          console.log('Transaction deleted successfully');
+          console.log("Transaction deleted successfully");
           res.send({
             success: true,
             message: "Invoice deleted successfully",
             voucherId: voucherId,
-            stockReverted: true
+            stockReverted: true,
           });
         });
-
       } catch (error) {
-        console.error('Error deleting transaction:', error);
+        console.error("Error deleting transaction:", error);
         connection.rollback(() => {
           connection.release();
-          res.status(500).send({ 
-            error: 'Failed to delete invoice', 
-            details: error.message 
+          res.status(500).send({
+            error: "Failed to delete invoice",
+            details: error.message,
           });
         });
       }
     });
   });
 });
+
+
+
+
 
 // Get transaction with batch details
 router.get("/transactions/:id", (req, res) => {
@@ -445,315 +424,316 @@ router.get("/transactions", (req, res) => {
 });
 
 // Create Sales Transaction and Update Stock
+// router.post("/transaction", (req, res) => {
+//   const transactionData = req.body;
+//   console.log('Received sales transaction data:', transactionData);
+  
+//   db.getConnection((err, connection) => {
+//     if (err) {
+//       console.error('Database connection error:', err);
+//       return res.status(500).send({ error: 'Database connection failed' });
+//     }
+
+//     connection.beginTransaction((err) => {
+//       if (err) {
+//         connection.release();
+//         console.error('Transaction begin error:', err);
+//         return res.status(500).send({ error: 'Transaction failed to start' });
+//       }
+
+//       processTransaction(transactionData, 'Sales', connection)
+//         .then((result) => {
+//           // Extract data from your current structure
+//           const voucherID = result.voucherId || result.insertId;
+//           const date = transactionData.invoiceDate || new Date();
+//           const transactionType = transactionData.type || 'Sales';
+//           const accountID = transactionData.selectedSupplierId;
+//           const accountName = transactionData.supplierInfo?.name || 'Unknown Supplier';
+//           const amount = transactionData.grandTotal || '0.00';
+//           const paidAmount = transactionData.paid_amount || 0;
+
+//           console.log('Ledger data prepared:', {
+//             voucherID, date, transactionType, accountID, accountName, amount, paidAmount
+//           });
+
+//           // Validate voucherID - it should not be 0 or null
+//           if (!voucherID || voucherID === 0) {
+//             throw new Error(`Invalid voucher ID: ${voucherID}`);
+//           }
+
+//           // Validate required fields
+//           if (!accountID || isNaN(parseFloat(amount))) {
+//             throw new Error(`Missing required fields for ledger: voucherID=${voucherID}, accountID=${accountID}, amount=${amount}`);
+//           }
+
+//           // First, get the latest balance for the account
+//           const getBalanceQuery = `
+//             SELECT balance_amount 
+//             FROM ledger 
+//             WHERE AccountID = ? 
+//             ORDER BY created_at DESC, id DESC 
+//             LIMIT 1
+//           `;
+          
+//           connection.query(getBalanceQuery, [accountID], (balanceErr, balanceResults) => {
+//             if (balanceErr) {
+//               console.error('Error fetching balance:', balanceErr);
+//               return connection.rollback(() => {
+//                 connection.release();
+//                 res.status(500).send({ error: 'Failed to fetch account balance', details: balanceErr.message });
+//               });
+//             }
+
+//             let previousBalance = 0;
+//             if (balanceResults.length > 0) {
+//               previousBalance = parseFloat(balanceResults[0].balance_amount) || 0;
+//             }
+
+//             const currentAmount = parseFloat(amount);
+//             const currentPaidAmount = parseFloat(paidAmount);
+            
+//             // Calculate new balance correctly: previous balance + sales amount (debit)
+//             const newBalanceAfterSales = previousBalance + currentAmount;
+            
+//             // Calculate final balance after payment (if any)
+//             const finalBalance = newBalanceAfterSales - currentPaidAmount;
+
+//             console.log(`Balance calculation: ${previousBalance} + ${currentAmount} - ${currentPaidAmount} = ${finalBalance}`);
+
+//             // Insert sales transaction into ledger (Debit)
+//             const salesLedgerQuery = `
+//               INSERT INTO ledger (
+//                 voucherID, date, trantype, AccountID, AccountName, 
+//                 Amount, balance_amount, DC, created_at
+//               ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+//             `;
+
+//             const salesLedgerValues = [
+//               voucherID,
+//               date,
+//               transactionType,
+//               accountID,
+//               accountName,
+//               currentAmount,
+//               newBalanceAfterSales, // Balance after sales transaction
+//               'D', // Debit for sales transaction
+//               new Date()
+//             ];
+
+//             console.log('Executing sales ledger insert with values:', salesLedgerValues);
+
+//             connection.query(salesLedgerQuery, salesLedgerValues, (salesLedgerErr, salesLedgerResults) => {
+//               if (salesLedgerErr) {
+//                 console.error('Sales ledger insert error:', salesLedgerErr);
+//                 return connection.rollback(() => {
+//                   connection.release();
+//                   res.status(500).send({ error: 'Failed to insert sales ledger entry', details: salesLedgerErr.message });
+//                 });
+//               }
+
+//               // If there's a paid amount, insert a separate receipt entry (Credit)
+//               if (currentPaidAmount > 0) {
+//                 const receiptLedgerQuery = `
+//                   INSERT INTO ledger (
+//                     voucherID, date, trantype, AccountID, AccountName, 
+//                     Amount, balance_amount, DC, created_at
+//                   ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+//                 `;
+
+//                 const receiptLedgerValues = [
+//                   voucherID,
+//                   date,
+//                   'Receipt',
+//                   accountID,
+//                   accountName,
+//                   currentPaidAmount,
+//                   finalBalance, // Final balance after payment
+//                   'C', // Credit for receipt/payment
+//                   new Date()
+//                 ];
+
+//                 console.log('Executing receipt ledger insert with values:', receiptLedgerValues);
+
+//                 connection.query(receiptLedgerQuery, receiptLedgerValues, (receiptLedgerErr, receiptLedgerResults) => {
+//                   if (receiptLedgerErr) {
+//                     console.error('Receipt ledger insert error:', receiptLedgerErr);
+//                     return connection.rollback(() => {
+//                       connection.release();
+//                       res.status(500).send({ error: 'Failed to insert receipt ledger entry', details: receiptLedgerErr.message });
+//                     });
+//                   }
+
+//                   commitTransaction(salesLedgerResults, receiptLedgerResults, finalBalance);
+//                 });
+//               } else {
+//                 commitTransaction(salesLedgerResults, null, newBalanceAfterSales);
+//               }
+
+//               function commitTransaction(salesEntry, receiptEntry, finalBalanceValue) {
+//                 connection.commit((commitErr) => {
+//                   if (commitErr) {
+//                     console.error('Commit error:', commitErr);
+//                     return connection.rollback(() => {
+//                       connection.release();
+//                       res.status(500).send({ error: 'Transaction commit failed', details: commitErr.message });
+//                     });
+//                   }
+//                   connection.release();
+//                   console.log('Sales transaction and ledger entries completed successfully');
+//                   res.send({
+//                     message: "Sales transaction completed successfully",
+//                     voucherId: voucherID,
+//                     invoiceNumber: transactionData.invoiceNumber,
+//                     stockUpdated: true,
+//                     taxType: transactionData.taxType,
+//                     gstBreakdown: {
+//                       cgst: transactionData.totalCGST,
+//                       sgst: transactionData.totalSGST,
+//                       igst: transactionData.totalIGST
+//                     },
+//                     batchDetails: transactionData.batchDetails,
+//                     ledgerEntries: {
+//                       salesEntry: {
+//                         id: salesEntry.insertId,
+//                         amount: currentAmount,
+//                         type: 'Debit'
+//                       },
+//                       receiptEntry: currentPaidAmount > 0 ? {
+//                         id: receiptEntry.insertId,
+//                         amount: currentPaidAmount,
+//                         type: 'Credit'
+//                       } : null,
+//                       newBalance: finalBalanceValue
+//                     }
+//                   });
+//                 });
+//               }
+//             });
+//           });
+//         })
+//         .catch((error) => {
+//           console.error('Sales transaction error:', error);
+//           connection.rollback(() => {
+//             connection.release();
+            
+//             if (error.code === 'ER_BAD_FIELD_ERROR') {
+//               console.error('Database field error - checking table structure');
+//               connection.query("SHOW COLUMNS FROM voucher", (structErr, structResults) => {
+//                 if (structErr) {
+//                   console.error('Error checking voucher structure:', structErr);
+//                 } else {
+//                   console.log('Voucher table structure:', structResults);
+//                 }
+//               });
+//             }
+            
+//             res.status(500).send({ 
+//               error: 'Sales transaction failed', 
+//               details: error.message,
+//               code: error.code
+//             });
+//           });
+//         });
+//     });
+//   });
+// });
+
+// POST /transaction - create sales transaction and update batch stock
 router.post("/transaction", (req, res) => {
   const transactionData = req.body;
-  console.log('Received sales transaction data:', transactionData);
-  
+  console.log("Received sales transaction data:", transactionData);
+
   db.getConnection((err, connection) => {
     if (err) {
-      console.error('Database connection error:', err);
-      return res.status(500).send({ error: 'Database connection failed' });
+      console.error("Database connection error:", err);
+      return res.status(500).send({ error: "Database connection failed" });
     }
 
-    connection.beginTransaction((err) => {
+    connection.beginTransaction(async (err) => {
       if (err) {
         connection.release();
-        console.error('Transaction begin error:', err);
-        return res.status(500).send({ error: 'Transaction failed to start' });
+        console.error("Transaction begin error:", err);
+        return res.status(500).send({ error: "Transaction failed to start" });
       }
 
-      processTransaction(transactionData, 'Sales', connection)
-        .then((result) => {
-          // Extract data from your current structure
-          const voucherID = result.voucherId || result.insertId;
-          const date = transactionData.invoiceDate || new Date();
-          const transactionType = transactionData.type || 'Sales';
-          const accountID = transactionData.selectedSupplierId;
-          const accountName = transactionData.supplierInfo?.name || 'Unknown Supplier';
-          const amount = transactionData.grandTotal || '0.00';
-          const paidAmount = transactionData.paid_amount || 0;
+      try {
+        const result = await processTransaction(transactionData, "Sales", connection);
 
-          console.log('Ledger data prepared:', {
-            voucherID, date, transactionType, accountID, accountName, amount, paidAmount
-          });
-
-          // Validate voucherID - it should not be 0 or null
-          if (!voucherID || voucherID === 0) {
-            throw new Error(`Invalid voucher ID: ${voucherID}`);
+        // Commit transaction
+        connection.commit((commitErr) => {
+          if (commitErr) {
+            console.error("Commit error:", commitErr);
+            return connection.rollback(() => {
+              connection.release();
+              res.status(500).send({
+                error: "Transaction commit failed",
+                details: commitErr.message,
+              });
+            });
           }
 
-          // Validate required fields
-          if (!accountID || isNaN(parseFloat(amount))) {
-            throw new Error(`Missing required fields for ledger: voucherID=${voucherID}, accountID=${accountID}, amount=${amount}`);
-          }
-
-          // First, get the latest balance for the account
-          const getBalanceQuery = `
-            SELECT balance_amount 
-            FROM ledger 
-            WHERE AccountID = ? 
-            ORDER BY created_at DESC, id DESC 
-            LIMIT 1
-          `;
-          
-          connection.query(getBalanceQuery, [accountID], (balanceErr, balanceResults) => {
-            if (balanceErr) {
-              console.error('Error fetching balance:', balanceErr);
-              return connection.rollback(() => {
-                connection.release();
-                res.status(500).send({ error: 'Failed to fetch account balance', details: balanceErr.message });
-              });
-            }
-
-            let previousBalance = 0;
-            if (balanceResults.length > 0) {
-              previousBalance = parseFloat(balanceResults[0].balance_amount) || 0;
-            }
-
-            const currentAmount = parseFloat(amount);
-            const currentPaidAmount = parseFloat(paidAmount);
-            
-            // Calculate new balance correctly: previous balance + sales amount (debit)
-            const newBalanceAfterSales = previousBalance + currentAmount;
-            
-            // Calculate final balance after payment (if any)
-            const finalBalance = newBalanceAfterSales - currentPaidAmount;
-
-            console.log(`Balance calculation: ${previousBalance} + ${currentAmount} - ${currentPaidAmount} = ${finalBalance}`);
-
-            // Insert sales transaction into ledger (Debit)
-            const salesLedgerQuery = `
-              INSERT INTO ledger (
-                voucherID, date, trantype, AccountID, AccountName, 
-                Amount, balance_amount, DC, created_at
-              ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-            `;
-
-            const salesLedgerValues = [
-              voucherID,
-              date,
-              transactionType,
-              accountID,
-              accountName,
-              currentAmount,
-              newBalanceAfterSales, // Balance after sales transaction
-              'D', // Debit for sales transaction
-              new Date()
-            ];
-
-            console.log('Executing sales ledger insert with values:', salesLedgerValues);
-
-            connection.query(salesLedgerQuery, salesLedgerValues, (salesLedgerErr, salesLedgerResults) => {
-              if (salesLedgerErr) {
-                console.error('Sales ledger insert error:', salesLedgerErr);
-                return connection.rollback(() => {
-                  connection.release();
-                  res.status(500).send({ error: 'Failed to insert sales ledger entry', details: salesLedgerErr.message });
-                });
-              }
-
-              // If there's a paid amount, insert a separate receipt entry (Credit)
-              if (currentPaidAmount > 0) {
-                const receiptLedgerQuery = `
-                  INSERT INTO ledger (
-                    voucherID, date, trantype, AccountID, AccountName, 
-                    Amount, balance_amount, DC, created_at
-                  ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-                `;
-
-                const receiptLedgerValues = [
-                  voucherID,
-                  date,
-                  'Receipt',
-                  accountID,
-                  accountName,
-                  currentPaidAmount,
-                  finalBalance, // Final balance after payment
-                  'C', // Credit for receipt/payment
-                  new Date()
-                ];
-
-                console.log('Executing receipt ledger insert with values:', receiptLedgerValues);
-
-                connection.query(receiptLedgerQuery, receiptLedgerValues, (receiptLedgerErr, receiptLedgerResults) => {
-                  if (receiptLedgerErr) {
-                    console.error('Receipt ledger insert error:', receiptLedgerErr);
-                    return connection.rollback(() => {
-                      connection.release();
-                      res.status(500).send({ error: 'Failed to insert receipt ledger entry', details: receiptLedgerErr.message });
-                    });
-                  }
-
-                  commitTransaction(salesLedgerResults, receiptLedgerResults, finalBalance);
-                });
-              } else {
-                commitTransaction(salesLedgerResults, null, newBalanceAfterSales);
-              }
-
-              function commitTransaction(salesEntry, receiptEntry, finalBalanceValue) {
-                connection.commit((commitErr) => {
-                  if (commitErr) {
-                    console.error('Commit error:', commitErr);
-                    return connection.rollback(() => {
-                      connection.release();
-                      res.status(500).send({ error: 'Transaction commit failed', details: commitErr.message });
-                    });
-                  }
-                  connection.release();
-                  console.log('Sales transaction and ledger entries completed successfully');
-                  res.send({
-                    message: "Sales transaction completed successfully",
-                    voucherId: voucherID,
-                    invoiceNumber: transactionData.invoiceNumber,
-                    stockUpdated: true,
-                    taxType: transactionData.taxType,
-                    gstBreakdown: {
-                      cgst: transactionData.totalCGST,
-                      sgst: transactionData.totalSGST,
-                      igst: transactionData.totalIGST
-                    },
-                    batchDetails: transactionData.batchDetails,
-                    ledgerEntries: {
-                      salesEntry: {
-                        id: salesEntry.insertId,
-                        amount: currentAmount,
-                        type: 'Debit'
-                      },
-                      receiptEntry: currentPaidAmount > 0 ? {
-                        id: receiptEntry.insertId,
-                        amount: currentPaidAmount,
-                        type: 'Credit'
-                      } : null,
-                      newBalance: finalBalanceValue
-                    }
-                  });
-                });
-              }
-            });
-          });
-        })
-        .catch((error) => {
-          console.error('Sales transaction error:', error);
-          connection.rollback(() => {
-            connection.release();
-            
-            if (error.code === 'ER_BAD_FIELD_ERROR') {
-              console.error('Database field error - checking table structure');
-              connection.query("SHOW COLUMNS FROM voucher", (structErr, structResults) => {
-                if (structErr) {
-                  console.error('Error checking voucher structure:', structErr);
-                } else {
-                  console.log('Voucher table structure:', structResults);
-                }
-              });
-            }
-            
-            res.status(500).send({ 
-              error: 'Sales transaction failed', 
-              details: error.message,
-              code: error.code
-            });
+          connection.release();
+          res.send({
+            message: "Sales transaction completed and batch stock updated successfully",
+            voucherId: result.voucherId,
+            invoiceNumber: result.invoiceNumber,
+            batchDetails: result.batchDetails,
           });
         });
+      } catch (error) {
+        console.error("Sales transaction error:", error);
+        connection.rollback(() => {
+          connection.release();
+          res.status(500).send({
+            error: "Sales transaction failed",
+            details: error.message,
+          });
+        });
+      }
     });
   });
 });
 
-// Helper function to process transactions
-// Helper function to process transactions
+
 const processTransaction = async (transactionData, transactionType, connection) => {
-  try {
-    // Get the next available VoucherID
-    let nextVoucherId;
-    try {
-      const maxIdResult = await queryPromise("SELECT COALESCE(MAX(VoucherID), 0) + 1 as nextId FROM voucher", [], connection);
-      nextVoucherId = maxIdResult[0].nextId;
-      console.log('Next available VoucherID:', nextVoucherId);
-    } catch (maxIdError) {
-      console.error('Error getting next VoucherID:', maxIdError);
-      nextVoucherId = 1;
-    }
+  // 1️⃣ Get next VoucherID
+  const maxIdResult = await queryPromise(
+    "SELECT COALESCE(MAX(VoucherID), 0) + 1 AS nextId FROM voucher",
+    [],
+    connection
+  );
+  const nextVoucherId = maxIdResult[0].nextId;
+  console.log("Next available VoucherID:", nextVoucherId);
 
-    // Calculate GST breakdown
-    const totalCGST = parseFloat(transactionData.totalCGST) || 0;
-    const totalSGST = parseFloat(transactionData.totalSGST) || 0;
-    const totalIGST = parseFloat(transactionData.totalIGST) || 0;
-    const taxType = transactionData.taxType || "CGST/SGST";
+  // 2️⃣ Parse batch details
+  const batchDetails = (Array.isArray(transactionData.batchDetails)
+    ? transactionData.batchDetails
+    : JSON.parse(transactionData.batchDetails || "[]")
+  ).map((item) => ({
+    product: item.product || "",
+    product_id: item.product_id || null,
+    batch: item.batch || "",
+    quantity: parseFloat(item.quantity) || 0,
+    price: parseFloat(item.price) || 0,
+    discount: parseFloat(item.discount) || 0,
+    gst: parseFloat(item.gst) || 0,
+    cgst: parseFloat(item.cgst) || 0,
+    sgst: parseFloat(item.sgst) || 0,
+    igst: parseFloat(item.igst) || 0,
+    cess: parseFloat(item.cess) || 0,
+    total: parseFloat(item.total) || 0,
+  }));
 
-    // Parse batch details - FIXED: Use batchDetails instead of items
-    let batchDetails = [];
-    let batchDetailsJson = '[]';
-    
-    try {
-      if (transactionData.batchDetails) {
-        batchDetails = Array.isArray(transactionData.batchDetails) 
-          ? transactionData.batchDetails 
-          : JSON.parse(transactionData.batchDetails || '[]');
-        
-        // Ensure all batch details have proper numeric values
-        batchDetails = batchDetails.map(item => ({
-          product: item.product || '',
-          product_id: item.product_id || null,
-          description: item.description || '',
-          batch: item.batch || '',
-          batch_id: item.batch_id || null,
-          quantity: parseFloat(item.quantity) || 0,
-          price: parseFloat(item.price) || 0,
-          discount: parseFloat(item.discount) || 0, // Ensure discount is included
-          gst: parseFloat(item.gst) || 0, // Ensure GST is included
-          cgst: parseFloat(item.cgst) || 0,
-          sgst: parseFloat(item.sgst) || 0,
-          igst: parseFloat(item.igst) || 0,
-          cess: parseFloat(item.cess) || 0,
-          total: parseFloat(item.total) || 0,
-          batchDetails: item.batchDetails || null
-        }));
-        
-        batchDetailsJson = JSON.stringify(batchDetails);
-        console.log('Processed batch details:', batchDetails);
-      }
-    } catch (error) {
-      console.error('Error parsing batch details:', error);
-      batchDetailsJson = '[]';
-    }
+  // 3️⃣ Insert voucher
+  const totalQty = batchDetails.reduce((sum, item) => sum + item.quantity, 0);
+  const invoiceNumber = transactionData.invoiceNumber || "INV001";
 
-    // Determine invoice number based on transaction type
-    let invoiceNumber;
-    let defaultInvoiceNumber;
-    
-    switch(transactionType) {
-      case 'Sales':
-        defaultInvoiceNumber = 'INV001';
-        invoiceNumber = transactionData.invoiceNumber || defaultInvoiceNumber;
-        break;
-      case 'Purchase':
-        defaultInvoiceNumber = 'PINV001';
-        invoiceNumber = transactionData.invoiceNumber || defaultInvoiceNumber;
-        break;
-      case 'Product':
-        defaultInvoiceNumber = 'PINV001';
-        invoiceNumber = transactionData.invoiceNumber || defaultInvoiceNumber;
-        break;
-      default:
-        defaultInvoiceNumber = 'INV001';
-        invoiceNumber = transactionData.invoiceNumber || defaultInvoiceNumber;
-    }
-
-    console.log(`Using ${transactionType} invoice number:`, invoiceNumber);
-
-    // Calculate totals from batchDetails instead of items - FIXED
-    const totalQty = batchDetails.reduce((sum, item) => {
-      return sum + (parseFloat(item.quantity) || 0);
-    }, 0);
-
-    // Prepare voucher data
-    // Prepare voucher data - UPDATED to include product_id and batch_id
 const voucherData = {
   VoucherID: nextVoucherId,
   TransactionType: transactionType,
   VchNo: invoiceNumber,
   InvoiceNumber: invoiceNumber,
-  Date: transactionData.invoiceDate || new Date().toISOString().split('T')[0],
+  Date: transactionData.invoiceDate || new Date().toISOString().split("T")[0],
   PaymentTerms: 'Immediate',
   Freight: 0,
   TotalQty: totalQty,
@@ -763,9 +743,7 @@ const voucherData = {
   Subtotal: parseFloat(transactionData.taxableAmount) || 0,
   BillSundryAmount: 0,
   TotalAmount: parseFloat(transactionData.grandTotal) || 0,
-  ChequeNo: null,
-  ChequeDate: null,
-  BankName: null,
+  paid_amount: parseFloat(transactionData.grandTotal) || 0,
   AccountID: transactionData.selectedSupplierId || null,
   AccountName: transactionData.supplierInfo?.businessName || '',
   PartyID: transactionData.selectedSupplierId || null,
@@ -773,216 +751,101 @@ const voucherData = {
   BasicAmount: parseFloat(transactionData.taxableAmount) || 0,
   ValueOfGoods: parseFloat(transactionData.taxableAmount) || 0,
   EntryDate: new Date(),
-  SGSTPercentage: taxType === "CGST/SGST" ? (totalSGST > 0 ? 50 : 0) : 0,
-  CGSTPercentage: taxType === "CGST/SGST" ? (totalCGST > 0 ? 50 : 0) : 0,
-  IGSTPercentage: taxType === "IGST" ? 100 : 0,
-  SGSTAmount: totalSGST,
-  CGSTAmount: totalCGST,
-  IGSTAmount: totalIGST,
+  SGSTPercentage: transactionData.taxType === "CGST/SGST" && parseFloat(transactionData.totalSGST) > 0 ? 50 : 0,
+  CGSTPercentage: transactionData.taxType === "CGST/SGST" && parseFloat(transactionData.totalCGST) > 0 ? 50 : 0,
+  IGSTPercentage: transactionData.taxType === "IGST" ? 100 : 0,
+  SGSTAmount: parseFloat(transactionData.totalSGST) || 0,
+  CGSTAmount: parseFloat(transactionData.totalCGST) || 0,
+  IGSTAmount: parseFloat(transactionData.totalIGST) || 0,
   TaxSystem: 'GST',
-  
-  // NEW: Add product_id and batch_id fields
   product_id: batchDetails.length > 0 ? batchDetails[0].product_id : null,
   batch_id: batchDetails.length > 0 ? batchDetails[0].batch : null,
-  
-  BatchDetails: batchDetailsJson,
+  DC: "D",
+  BatchDetails: JSON.stringify(batchDetails),
 };
 
-    console.log(`Inserting ${transactionType} voucher data with VoucherID:`, nextVoucherId, 'Invoice No:', invoiceNumber);
-    console.log('BatchDetails being stored:', batchDetailsJson);
+// const voucherData = {
+//   VoucherID: nextVoucherId,
+//   TransactionType: transactionType,
+//   VchNo: invoiceNumber,
+//   InvoiceNumber: invoiceNumber,
+//   Date: transactionData.invoiceDate || new Date().toISOString().split('T')[0],
+//   PaymentTerms: 'Immediate',
+//   Freight: 0,
+//   TotalQty: totalQty,
+//   TotalPacks: batchDetails.length,
+//   TotalQty1: totalQty,
+//   TaxAmount: parseFloat(transactionData.totalGST) || 0,
+//   Subtotal: parseFloat(transactionData.taxableAmount) || 0,
+//   BillSundryAmount: 0,
+//   TotalAmount: parseFloat(transactionData.grandTotal) || 0,
+//   ChequeNo: null,
+//   ChequeDate: null,
+//   BankName: null,
+//   AccountID: transactionData.selectedSupplierId || null,
+//   AccountName: transactionData.supplierInfo?.businessName || '',
+//   PartyID: transactionData.selectedSupplierId || null,
+//   PartyName: transactionData.supplierInfo?.name || '',
+//   BasicAmount: parseFloat(transactionData.taxableAmount) || 0,
+//   ValueOfGoods: parseFloat(transactionData.taxableAmount) || 0,
+//   EntryDate: new Date(),
+//   SGSTPercentage: taxType === "CGST/SGST" ? (totalSGST > 0 ? 50 : 0) : 0,
+//   CGSTPercentage: taxType === "CGST/SGST" ? (totalCGST > 0 ? 50 : 0) : 0,
+//   IGSTPercentage: taxType === "IGST" ? 100 : 0,
+//   SGSTAmount: totalSGST,
+//   CGSTAmount: totalCGST,
+//   IGSTAmount: totalIGST,
+//   TaxSystem: 'GST',
+  
+//   // NEW: Add product_id and batch_id fields
+//   product_id: batchDetails.length > 0 ? batchDetails[0].product_id : null,
+//   batch_id: batchDetails.length > 0 ? batchDetails[0].batch : null,
+  
+//   DC: "D",
+//   BatchDetails: JSON.stringify(batchDetails),
+// };
 
-    // Insert into Voucher table
-    const voucherResult = await queryPromise("INSERT INTO voucher SET ?", voucherData, connection);
-    const voucherId = voucherResult.insertId || nextVoucherId;
-    console.log(`${transactionType} Voucher created with ID:`, voucherId);
+  const voucherResult = await queryPromise("INSERT INTO voucher SET ?", voucherData, connection);
+  const voucherId = voucherResult.insertId || nextVoucherId;
 
-    // Process each item from batchDetails instead of items - FIXED
-    for (const [index, item] of batchDetails.entries()) {
-      console.log(`Processing ${transactionType} item ${index + 1}:`, item);
-
-      // Validate quantity
-      const quantity = parseFloat(item.quantity) || 0;
-      if (quantity <= 0) {
-        console.warn(`Skipping item with invalid quantity: ${item.product} - ${quantity}`);
-        continue;
-      }
-
-      // Find product by name
-      const productResult = await queryPromise(
-        "SELECT id, balance_stock, stock_out, stock_in, opening_stock FROM products WHERE goods_name = ?",
-        [item.product],
-        connection
-      );
-
-      if (productResult.length === 0) {
-        throw new Error(`Product not found: ${item.product}`);
-      }
-
-      const product = productResult[0];
-      const productId = product.id;
-
-      console.log(`Product found: ID=${productId}, Current balance=${product.balance_stock}, Quantity=${quantity}`);
-
-      let newStockIn, newStockOut, newBalanceStock;
-
-      // Determine stock operation based on transaction type
-      if (transactionType === 'Purchase') {
-        // Purchase: Increase stock
-        const currentStockIn = parseFloat(product.stock_in) || 0;
-        const currentBalance = parseFloat(product.balance_stock) || 0;
-        newStockIn = currentStockIn + quantity;
-        newStockOut = parseFloat(product.stock_out) || 0;
-        newBalanceStock = currentBalance + quantity;
-
-        console.log(`Purchase stock calculation: Opening=${product.opening_stock}, StockIn=${currentStockIn} -> ${newStockIn}, Balance=${currentBalance} -> ${newBalanceStock}`);
-      } else {
-        // Sales or Product: Decrease stock
-        const currentStockOut = parseFloat(product.stock_out) || 0;
-        const currentBalance = parseFloat(product.balance_stock) || 0;
-        
-        // Check if sufficient stock is available
-        if (currentBalance < quantity) {
-          throw new Error(`Insufficient stock for ${item.product}. Available: ${currentBalance}, Required: ${quantity}`);
-        }
-
-        newStockIn = parseFloat(product.stock_in) || 0;
-        newStockOut = currentStockOut + quantity;
-        newBalanceStock = currentBalance - quantity;
-
-        console.log(`${transactionType} stock calculation: Opening=${product.opening_stock}, StockOut=${currentStockOut} -> ${newStockOut}, Balance=${currentBalance} -> ${newBalanceStock}`);
-      }
-
-      // Update product stock in products table
-      await queryPromise(
-        "UPDATE products SET stock_in = ?, stock_out = ?, balance_stock = ? WHERE id = ?",
-        [newStockIn, newStockOut, newBalanceStock, productId],
-        connection
-      );
-
-      console.log(`Updated product ${productId}: stock_in=${newStockIn}, stock_out=${newStockOut}, balance_stock=${newBalanceStock}`);
-
-      // Handle batch operations
-      let updatedBatchQuantity = 0;
-      if (item.batch) {
-        const batchResult = await queryPromise(
-          "SELECT id, quantity FROM batches WHERE product_id = ? AND batch_number = ?",
-          [productId, item.batch],
-          connection
-        );
-
-        if (batchResult.length > 0) {
-          // Update existing batch
-          const batch = batchResult[0];
-          const currentBatchQty = parseFloat(batch.quantity) || 0;
-          let newBatchQty;
-
-          if (transactionType === 'Purchase') {
-            newBatchQty = currentBatchQty + quantity;
-          } else {
-            if (currentBatchQty < quantity) {
-              throw new Error(`Insufficient batch quantity for ${item.batch}. Available: ${currentBatchQty}, Required: ${quantity}`);
-            }
-            newBatchQty = currentBatchQty - quantity;
-          }
-
-        await queryPromise(
-  "UPDATE batches SET quantity = ?, stock_out = ?, updated_at = ? WHERE id = ?",
-  [newBatchQty, newStockOut, new Date(), batch.id],
-  connection
-);
-
-          
-          updatedBatchQuantity = newBatchQty;
-          console.log(`Updated batch ${item.batch} for product ${productId}: ${currentBatchQty} -> ${newBatchQty}`);
-        } else if (transactionType === 'Purchase') {
-          // Create new batch for purchase
-          const batchData = {
-            product_id: productId,
-            batch_number: item.batch,
-            quantity: quantity,
-            manufacturing_date: new Date(),
-            expiry_date: new Date(Date.now() + 365 * 24 * 60 * 60 * 1000), // 1 year from now
-            purchase_price: parseFloat(item.price) || 0,
-            created_at: new Date(),
-            updated_at: new Date()
-          };
-          
-          await queryPromise("INSERT INTO batches SET ?", batchData, connection);
-          updatedBatchQuantity = quantity;
-          console.log(`Created new batch ${item.batch} for product ${productId} with quantity=${quantity}`);
-        } else {
-          console.warn(`Batch ${item.batch} not found for product ${productId}`);
-        }
-      }
-
-      // FIXED: Handle stock table - GET BATCH QUANTITY AFTER UPDATING BATCH TABLE
-      let batchOpeningStock = 0;
-      if (item.batch) {
-        // Get the updated batch quantity after the batch operation
-        if (updatedBatchQuantity > 0) {
-          batchOpeningStock = updatedBatchQuantity;
-        } else {
-          // Fallback: query the batch table again to get the current quantity
-          const batchResult = await queryPromise(
-            "SELECT quantity FROM batches WHERE product_id = ? AND batch_number = ?",
-            [productId, item.batch],
-            connection
-          );
-          
-          if (batchResult.length > 0) {
-            batchOpeningStock = parseFloat(batchResult[0].quantity) || 0;
-          }
-        }
-      }
-
-      // Calculate correct balance stock using the formula: opening_stock + stock_in - stock_out
-      const stockIn = transactionType === 'Purchase' ? quantity : 0;
-      const stockOut = transactionType === 'Purchase' ? 0 : quantity;
-      
-      // FIXED: For sales, we need to use the batch quantity BEFORE the sale as opening stock
-      let calculatedBalanceStock;
-      if (transactionType === 'Sales' && item.batch) {
-        // For sales: opening_stock should be the batch quantity BEFORE the sale
-        // balance_stock should be the batch quantity AFTER the sale
-        const openingStockForSales = batchOpeningStock + quantity; // Add back the sold quantity to get the original opening
-        calculatedBalanceStock = batchOpeningStock; // Current batch quantity after sale
-        batchOpeningStock = openingStockForSales; // Use the original quantity as opening stock
-      } else {
-        calculatedBalanceStock = batchOpeningStock + stockIn - stockOut;
-      }
-
-      const stockData = {
-        product_id: productId,
-        price_per_unit: parseFloat(item.price) || 0,
-        opening_stock: batchOpeningStock,
-        stock_in: stockIn,
-        stock_out: stockOut,
-        balance_stock: calculatedBalanceStock, // Use the calculated balance
-        batch_number: item.batch || null,
-        voucher_id: voucherId,
-        date: new Date()
-      };
-
-      await queryPromise("INSERT INTO stock SET ?", stockData, connection);
-      console.log(`Created new ${transactionType} stock record for product ${productId}, batch ${item.batch}`);
-      console.log(`Stock calculation: Opening=${batchOpeningStock}, StockIn=${stockIn}, StockOut=${stockOut}, Balance=${calculatedBalanceStock}`);
+  // 4️⃣ Update batches safely
+  for (const item of batchDetails) {
+    if (!item.batch || !item.product_id) {
+      throw new Error(`Invalid batch data: ${JSON.stringify(item)}`);
     }
 
-    return {
-      voucherId,
-      invoiceNumber,
-      taxType,
-      totalCGST,
-      totalSGST,
-      totalIGST,
-      batchDetails: batchDetails
-    };
+    const quantity = item.quantity;
+    if (quantity <= 0) continue;
 
-  } catch (error) {
-    console.error(`Error in ${transactionType} transaction processing:`, error);
-    throw error;
+    // Update batch quantity and stock_out atomically
+    const updateQuery = `
+      UPDATE batches
+      SET quantity = quantity - ?,
+          stock_out = stock_out + ?,
+          updated_at = NOW()
+      WHERE product_id = ? AND batch_number = ? AND quantity >= ?
+    `;
+    const updateResult = await queryPromise(updateQuery, [
+      quantity,
+      quantity,
+      item.product_id,
+      item.batch,
+      quantity,
+    ], connection);
+
+    if (updateResult.affectedRows === 0) {
+      throw new Error(`Insufficient quantity in batch ${item.batch} for product_id ${item.product_id}`);
+    }
+
+    console.log(`Batch ${item.batch} updated: sold=${quantity}`);
   }
+
+  return { voucherId, invoiceNumber, batchDetails };
 };
+
+
+
+
 
 // Get all vouchers for invoice number
 router.get('/invoices/:invoiceNumber', async (req, res) => {
@@ -1108,320 +971,113 @@ router.get("/last-invoice", (req, res) => {
 router.put("/transactions/:id", async (req, res) => {
   const voucherId = req.params.id;
   const updateData = req.body;
-  
-  console.log('Updating transaction:', voucherId, updateData);
-  
+
   db.getConnection((err, connection) => {
-    if (err) {
-      console.error('Database connection error:', err);
-      return res.status(500).send({ error: 'Database connection failed' });
-    }
+    if (err) return res.status(500).send({ error: 'Database connection failed' });
 
     connection.beginTransaction(async (err) => {
-      if (err) {
-        connection.release();
-        console.error('Transaction begin error:', err);
-        return res.status(500).send({ error: 'Transaction failed to start' });
-      }
+      if (err) return res.status(500).send({ error: 'Transaction failed to start' });
 
       try {
-        // First, get the original transaction data to reverse stock changes
-        const originalVoucherResult = await queryPromise(
+        // 1️⃣ Get original voucher
+        const originalVoucher = await queryPromise(
           "SELECT * FROM voucher WHERE VoucherID = ?",
           [voucherId],
           connection
         );
+        if (originalVoucher.length === 0) throw new Error('Transaction not found');
 
-        if (originalVoucherResult.length === 0) {
-          throw new Error('Transaction not found');
-        }
-
-        const originalVoucherData = originalVoucherResult[0];
-        
-        // Parse original batch details to reverse stock
         let originalBatchDetails = [];
         try {
-          if (originalVoucherData.BatchDetails) {
-            originalBatchDetails = typeof originalVoucherData.BatchDetails === 'string' 
-              ? JSON.parse(originalVoucherData.BatchDetails) 
-              : originalVoucherData.BatchDetails;
-          }
-        } catch (error) {
-          console.error('Error parsing original batch details:', error);
-        }
+          originalBatchDetails = originalVoucher[0].BatchDetails
+            ? JSON.parse(originalVoucher[0].BatchDetails)
+            : [];
+        } catch (err) { originalBatchDetails = []; }
 
-        // Reverse original stock changes
-        console.log('Reversing original stock changes...');
+        // 2️⃣ Reverse old stock in batches
         for (const item of originalBatchDetails) {
-          const productResult = await queryPromise(
-            "SELECT id, balance_stock, stock_out, stock_in FROM products WHERE goods_name = ?",
-            [item.product],
+          if (!item.batch || !item.product_id) continue;
+          const batchResult = await queryPromise(
+            "SELECT id, quantity, stock_out FROM batches WHERE product_id = ? AND batch_number = ?",
+            [item.product_id, item.batch],
             connection
           );
 
-          if (productResult.length > 0) {
-            const product = productResult[0];
-            const quantity = parseFloat(item.quantity) || 0;
-            
-            // Reverse the stock operation (add back stock for sales)
-            if (originalVoucherData.TransactionType === 'Sales') {
-              const currentStockOut = parseFloat(product.stock_out) || 0;
-              const currentBalance = parseFloat(product.balance_stock) || 0;
-              
-              const newStockOut = Math.max(0, currentStockOut - quantity);
-              const newBalanceStock = currentBalance + quantity;
-
-              await queryPromise(
-                "UPDATE products SET stock_out = ?, balance_stock = ? WHERE id = ?",
-                [newStockOut, newBalanceStock, product.id],
-                connection
-              );
-
-              console.log(`Reversed original stock for ${item.product}: ${currentBalance} -> ${newBalanceStock}`);
-
-              // Reverse batch changes
-              if (item.batch) {
-                const batchResult = await queryPromise(
-                  "SELECT id, quantity FROM batches WHERE product_id = ? AND batch_number = ?",
-                  [product.id, item.batch],
-                  connection
-                );
-
-                if (batchResult.length > 0) {
-                  const batch = batchResult[0];
-                  const currentBatchQty = parseFloat(batch.quantity) || 0;
-                  const newBatchQty = currentBatchQty + quantity;
-
-                  await queryPromise(
-                    "UPDATE batches SET quantity = ?, updated_at = ? WHERE id = ?",
-                    [newBatchQty, new Date(), batch.id],
-                    connection
-                  );
-
-                  console.log(`Reversed original batch for ${item.batch}: ${currentBatchQty} -> ${newBatchQty}`);
-                }
-              }
-            }
+          if (batchResult.length > 0) {
+            const batch = batchResult[0];
+            const qty = parseFloat(item.quantity) || 0;
+            await queryPromise(
+              "UPDATE batches SET quantity = quantity + ?, stock_out = stock_out - ? WHERE id = ?",
+              [qty, qty, batch.id],
+              connection
+            );
           }
         }
 
-        // Delete original stock records
+        // 3️⃣ Update voucher record
+        let newBatchDetails = [];
+        if (updateData.batchDetails) {
+          newBatchDetails = Array.isArray(updateData.batchDetails)
+            ? updateData.batchDetails
+            : JSON.parse(updateData.batchDetails || '[]');
+        }
+
+        const totalQty = newBatchDetails.reduce((sum, item) => sum + (parseFloat(item.quantity) || 0), 0);
+
         await queryPromise(
-          "DELETE FROM stock WHERE voucher_id = ?",
-          [voucherId],
+          `UPDATE voucher 
+            SET InvoiceNumber = ?, Date = ?, PartyName = ?, BasicAmount = ?, TaxAmount = ?, TotalAmount = ?, TotalQty = ?, BatchDetails = ?
+            WHERE VoucherID = ?`,
+          [
+            updateData.invoiceNumber || originalVoucher[0].InvoiceNumber,
+            updateData.invoiceDate || originalVoucher[0].Date,
+            updateData.supplierInfo?.name || originalVoucher[0].PartyName,
+            parseFloat(updateData.taxableAmount) || parseFloat(originalVoucher[0].BasicAmount) || 0,
+            parseFloat(updateData.totalGST) || parseFloat(originalVoucher[0].TaxAmount) || 0,
+            parseFloat(updateData.grandTotal) || parseFloat(originalVoucher[0].TotalAmount) || 0,
+            totalQty,
+            JSON.stringify(newBatchDetails),
+            voucherId
+          ],
           connection
         );
 
-        // Parse new batch details from update data
-        let newBatchDetails = [];
-        let newBatchDetailsJson = '[]';
-        
-        try {
-          if (updateData.batchDetails) {
-            newBatchDetails = Array.isArray(updateData.batchDetails) 
-              ? updateData.batchDetails 
-              : JSON.parse(updateData.batchDetails || '[]');
-            
-            newBatchDetails = newBatchDetails.map(item => ({
-              product: item.product || '',
-              product_id: item.product_id || null,
-              description: item.description || '',
-              batch: item.batch || '',
-              batch_id: item.batch_id || null,
-              quantity: parseFloat(item.quantity) || 0,
-              price: parseFloat(item.price) || 0,
-              discount: parseFloat(item.discount) || 0,
-              gst: parseFloat(item.gst) || 0,
-              cgst: parseFloat(item.cgst) || 0,
-              sgst: parseFloat(item.sgst) || 0,
-              igst: parseFloat(item.igst) || 0,
-              cess: parseFloat(item.cess) || 0,
-              total: parseFloat(item.total) || 0,
-              batchDetails: item.batchDetails || null
-            }));
-            
-            newBatchDetailsJson = JSON.stringify(newBatchDetails);
-          }
-        } catch (error) {
-          console.error('Error parsing new batch details:', error);
-          newBatchDetailsJson = '[]';
-        }
-
-        // Calculate totals from new batch details
-        const totalQty = newBatchDetails.reduce((sum, item) => {
-          return sum + (parseFloat(item.quantity) || 0);
-        }, 0);
-
-        // Update voucher record with new data - REMOVED updated_at column
-        const updateQuery = `
-          UPDATE voucher 
-          SET 
-            InvoiceNumber = ?,
-            Date = ?,
-            PartyName = ?,
-            BasicAmount = ?,
-            TaxAmount = ?,
-            TotalAmount = ?,
-            TotalQty = ?,
-            BatchDetails = ?
-          WHERE VoucherID = ?
-        `;
-        
-        const updateValues = [
-          updateData.invoiceNumber || originalVoucherData.InvoiceNumber,
-          updateData.invoiceDate || originalVoucherData.Date,
-          updateData.supplierInfo?.name || originalVoucherData.PartyName,
-          parseFloat(updateData.taxableAmount) || parseFloat(originalVoucherData.BasicAmount) || 0,
-          parseFloat(updateData.totalGST) || parseFloat(originalVoucherData.TaxAmount) || 0,
-          parseFloat(updateData.grandTotal) || parseFloat(originalVoucherData.TotalAmount) || 0,
-          totalQty,
-          newBatchDetailsJson,
-          voucherId
-        ];
-        
-        await queryPromise(updateQuery, updateValues, connection);
-
-        // Apply new stock changes
-        console.log('Applying new stock changes...');
+        // 4️⃣ Apply new stock changes in batches
         for (const item of newBatchDetails) {
-          const productResult = await queryPromise(
-            "SELECT id, balance_stock, stock_out, stock_in FROM products WHERE goods_name = ?",
-            [item.product],
+          if (!item.batch || !item.product_id) continue;
+          const batchResult = await queryPromise(
+            "SELECT id, quantity, stock_out FROM batches WHERE product_id = ? AND batch_number = ?",
+            [item.product_id, item.batch],
             connection
           );
 
-          if (productResult.length > 0) {
-            const product = productResult[0];
-            const quantity = parseFloat(item.quantity) || 0;
-
-            // For sales, deduct stock
-            if (originalVoucherData.TransactionType === 'Sales') {
-              const currentStockOut = parseFloat(product.stock_out) || 0;
-              const currentBalance = parseFloat(product.balance_stock) || 0;
-              
-              // Check if sufficient stock is available
-              if (currentBalance < quantity) {
-                throw new Error(`Insufficient stock for ${item.product}. Available: ${currentBalance}, Required: ${quantity}`);
-              }
-
-              const newStockOut = currentStockOut + quantity;
-              const newBalanceStock = currentBalance - quantity;
-
-              await queryPromise(
-                "UPDATE products SET stock_out = ?, balance_stock = ? WHERE id = ?",
-                [newStockOut, newBalanceStock, product.id],
-                connection
-              );
-
-              console.log(`Applied new stock for ${item.product}: ${currentBalance} -> ${newBalanceStock}`);
-
-              // FIXED: Get batch quantity for opening stock
-              let batchOpeningStock = 0;
-              if (item.batch) {
-                const batchResult = await queryPromise(
-                  "SELECT quantity FROM batches WHERE product_id = ? AND batch_number = ?",
-                  [product.id, item.batch],
-                  connection
-                );
-                
-                if (batchResult.length > 0) {
-                  batchOpeningStock = parseFloat(batchResult[0].quantity) || 0;
-                }
-              }
-
-              // Calculate correct balance stock using the formula: opening_stock + stock_in - stock_out
-              const stockIn = 0; // For sales, stock_in is always 0
-              const stockOut = quantity;
-              const calculatedBalanceStock = batchOpeningStock + stockIn - stockOut;
-
-              // Create new stock record for each batch with proper opening stock
-              const stockData = {
-                product_id: product.id,
-                price_per_unit: parseFloat(item.price) || 0,
-                opening_stock: batchOpeningStock, // Use actual batch quantity
-                stock_in: stockIn,
-                stock_out: stockOut,
-                balance_stock: calculatedBalanceStock, // Use calculated balance
-                batch_number: item.batch || null,
-                voucher_id: voucherId,
-                date: new Date()
-              };
-
-              await queryPromise("INSERT INTO stock SET ?", stockData, connection);
-              console.log(`Created new stock record for product ${product.id}, batch ${item.batch} with opening stock: ${batchOpeningStock}`);
-
-              // Update batch quantities
-              if (item.batch) {
-                const batchResult = await queryPromise(
-                  "SELECT id, quantity FROM batches WHERE product_id = ? AND batch_number = ?",
-                  [product.id, item.batch],
-                  connection
-                );
-
-                if (batchResult.length > 0) {
-                  const batch = batchResult[0];
-                  const currentBatchQty = parseFloat(batch.quantity) || 0;
-                  
-                  if (currentBatchQty < quantity) {
-                    throw new Error(`Insufficient batch quantity for ${item.batch}. Available: ${currentBatchQty}, Required: ${quantity}`);
-                  }
-                  
-                  const newBatchQty = currentBatchQty - quantity;
-
-                  await queryPromise(
-                    "UPDATE batches SET quantity = ?, updated_at = ? WHERE id = ?",
-                    [newBatchQty, new Date(), batch.id],
-                    connection
-                  );
-
-                  console.log(`Updated batch ${item.batch} for product ${product.id}: ${currentBatchQty} -> ${newBatchQty}`);
-                }
-              }
-            }
+          if (batchResult.length > 0) {
+            const batch = batchResult[0];
+            const qty = parseFloat(item.quantity) || 0;
+            if (batch.quantity < qty) throw new Error(`Insufficient batch quantity for ${item.batch}`);
+            await queryPromise(
+              "UPDATE batches SET quantity = quantity - ?, stock_out = stock_out + ? WHERE id = ?",
+              [qty, qty, batch.id],
+              connection
+            );
           }
         }
 
-        // Update ledger entry if amount changed
-        const originalAmount = parseFloat(originalVoucherData.TotalAmount) || 0;
-        const newAmount = parseFloat(updateData.grandTotal) || parseFloat(originalVoucherData.TotalAmount) || 0;
-        
-        if (originalAmount !== newAmount) {
-          await queryPromise(
-            "UPDATE ledger SET Amount = ?, balance_amount = balance_amount - ? + ? WHERE voucherID = ?",
-            [newAmount, originalAmount, newAmount, voucherId],
-            connection
-          );
-          console.log(`Updated ledger entry for voucher ${voucherId}: ${originalAmount} -> ${newAmount}`);
-        }
-
-        // Commit the transaction
         connection.commit((commitErr) => {
           if (commitErr) {
-            console.error('Commit error:', commitErr);
             return connection.rollback(() => {
               connection.release();
-              res.status(500).send({ error: 'Transaction commit failed', details: commitErr.message });
+              res.status(500).send({ error: commitErr.message });
             });
           }
           connection.release();
-          console.log('Transaction updated successfully');
-          res.json({
-            success: true,
-            message: 'Transaction updated successfully',
-            voucherId: voucherId,
-            stockUpdated: true
-          });
+          res.json({ success: true, message: 'Transaction updated successfully', voucherId });
         });
 
       } catch (error) {
-        console.error('Error updating transaction:', error);
         connection.rollback(() => {
           connection.release();
-          res.status(500).json({
-            success: false,
-            message: 'Failed to update transaction',
-            error: error.message
-          });
+          res.status(500).json({ success: false, message: error.message });
         });
       }
     });
@@ -1430,35 +1086,42 @@ router.put("/transactions/:id", async (req, res) => {
 
 
 
+
 router.get("/ledger", (req, res) => {
-  // First, get all transactions ordered by AccountID and date
-  const query = `
-    SELECT 
-      id,
-      voucherID,
-      date,
-      trantype,
-      AccountID,
-      AccountName,
-      Amount,
-      DC,
-      created_at
-    FROM ledger
-    ORDER BY AccountID, date ASC, id ASC
-  `;
+  // Fetch all vouchers ordered by AccountID and Date
+const query = `
+  SELECT 
+    VoucherID AS id,
+    VchNo AS voucherID,
+    Date AS date,
+    TransactionType AS trantype,
+    AccountID,
+    AccountName,
+    PartyID,
+    PartyName,
+    paid_amount AS Pamount,
+    TotalAmount AS Amount,
+    DC,
+    balance_amount,
+    created_at
+  FROM voucher
+  ORDER BY PartyName, Date ASC, VoucherID ASC
+`;
+
 
   db.query(query, (err, results) => {
     if (err) {
-      console.error("Error fetching ledger data:", err);
+      console.error("Error fetching voucher data:", err);
       return res.status(500).json({ message: "Database error", error: err });
     }
 
     // Recalculate running balances for all accounts
     const dataWithRecalculatedBalances = recalculateRunningBalances(results);
-    
+
     res.status(200).json(dataWithRecalculatedBalances);
   });
 });
+
 
 // Function to recalculate running balances
 function recalculateRunningBalances(transactions) {
