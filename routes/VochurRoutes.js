@@ -213,6 +213,127 @@ function queryPromise(sql, params, connection) {
 }
 
 // DELETE invoice / transaction
+// router.delete("/transactions/:id", async (req, res) => {
+//   const voucherId = req.params.id;
+
+//   console.log("Deleting transaction with VoucherID:", voucherId);
+
+//   db.getConnection((err, connection) => {
+//     if (err) {
+//       console.error("Database connection error:", err);
+//       return res.status(500).send({ error: "Database connection failed" });
+//     }
+
+//     connection.beginTransaction(async (err) => {
+//       if (err) {
+//         connection.release();
+//         console.error("Transaction begin error:", err);
+//         return res.status(500).send({ error: "Transaction failed to start" });
+//       }
+
+//       try {
+//         // 1️⃣ Get voucher
+//         const voucherResult = await queryPromise(
+//           "SELECT * FROM voucher WHERE VoucherID = ?",
+//           [voucherId],
+//           connection
+//         );
+
+//         if (voucherResult.length === 0) {
+//           throw new Error("Transaction not found");
+//         }
+
+//         const voucherData = voucherResult[0];
+
+//         // 2️⃣ Parse batch details
+//         let batchDetails = [];
+//         if (voucherData.BatchDetails) {
+//           batchDetails =
+//             typeof voucherData.BatchDetails === "string"
+//               ? JSON.parse(voucherData.BatchDetails)
+//               : voucherData.BatchDetails;
+//         }
+
+//         // 3️⃣ Reverse batch stock for Sales transactions
+//         if (voucherData.TransactionType === "Sales") {
+//           for (const item of batchDetails) {
+//             if (!item.product_id || !item.batch) continue;
+
+//             // Get batch record
+//             const batchResult = await queryPromise(
+//               "SELECT id, opening_stock, stock_in, stock_out FROM batches WHERE product_id = ? AND batch_number = ?",
+//               [item.product_id, item.batch],
+//               connection
+//             );
+
+//             if (batchResult.length > 0) {
+//               const batch = batchResult[0];
+//               const qty = parseFloat(item.quantity) || 0;
+
+//               // Reverse stock_out
+//               const newStockOut = (parseFloat(batch.stock_out) || 0) - qty;
+
+//               // Recalculate quantity using proper formula
+//               const batchOpening = parseFloat(batch.opening_stock) || 0;
+//               const batchIn = parseFloat(batch.stock_in) || 0;
+//               const newQuantity = batchOpening + batchIn - newStockOut;
+
+//               await queryPromise(
+//                 "UPDATE batches SET quantity = ?, stock_out = ?, updated_at = NOW() WHERE id = ?",
+//                 [newQuantity, newStockOut, batch.id],
+//                 connection
+//               );
+
+//               console.log(
+//                 `Reversed batch ${item.batch} for product ${item.product_id}: quantity -> ${newQuantity}, stock_out -> ${newStockOut}`
+//               );
+//             }
+//           }
+//         }
+
+//         // 4️⃣ Delete stock records for this voucher
+//         // await queryPromise("DELETE FROM stock WHERE voucher_id = ?", [voucherId], connection);
+
+//         // 6️⃣ Delete voucher
+//         await queryPromise("DELETE FROM voucher WHERE VoucherID = ?", [voucherId], connection);
+
+//         // 7️⃣ Commit transaction
+//         connection.commit((commitErr) => {
+//           if (commitErr) {
+//             console.error("Commit error:", commitErr);
+//             return connection.rollback(() => {
+//               connection.release();
+//               res
+//                 .status(500)
+//                 .send({ error: "Transaction commit failed", details: commitErr.message });
+//             });
+//           }
+
+//           connection.release();
+//           console.log("Transaction deleted successfully");
+//           res.send({
+//             success: true,
+//             message: "Invoice deleted successfully",
+//             voucherId: voucherId,
+//             stockReverted: true,
+//           });
+//         });
+//       } catch (error) {
+//         console.error("Error deleting transaction:", error);
+//         connection.rollback(() => {
+//           connection.release();
+//           res.status(500).send({
+//             error: "Failed to delete invoice",
+//             details: error.message,
+//           });
+//         });
+//       }
+//     });
+//   });
+// });
+
+
+// ✅ Delete transaction + related voucher details
 router.delete("/transactions/:id", async (req, res) => {
   const voucherId = req.params.id;
 
@@ -245,17 +366,15 @@ router.delete("/transactions/:id", async (req, res) => {
 
         const voucherData = voucherResult[0];
 
-        // 2️⃣ Parse batch details
-        let batchDetails = [];
-        if (voucherData.BatchDetails) {
-          batchDetails =
-            typeof voucherData.BatchDetails === "string"
-              ? JSON.parse(voucherData.BatchDetails)
-              : voucherData.BatchDetails;
-        }
+        // 2️⃣ Get batch details from voucherdetails table instead of voucher table
+        const batchDetails = await queryPromise(
+          "SELECT * FROM voucherdetails WHERE voucher_id = ?",
+          [voucherId],
+          connection
+        );
 
-        // 3️⃣ Reverse batch stock for Sales transactions
-        if (voucherData.TransactionType === "Sales") {
+        // 3️⃣ Reverse batch stock if Sales transaction
+        if (voucherData.TransactionType === "Sales" && batchDetails.length > 0) {
           for (const item of batchDetails) {
             if (!item.product_id || !item.batch) continue;
 
@@ -273,7 +392,7 @@ router.delete("/transactions/:id", async (req, res) => {
               // Reverse stock_out
               const newStockOut = (parseFloat(batch.stock_out) || 0) - qty;
 
-              // Recalculate quantity using proper formula
+              // Recalculate available quantity
               const batchOpening = parseFloat(batch.opening_stock) || 0;
               const batchIn = parseFloat(batch.stock_in) || 0;
               const newQuantity = batchOpening + batchIn - newStockOut;
@@ -291,30 +410,31 @@ router.delete("/transactions/:id", async (req, res) => {
           }
         }
 
-        // 4️⃣ Delete stock records for this voucher
-        // await queryPromise("DELETE FROM stock WHERE voucher_id = ?", [voucherId], connection);
+        // 4️⃣ Delete related voucher details
+        await queryPromise("DELETE FROM voucherdetails WHERE voucher_id = ?", [voucherId], connection);
 
-        // 6️⃣ Delete voucher
+        // 5️⃣ Delete voucher itself
         await queryPromise("DELETE FROM voucher WHERE VoucherID = ?", [voucherId], connection);
 
-        // 7️⃣ Commit transaction
+        // 6️⃣ Commit transaction
         connection.commit((commitErr) => {
           if (commitErr) {
             console.error("Commit error:", commitErr);
             return connection.rollback(() => {
               connection.release();
-              res
-                .status(500)
-                .send({ error: "Transaction commit failed", details: commitErr.message });
+              res.status(500).send({
+                error: "Transaction commit failed",
+                details: commitErr.message,
+              });
             });
           }
 
           connection.release();
-          console.log("Transaction deleted successfully");
+          console.log("Transaction and related details deleted successfully");
           res.send({
             success: true,
-            message: "Invoice deleted successfully",
-            voucherId: voucherId,
+            message: "Invoice and related batch details deleted successfully",
+            voucherId,
             stockReverted: true,
           });
         });
@@ -334,78 +454,12 @@ router.delete("/transactions/:id", async (req, res) => {
 
 
 
-
-
 // Get transaction with batch details
-router.get("/transactions/:id", (req, res) => {
-  const query = `
-    SELECT 
-      v.*, 
-      JSON_UNQUOTE(BatchDetails) as batch_details,
-      a.billing_address_line1,
-      a.billing_address_line2,
-      a.billing_city,
-      a.billing_pin_code,
-      a.billing_state,
-      a.shipping_address_line1,
-      a.shipping_address_line2,
-      a.shipping_city,
-      a.shipping_pin_code,
-      a.shipping_state,
-      a.gstin
-    FROM voucher v
-    LEFT JOIN accounts a ON v.PartyID = a.id
-    WHERE v.VoucherID = ?
-  `;
-    
-  db.query(query, [req.params.id], (err, results) => {
-    if (err) {
-      console.error('Error fetching transaction:', err);
-      return res.status(500).json({
-        success: false,
-        message: 'Database error',
-        error: err.message
-      });
-    }
-    
-    if (results.length === 0) {
-      return res.status(404).json({
-        success: false,
-        message: 'Transaction not found'
-      });
-    }
-    
-    const transaction = results[0];
-    
-    // Parse batch details from JSON string with better error handling
-    try {
-      if (transaction.batch_details) {
-        if (typeof transaction.batch_details === 'string') {
-          transaction.batch_details = JSON.parse(transaction.batch_details);
-        }
-      } else {
-        transaction.batch_details = [];
-      }
-    } catch (error) {
-      console.error('Error parsing batch details:', error);
-      transaction.batch_details = [];
-    }
-    
-    res.json({
-      success: true,
-      data: transaction
-    });
-  });
-});
-
-// ✅ Get transaction with batch details by voucherid (from voucherdetails table)
 // router.get("/transactions/:id", (req, res) => {
-//   const voucherId = req.params.id;
-
-//   // 1️⃣ Fetch voucher + account info
-//   const voucherQuery = `
+//   const query = `
 //     SELECT 
 //       v.*, 
+//       JSON_UNQUOTE(BatchDetails) as batch_details,
 //       a.billing_address_line1,
 //       a.billing_address_line2,
 //       a.billing_city,
@@ -421,65 +475,129 @@ router.get("/transactions/:id", (req, res) => {
 //     LEFT JOIN accounts a ON v.PartyID = a.id
 //     WHERE v.VoucherID = ?
 //   `;
-
-//   db.query(voucherQuery, [voucherId], (err, voucherResults) => {
+    
+//   db.query(query, [req.params.id], (err, results) => {
 //     if (err) {
-//       console.error("Error fetching voucher:", err);
+//       console.error('Error fetching transaction:', err);
 //       return res.status(500).json({
 //         success: false,
-//         message: "Database error fetching voucher",
-//         error: err.message,
+//         message: 'Database error',
+//         error: err.message
 //       });
 //     }
-
-//     if (voucherResults.length === 0) {
+    
+//     if (results.length === 0) {
 //       return res.status(404).json({
 //         success: false,
-//         message: "Voucher not found",
+//         message: 'Transaction not found'
 //       });
 //     }
-
-//     const transaction = voucherResults[0];
-
-//     // 2️⃣ Fetch batch details from voucherdetails table
-//     const detailsQuery = `
-//       SELECT 
-//         product, 
-//         product_id, 
-//         batch, 
-//         quantity, 
-//         price, 
-//         discount, 
-//         gst, 
-//         cgst, 
-//         sgst, 
-//         igst, 
-//         cess, 
-//         total
-//       FROM voucherdetails
-//       WHERE voucherid = ?
-//     `;
-
-//     db.query(detailsQuery, [voucherId], (detailsErr, detailsResults) => {
-//       if (detailsErr) {
-//         console.error("Error fetching batch details:", detailsErr);
-//         return res.status(500).json({
-//           success: false,
-//           message: "Database error fetching batch details",
-//           error: detailsErr.message,
-//         });
+    
+//     const transaction = results[0];
+    
+//     // Parse batch details from JSON string with better error handling
+//     try {
+//       if (transaction.batch_details) {
+//         if (typeof transaction.batch_details === 'string') {
+//           transaction.batch_details = JSON.parse(transaction.batch_details);
+//         }
+//       } else {
+//         transaction.batch_details = [];
 //       }
-
-//       // Attach batch details to transaction
-//       transaction.batch_details = detailsResults || [];
-
-//       res.json({
-//         success: true,
-//         data: transaction,
-//       });
+//     } catch (error) {
+//       console.error('Error parsing batch details:', error);
+//       transaction.batch_details = [];
+//     }
+    
+//     res.json({
+//       success: true,
+//       data: transaction
 //     });
 //   });
 // });
+
+// ✅ Get transaction with batch details by voucherid (from voucherdetails table)
+router.get("/transactions/:id", (req, res) => {
+  const voucherId = req.params.id;
+
+  // 1️⃣ Fetch voucher + account info
+  const voucherQuery = `
+    SELECT 
+      v.*, 
+      a.billing_address_line1,
+      a.billing_address_line2,
+      a.billing_city,
+      a.billing_pin_code,
+      a.billing_state,
+      a.shipping_address_line1,
+      a.shipping_address_line2,
+      a.shipping_city,
+      a.shipping_pin_code,
+      a.shipping_state,
+      a.gstin
+    FROM voucher v
+    LEFT JOIN accounts a ON v.PartyID = a.id
+    WHERE v.VoucherID = ?
+  `;
+
+  db.query(voucherQuery, [voucherId], (err, voucherResults) => {
+    if (err) {
+      console.error("Error fetching voucher:", err);
+      return res.status(500).json({
+        success: false,
+        message: "Database error fetching voucher",
+        error: err.message,
+      });
+    }
+
+    if (voucherResults.length === 0) {
+      return res.status(404).json({
+        success: false,
+        message: "Voucher not found",
+      });
+    }
+
+    const transaction = voucherResults[0];
+
+    // 2️⃣ Fetch batch details from voucherdetails table
+    const detailsQuery = `
+      SELECT 
+        product, 
+        product_id, 
+        batch, 
+        quantity, 
+        price, 
+        discount, 
+        gst, 
+        cgst, 
+        sgst, 
+        igst, 
+        cess, 
+        total
+      FROM voucherdetails
+      WHERE voucher_id = ?
+    `;
+
+    db.query(detailsQuery, [voucherId], (detailsErr, detailsResults) => {
+      if (detailsErr) {
+        console.error("Error fetching batch details:", detailsErr);
+        return res.status(500).json({
+          success: false,
+          message: "Database error fetching batch details",
+          error: detailsErr.message,
+        });
+      }
+
+      // Attach batch details to transaction
+      transaction.batch_details = detailsResults || [];
+
+      res.json({
+        success: true,
+        data: transaction,
+      });
+    });
+  });
+});
 
 
 // Get all transactions with batch details
