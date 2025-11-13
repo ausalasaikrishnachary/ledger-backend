@@ -3,10 +3,25 @@ const router = express.Router();
 const db = require('../db');
 const nodemailer = require('nodemailer');
 
-// Create Account
+// --------------------- CREATE ACCOUNT ---------------------
 router.post("/accounts", async (req, res) => {
-  let { name, email, phone_number, password, role, assigned_staff, staffid, entity_type, group, ...otherData } = req.body;
+  // Destructure request body with defaults
+  let {
+    name,
+    email,
+    phone_number,
+    password,
+    role,
+    assigned_staff,
+    staffid,
+    entity_type,
+    group,
+    discount = 0,    // default 0
+    Target = 100000, // default 100000
+    ...otherData
+  } = req.body;
 
+  // Supplier-specific adjustments
   if (group === 'SUPPLIERS') {
     assigned_staff = assigned_staff || null;
     staffid = staffid || null;
@@ -14,24 +29,24 @@ router.post("/accounts", async (req, res) => {
     role = 'supplier';
   }
 
-  const data = { 
-    name, 
-    email, 
-    phone_number, 
-    password, 
-    role, 
-    assigned_staff, 
-    staffid, 
+  // Prepare data object for DB insertion
+  const data = {
+    name,
+    email,
+    phone_number,
+    password,
+    role,
+    assigned_staff,
+    staffid,
     entity_type,
     group,
- discount: discount || 0, // Default to 0 if not provided
-    Target: Target || 100000,
-    ...otherData  };
-
+    discount,
+    Target,
+    ...otherData
+  };
+  // Replace undefined or empty strings with null
   Object.keys(data).forEach(key => {
-    if (data[key] === undefined || data[key] === '') {
-      data[key] = null;
-    }
+    if (data[key] === undefined || data[key] === '') data[key] = null;
   });
 
   const sql = "INSERT INTO accounts SET ?";
@@ -39,7 +54,7 @@ router.post("/accounts", async (req, res) => {
   try {
     const [result] = await db.promise().query(sql, data);
 
-    // Send email ONLY if role is retailer
+    // Send email only for retailer
     if (role === 'retailer') {
       const transporter = nodemailer.createTransport({
         service: "gmail",
@@ -47,9 +62,7 @@ router.post("/accounts", async (req, res) => {
           user: "bharathsiripuram98@gmail.com",
           pass: "alsishqgybtzonoj",
         },
-        tls: {
-          rejectUnauthorized: false,
-        },
+        tls: { rejectUnauthorized: false },
       });
 
       const mailOptions = {
@@ -76,7 +89,7 @@ Please keep this information secure.
           id: result.insertId,
           ...data,
         });
-      } catch (mailErr) {
+   } catch (mailErr) {
         console.error("Email Error:", mailErr);
         res.status(201).json({
           message: "Retailer added but failed to send email",
@@ -85,7 +98,6 @@ Please keep this information secure.
         });
       }
     } else {
-      // For supplier or other roles, don't send email
       res.status(201).json({
         message: "Supplier added successfully!",
         id: result.insertId,
@@ -94,19 +106,17 @@ Please keep this information secure.
     }
   } catch (dbErr) {
     console.error("DB Insert Error:", dbErr);
-    
     if (dbErr.code === 'ER_BAD_NULL_ERROR') {
-      return res.status(400).json({ 
+      return res.status(400).json({
         error: "Database constraint violation. Some required fields are missing.",
-        details: dbErr.sqlMessage 
+        details: dbErr.sqlMessage
       });
     }
-    
     res.status(500).json({ error: "Failed to add user to database" });
   }
 });
 
-// Other routes (Get All Accounts, Get Single Account, Update Account, Delete Account) remain unchanged
+// --------------------- GET ALL ACCOUNTS ---------------------
 router.get("/accounts", (req, res) => {
   db.query("SELECT * FROM accounts", (err, results) => {
     if (err) return res.status(500).send(err);
@@ -114,130 +124,50 @@ router.get("/accounts", (req, res) => {
   });
 });
 
-router.get("/accounts/:id", (req, res) => {
-  db.query("SELECT * FROM accounts WHERE id = ?", [req.params.id], (err, results) => {
-    if (err) return res.status(500).send(err);
-    res.send(results[0]);
-  });
-});
-
-// GET account by ID
+// --------------------- GET ACCOUNT BY ID ---------------------
 router.get("/accounts/:id", (req, res) => {
   const { id } = req.params;
-  
-  console.log('Fetching account with ID:', id);
-  
+
   db.query("SELECT * FROM accounts WHERE id = ?", [id], (err, results) => {
-    if (err) {
-      console.error('Database error:', err);
-      return res.status(500).send({ 
-        error: 'Database query failed',
-        details: err.message 
-      });
-    }
-    
-    if (results.length === 0) {
-      return res.status(404).send({ error: 'Account not found' });
-    }
-    
+    if (err) return res.status(500).send({ error: "Database query failed", details: err.message });
+    if (results.length === 0) return res.status(404).send({ error: "Account not found" });
     res.send(results[0]);
   });
 });
 
-// UPDATE account
+
+// --------------------- UPDATE ACCOUNT ---------------------
 router.put("/accounts/:id", (req, res) => {
   const { id } = req.params;
   const updates = req.body;
-  
-  console.log('Updating account ID:', id);
-  console.log('Update data:', updates);
-  
-  // Remove id from updates to prevent updating primary key
+
+  // Remove id to avoid updating primary key
   delete updates.id;
-  
-  // Check if there are any fields to update
+
   const fields = Object.keys(updates);
-  if (fields.length === 0) {
-    return res.status(400).send({ error: 'No fields to update' });
-  }
-  
-  // Build dynamic UPDATE query
+  if (fields.length === 0) return res.status(400).send({ error: 'No fields to update' });
+
   const setClause = fields.map(key => `\`${key}\` = ?`).join(', ');
-  const values = fields.map(field => {
-    let value = updates[field];
-    // Convert empty strings to null for database
-    if (value === '') return null;
-    return value;
-  });
-  
+  const values = fields.map(field => updates[field] === '' ? null : updates[field]);
+
   const query = `UPDATE accounts SET ${setClause} WHERE id = ?`;
-  
-  console.log('Executing query:', query);
-  console.log('With values:', [...values, id]);
-  
+
   db.query(query, [...values, id], (err, results) => {
-    if (err) {
-      console.error('Database error:', err);
-      return res.status(500).send({ 
-        error: 'Database update failed',
-        details: err.message,
-        sqlMessage: err.sqlMessage 
-      });
-    }
-    
-    if (results.affectedRows === 0) {
-      return res.status(404).send({ error: 'Account not found or no changes made' });
-    }
-    
-    res.send({ 
-      message: 'Account updated successfully', 
-      affectedRows: results.affectedRows 
-    });
+    if (err) return res.status(500).send({ error: 'Database update failed', details: err.message });
+    if (results.affectedRows === 0) return res.status(404).send({ error: 'Account not found or no changes made' });
+    res.send({ message: 'Account updated successfully', affectedRows: results.affectedRows });
   });
 });
 
-// DELETE account
+// --------------------- DELETE ACCOUNT ---------------------
 router.delete("/accounts/:id", (req, res) => {
   const { id } = req.params;
-  
-  console.log('Deleting account ID:', id);
-  
+
   db.query("DELETE FROM accounts WHERE id = ?", [id], (err, results) => {
-    if (err) {
-      console.error('Database error:', err);
-      return res.status(500).send({ 
-        error: 'Database delete failed',
-        details: err.message 
-      });
-    }
-    
-    if (results.affectedRows === 0) {
-      return res.status(404).send({ error: 'Account not found' });
-    }
-    
-    res.send({ 
-      message: 'Account deleted successfully',
-      affectedRows: results.affectedRows 
-    });
+    if (err) return res.status(500).send({ error: 'Database delete failed', details: err.message });
+    if (results.affectedRows === 0) return res.status(404).send({ error: 'Account not found' });
+    res.send({ message: 'Account deleted successfully', affectedRows: results.affectedRows });
   });
 });
-
-
-// router.put("/accounts/:id", (req, res) => {
-//   const data = req.body;
-//   db.query("UPDATE accounts SET ? WHERE id = ?", [data, req.params.id], (err, result) => {
-//     if (err) return res.status(500).send(err);
-//     res.send({ id: req.params.id, ...data });
-//   });
-// });
-
-// router.delete("/accounts/:id", (req, res) => {
-//   db.query("DELETE FROM accounts WHERE id = ?", [req.params.id], (err, result) => {
-//     if (err) return res.status(500).send(err);
-//     res.send({ message: "Deleted successfully." });
-//   });
-// });
-
-
 
 module.exports = router;
