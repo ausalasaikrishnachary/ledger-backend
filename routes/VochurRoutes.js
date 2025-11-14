@@ -1381,6 +1381,13 @@ router.put("/transactions/:id", async (req, res) => {
           }
         }
 
+        // 🔴 NEW: Delete existing voucherdetails records for this voucher_id
+        await queryPromise(
+          "DELETE FROM voucherdetails WHERE voucher_id = ?",
+          [voucherId],
+          connection
+        );
+
         // 3️⃣ Update voucher record
         let newBatchDetails = [];
         if (updateData.batchDetails) {
@@ -1408,6 +1415,33 @@ router.put("/transactions/:id", async (req, res) => {
           ],
           connection
         );
+
+        // 🔴 NEW: Insert new voucherdetails records
+        if (newBatchDetails && newBatchDetails.length > 0) {
+          for (const item of newBatchDetails) {
+            await queryPromise(
+              `INSERT INTO voucherdetails 
+                (voucher_id, product, product_id, batch, quantity, price, discount, gst, cgst, sgst, igst, cess, total) 
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+              [
+                voucherId,
+                item.product || '',
+                item.product_id || '',
+                item.batch || '',
+                parseFloat(item.quantity) || 0,
+                parseFloat(item.price) || 0,
+                parseFloat(item.discount) || 0,
+                parseFloat(item.gst) || 0,
+                parseFloat(item.cgst) || 0,
+                parseFloat(item.sgst) || 0,
+                parseFloat(item.igst) || 0,
+                parseFloat(item.cess) || 0,
+                parseFloat(item.total) || 0
+              ],
+              connection
+            );
+          }
+        }
 
         // 4️⃣ Apply new stock changes in batches
         for (const item of newBatchDetails) {
@@ -1450,6 +1484,121 @@ router.put("/transactions/:id", async (req, res) => {
     });
   });
 });
+// router.put("/transactions/:id", async (req, res) => {
+//   const voucherId = req.params.id;
+//   const updateData = req.body;
+
+//   db.getConnection((err, connection) => {
+//     if (err) return res.status(500).send({ error: 'Database connection failed' });
+
+//     connection.beginTransaction(async (err) => {
+//       if (err) return res.status(500).send({ error: 'Transaction failed to start' });
+
+//       try {
+//         // 1️⃣ Get original voucher
+//         const originalVoucher = await queryPromise(
+//           "SELECT * FROM voucher WHERE VoucherID = ?",
+//           [voucherId],
+//           connection
+//         );
+//         if (originalVoucher.length === 0) throw new Error('Transaction not found');
+
+//         let originalBatchDetails = [];
+//         try {
+//           originalBatchDetails = originalVoucher[0].BatchDetails
+//             ? JSON.parse(originalVoucher[0].BatchDetails)
+//             : [];
+//         } catch (err) { originalBatchDetails = []; }
+
+//         // 2️⃣ Reverse old stock in batches
+//         for (const item of originalBatchDetails) {
+//           if (!item.batch || !item.product_id) continue;
+//           const batchResult = await queryPromise(
+//             "SELECT id, quantity, stock_out FROM batches WHERE product_id = ? AND batch_number = ?",
+//             [item.product_id, item.batch],
+//             connection
+//           );
+
+//           if (batchResult.length > 0) {
+//             const batch = batchResult[0];
+//             const qty = parseFloat(item.quantity) || 0;
+//             await queryPromise(
+//               "UPDATE batches SET quantity = quantity + ?, stock_out = stock_out - ? WHERE id = ?",
+//               [qty, qty, batch.id],
+//               connection
+//             );
+//           }
+//         }
+
+//         // 3️⃣ Update voucher record
+//         let newBatchDetails = [];
+//         if (updateData.batchDetails) {
+//           newBatchDetails = Array.isArray(updateData.batchDetails)
+//             ? updateData.batchDetails
+//             : JSON.parse(updateData.batchDetails || '[]');
+//         }
+
+//         const totalQty = newBatchDetails.reduce((sum, item) => sum + (parseFloat(item.quantity) || 0), 0);
+
+//         await queryPromise(
+//           `UPDATE voucher 
+//             SET InvoiceNumber = ?, Date = ?, PartyName = ?, BasicAmount = ?, TaxAmount = ?, TotalAmount = ?, TotalQty = ?, BatchDetails = ?
+//             WHERE VoucherID = ?`,
+//           [
+//             updateData.invoiceNumber || originalVoucher[0].InvoiceNumber,
+//             updateData.invoiceDate || originalVoucher[0].Date,
+//             updateData.supplierInfo?.name || originalVoucher[0].PartyName,
+//             parseFloat(updateData.taxableAmount) || parseFloat(originalVoucher[0].BasicAmount) || 0,
+//             parseFloat(updateData.totalGST) || parseFloat(originalVoucher[0].TaxAmount) || 0,
+//             parseFloat(updateData.grandTotal) || parseFloat(originalVoucher[0].TotalAmount) || 0,
+//             totalQty,
+//             JSON.stringify(newBatchDetails),
+//             voucherId
+//           ],
+//           connection
+//         );
+
+//         // 4️⃣ Apply new stock changes in batches
+//         for (const item of newBatchDetails) {
+//           if (!item.batch || !item.product_id) continue;
+//           const batchResult = await queryPromise(
+//             "SELECT id, quantity, stock_out FROM batches WHERE product_id = ? AND batch_number = ?",
+//             [item.product_id, item.batch],
+//             connection
+//           );
+
+//           if (batchResult.length > 0) {
+//             const batch = batchResult[0];
+//             const qty = parseFloat(item.quantity) || 0;
+//             if (batch.quantity < qty) throw new Error(`Insufficient batch quantity for ${item.batch}`);
+//             await queryPromise(
+//               "UPDATE batches SET quantity = quantity - ?, stock_out = stock_out + ? WHERE id = ?",
+//               [qty, qty, batch.id],
+//               connection
+//             );
+//           }
+//         }
+
+//         connection.commit((commitErr) => {
+//           if (commitErr) {
+//             return connection.rollback(() => {
+//               connection.release();
+//               res.status(500).send({ error: commitErr.message });
+//             });
+//           }
+//           connection.release();
+//           res.json({ success: true, message: 'Transaction updated successfully', voucherId });
+//         });
+
+//       } catch (error) {
+//         connection.rollback(() => {
+//           connection.release();
+//           res.status(500).json({ success: false, message: error.message });
+//         });
+//       }
+//     });
+//   });
+// });
 
 
 
@@ -1534,5 +1683,44 @@ function recalculateRunningBalances(transactions) {
   });
 }
 
+
+
+router.get("/voucherdetails", async (req, res) => {
+  try {
+    const query = `
+      SELECT 
+        vd.*,
+        v.InvoiceNumber,
+        v.Date as voucher_date,
+        v.PartyName,
+        v.TotalAmount as voucher_total_amount
+      FROM voucherdetails vd
+      LEFT JOIN voucher v ON vd.voucher_id = v.VoucherID
+      ORDER BY vd.created_at DESC
+    `;
+
+    db.query(query, (err, results) => {
+      if (err) {
+        console.error("Error fetching voucher details:", err);
+        return res.status(500).json({ 
+          success: false, 
+          message: "Error fetching voucher details" 
+        });
+      }
+
+      res.json({
+        success: true,
+        data: results,
+        totalCount: results.length
+      });
+    });
+  } catch (error) {
+    console.error("Error in voucherdetails API:", error);
+    res.status(500).json({ 
+      success: false, 
+      message: "Internal server error" 
+    });
+  }
+});
 
 module.exports = router;
