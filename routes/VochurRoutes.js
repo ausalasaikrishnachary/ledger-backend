@@ -1689,14 +1689,29 @@ router.get("/voucherdetails", async (req, res) => {
   try {
     const query = `
       SELECT 
-        vd.*,
-        v.InvoiceNumber,
-        v.Date as voucher_date,
-        v.PartyName,
-        v.TotalAmount as voucher_total_amount
+        MIN(vd.id) as id,
+        vd.product,
+        vd.product_id,
+        vd.batch,
+        SUM(vd.quantity) as quantity,
+        SUM(vd.price) as price,
+        SUM(vd.discount) as discount,
+        SUM(vd.gst) as gst,
+        SUM(vd.cgst) as cgst,
+        SUM(vd.sgst) as sgst,
+        SUM(vd.igst) as igst,
+        SUM(vd.cess) as cess,
+        SUM(vd.total) as total,
+        MIN(vd.created_at) as created_at,
+        MAX(vd.update_at) as update_at,
+        GROUP_CONCAT(DISTINCT v.InvoiceNumber SEPARATOR ', ') as InvoiceNumber,
+        GROUP_CONCAT(DISTINCT v.PartyName SEPARATOR ', ') as PartyName,
+        GROUP_CONCAT(DISTINCT vd.voucher_id) as voucher_ids,
+        COUNT(*) as transaction_count
       FROM voucherdetails vd
       LEFT JOIN voucher v ON vd.voucher_id = v.VoucherID
-      ORDER BY vd.created_at DESC
+      GROUP BY vd.product_id, vd.batch, vd.product
+      ORDER BY created_at DESC
     `;
 
     db.query(query, (err, results) => {

@@ -692,7 +692,6 @@ router.get('/receipts/:id', async (req, res) => {
 //   }
 // });
 
-
 router.put('/voucher/:id', upload.single('transaction_proof'), async (req, res) => {
   const voucherId = req.params.id;
   let connection;
@@ -712,9 +711,34 @@ router.put('/voucher/:id', upload.single('transaction_proof'), async (req, res) 
     const updateFields = [];
     const updateValues = [];
 
+    // Special handling for paid_amount - update both paid_amount and TotalAmount
+    if (req.body.paid_amount !== undefined) {
+      const paidAmount = req.body.paid_amount;
+      
+      // Update both paid_amount and TotalAmount with the same value
+      updateFields.push('paid_amount = ?', 'TotalAmount = ?');
+      updateValues.push(paidAmount, paidAmount);
+      
+      // Calculate balance_amount (should be 0 since both are same)
+      const balanceAmount = 0;
+      updateFields.push('balance_amount = ?');
+      updateValues.push(balanceAmount);
+      
+      // Update status to Paid since full amount is paid
+      updateFields.push('status = ?');
+      updateValues.push('Paid');
+      
+      // Update paid_date to current timestamp
+      updateFields.push('paid_date = ?');
+      updateValues.push(new Date());
+    }
+
+    // Add other fields from req.body (excluding paid_amount since we already handled it)
     for (const [key, value] of Object.entries(req.body)) {
-      updateFields.push(`${key} = ?`);
-      updateValues.push(value === undefined ? null : value);
+      if (key !== 'paid_amount') { // Skip paid_amount as we already handled it
+        updateFields.push(`${key} = ?`);
+        updateValues.push(value === undefined ? null : value);
+      }
     }
 
     // Add uploaded file if exists
@@ -760,6 +784,74 @@ router.put('/voucher/:id', upload.single('transaction_proof'), async (req, res) 
     res.status(500).json({ success: false, error: error.message });
   }
 });
+
+// router.put('/voucher/:id', upload.single('transaction_proof'), async (req, res) => {
+//   const voucherId = req.params.id;
+//   let connection;
+
+//   try {
+//     // Get DB connection
+//     connection = await new Promise((resolve, reject) => {
+//       db.getConnection((err, conn) => (err ? reject(err) : resolve(conn)));
+//     });
+
+//     // Start transaction
+//     await new Promise((resolve, reject) => {
+//       connection.beginTransaction(err => (err ? reject(err) : resolve()));
+//     });
+
+//     // Build update dynamically from req.body
+//     const updateFields = [];
+//     const updateValues = [];
+
+//     for (const [key, value] of Object.entries(req.body)) {
+//       updateFields.push(`${key} = ?`);
+//       updateValues.push(value === undefined ? null : value);
+//     }
+
+//     // Add uploaded file if exists
+//     if (req.file) {
+//       updateFields.push(`transaction_proof_filename = ?`);
+//       updateValues.push(req.file.filename);
+//     }
+
+//     // Always append voucherId for WHERE
+//     updateValues.push(voucherId);
+
+//     // Execute update
+//     const sql = `UPDATE voucher SET ${updateFields.join(', ')} WHERE VoucherID = ?`;
+
+//     await new Promise((resolve, reject) => {
+//       connection.execute(sql, updateValues, (err, result) =>
+//         err ? reject(err) : resolve(result)
+//       );
+//     });
+
+//     // Commit
+//     await new Promise((resolve, reject) => {
+//       connection.commit(err => (err ? reject(err) : resolve()));
+//     });
+
+//     connection.release();
+
+//     res.json({
+//       success: true,
+//       message: 'Voucher updated successfully',
+//       VoucherID: voucherId,
+//     });
+
+//   } catch (error) {
+//     console.error('Error updating voucher:', error);
+//     if (connection) {
+//       await new Promise(resolve => connection.rollback(() => resolve()));
+//       connection.release();
+//     }
+
+//     if (req.file) fs.unlinkSync(req.file.path);
+
+//     res.status(500).json({ success: false, error: error.message });
+//   }
+// });
 
 
 // ✅ DELETE Receipt (without touching ledger table)
