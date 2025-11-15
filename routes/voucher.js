@@ -885,4 +885,29 @@ router.get('/sales-receipt-totals', (req, res) => {
 });
 
 
+
+
+
+
+
+
+
+
+router.get('/vouchersnumber', (req, res) => {
+  const query = `
+    SELECT VoucherID, TransactionType, VchNo 
+    FROM voucher 
+    WHERE TransactionType = 'Sales'
+    ORDER BY VoucherID DESC
+  `;
+  db.query(query, (err, results) => {
+    if (err) {
+      console.error(err);
+      return res.status(500).json({ error: 'Database query failed' });
+    }
+    res.json(results);
+  });
+});
+
+
 module.exports = router;
