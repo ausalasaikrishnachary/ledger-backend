@@ -179,7 +179,7 @@ router.post('/receipts', upload.single('transaction_proof'), async (req, res) =>
     invoice_number || null, receipt_date || currentDate, 'Immediate',
     0, 0, 0, 0, 0,
     receiptAmount, 0, receiptAmount, null, null,
-    bank_name || null, cashBankAccountID, cashBankAccountName,
+    bank_name || null, retailer_id, cashBankAccountName,
     retailer_id || null, retailer_name || '', receiptAmount, receiptAmount,
     currentDate, 0, 0, 0, 0, 0, 0, 'GST', '[]',
     receiptAmount, currentDate, 0, receipt_number, 'Paid',
