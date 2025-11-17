@@ -42,15 +42,21 @@ router.get("/next-creditnote-number", (req, res) => {
 router.get("/invoice-details/:invoiceNumber", (req, res) => {
   const { invoiceNumber } = req.params;
 
-  // Fetch invoice + account data
+  // Fetch invoice + account data with PartyID and AccountID
   const invoiceQuery = `
     SELECT 
       v.VoucherID, 
       v.InvoiceNumber, 
-      v.PartyID, 
+      v.PartyID,
+      v.AccountID,
+      v.TransactionType,
+      v.Date,
+      v.TotalAmount,
+      v.TaxAmount,
+      v.Subtotal,
       a.*
     FROM voucher v
-    JOIN accounts a ON v.PartyID = a.id
+    LEFT JOIN accounts a ON v.PartyID = a.id OR v.AccountID = a.id
     WHERE v.InvoiceNumber = ?
   `;
 
@@ -95,13 +101,65 @@ router.get("/invoice-details/:invoiceNumber", (req, res) => {
         return res.status(500).send(err);
       }
 
-      // Add details into response
-      invoiceData.items = voucherDetails;
-      res.json(invoiceData);
+      // Prepare the response with all required fields
+      const responseData = {
+        // Invoice basic info
+        VoucherID: invoiceData.VoucherID,
+        InvoiceNumber: invoiceData.InvoiceNumber,
+        TransactionType: invoiceData.TransactionType,
+        Date: invoiceData.Date,
+        TotalAmount: invoiceData.TotalAmount,
+        TaxAmount: invoiceData.TaxAmount,
+        Subtotal: invoiceData.Subtotal,
+        
+        // Account and Party IDs
+        PartyID: invoiceData.PartyID,
+        AccountID: invoiceData.AccountID,
+        
+        // Customer/Account information
+        business_name: invoiceData.business_name,
+        email: invoiceData.email,
+        mobile_number: invoiceData.mobile_number,
+        gstin: invoiceData.gstin,
+        
+        // Address fields
+        billing_address_line1: invoiceData.billing_address_line1,
+        billing_address_line2: invoiceData.billing_address_line2,
+        billing_city: invoiceData.billing_city,
+        billing_pin_code: invoiceData.billing_pin_code,
+        billing_state: invoiceData.billing_state,
+        billing_country: invoiceData.billing_country,
+        billing_branch_name: invoiceData.billing_branch_name,
+        billing_gstin: invoiceData.billing_gstin,
+        
+        shipping_address_line1: invoiceData.shipping_address_line1,
+        shipping_address_line2: invoiceData.shipping_address_line2,
+        shipping_city: invoiceData.shipping_city,
+        shipping_pin_code: invoiceData.shipping_pin_code,
+        shipping_state: invoiceData.shipping_state,
+        shipping_country: invoiceData.shipping_country,
+        shipping_branch_name: invoiceData.shipping_branch_name,
+        shipping_gstin: invoiceData.shipping_gstin,
+        
+        // Additional account fields if needed
+        account_id: invoiceData.id, // This is the account ID from accounts table
+        party_id: invoiceData.PartyID, // Same as PartyID for consistency
+        
+        // Items from voucherdetails
+        items: voucherDetails
+      };
+
+      console.log("📦 Invoice details response:", {
+        PartyID: responseData.PartyID,
+        AccountID: responseData.AccountID,
+        account_id: responseData.account_id,
+        party_id: responseData.party_id
+      });
+
+      res.json(responseData);
     });
   });
 });
-
 // Get sales invoices for credit note
 router.get("/credit-notesales", (req, res) => { 
   const query = `
@@ -179,9 +237,6 @@ router.post('/create-credit-note', (req, res) => {
         const product_id = firstItem.product_id || null;
         const batch_number = firstItem.batch || null;
 
-        console.log("🔍 Debug - Product ID:", product_id);
-        console.log("🔍 Debug - Batch Number:", batch_number);
-        console.log("🔍 Debug - All items:", items);
 
         // Get batch_id from batches table using product_id and batch_number
         const getBatchIdQuery = `SELECT id FROM batches WHERE product_id = ? AND batch_number = ?`;
@@ -268,8 +323,6 @@ router.post('/create-credit-note', (req, res) => {
                 return rollback(connection, res, stockErr);
               }
 
-              // REMOVED: updateNextCreditNoteNumber function call
-              // Commit transaction directly after stock update
               connection.commit((commitErr) => {
                 if (commitErr) {
                   return rollback(connection, res, commitErr);
@@ -350,7 +403,8 @@ function calculateTotalsFromItems(items) {
   return totals;
 }
 
-// Function to update stock for credit note (INCREASE stock)
+// Function to update stock for credit note (INCREASE stock_in only)
+// Function to update stock for credit note (INCREASE stock_in and quantity)
 function updateStockForCreditNote(connection, items, callback) {
   if (!items || items.length === 0) {
     return callback(null);
@@ -373,12 +427,12 @@ function updateStockForCreditNote(connection, items, callback) {
       return;
     }
 
-    // UPDATE: Increase stock_in and quantity in batches table
+    // UPDATE: Increase both stock_in and quantity in batches table
     const updateStockQuery = `
       UPDATE batches 
       SET 
         stock_in = stock_in + ?,
-      
+        quantity = quantity + ?,
         updated_at = NOW()
       WHERE product_id = ? AND batch_number = ?
     `;
