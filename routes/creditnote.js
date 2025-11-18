@@ -3,41 +3,76 @@ const router = express.Router();
 const db = require("../db"); // your db connection
 
 // 🧮 Generate Next Credit Note Number
-router.get("/next-creditnote-number", (req, res) => {
-  const query = "SELECT VchNo FROM voucher ORDER BY VoucherID DESC LIMIT 1";
+// router.get("/next-creditnote-number", (req, res) => {
+//   const query = "SELECT VchNo FROM voucher ORDER BY VoucherID DESC LIMIT 1";
 
-  db.query(query, (err, result) => {
-    if (err) {
-      console.error("Database error:", err);
-      return res.status(500).json({ 
-        error: "Database error",
-        message: err.message 
-      });
-    }
+//   db.query(query, (err, result) => {
+//     if (err) {
+//       console.error("Database error:", err);
+//       return res.status(500).json({ 
+//         error: "Database error",
+//         message: err.message 
+//       });
+//     }
 
-    let nextNumber = "CNOTE0001";
+//     let nextNumber = "CNOTE0001";
     
-    if (result.length > 0 && result[0].VchNo) {
-      const lastNumber = result[0].VchNo;
+//     if (result.length > 0 && result[0].VchNo) {
+//       const lastNumber = result[0].VchNo;
       
-      // Extract numeric part and increment
-      const match = lastNumber.match(/CNOTE(\d+)/);
-      if (match) {
-        const num = parseInt(match[1]) + 1;
-        nextNumber = `CNOTE${num.toString().padStart(4, "0")}`;
-      } else {
-        // If format doesn't match, start from CNOTE0001
-        nextNumber = "CNOTE0001";
-      }
-    }
+//       // Extract numeric part and increment
+//       const match = lastNumber.match(/CNOTE(\d+)/);
+//       if (match) {
+//         const num = parseInt(match[1]) + 1;
+//         nextNumber = `CNOTE${num.toString().padStart(4, "0")}`;
+//       } else {
+//         // If format doesn't match, start from CNOTE0001
+//         nextNumber = "CNOTE0001";
+//       }
+//     }
 
-    console.log("Next credit note number:", nextNumber);
-    res.json({ 
-      nextCreditNoteNumber: nextNumber,
-      success: true
+//     console.log("Next credit note number:", nextNumber);
+//     res.json({ 
+//       nextCreditNoteNumber: nextNumber,
+//       success: true
+//     });
+//   });
+// });
+
+
+router.get("/next-creditnote-number", async (req, res) => {
+  try {
+    const query = `
+      SELECT MAX(CAST(SUBSTRING(VchNo, 6) AS UNSIGNED)) as maxNumber
+      FROM voucher
+      WHERE TransactionType = 'CreditNote'
+      AND VchNo LIKE 'CNOTE%'
+    `;
+
+    db.query(query, (err, results) => {
+      if (err) {
+        console.error('Error fetching next credit note number:', err);
+        return res.status(500).send({ error: 'Failed to get next credit note number' });
+      }
+
+      let nextNumber = 1;
+      if (results[0].maxNumber !== null && !isNaN(results[0].maxNumber)) {
+        nextNumber = parseInt(results[0].maxNumber) + 1;
+      }
+
+      const nextCreditNoteNumber = `CNOTE${nextNumber.toString().padStart(3, '0')}`;
+
+      res.send({ nextCreditNoteNumber });
     });
-  });
+  } catch (error) {
+    console.error('Error in next-creditnote-number:', error);
+    res.status(500).send({ error: 'Internal server error' });
+  }
 });
+
+
+
+
 // Get invoice details
 router.get("/invoice-details/:invoiceNumber", (req, res) => {
   const { invoiceNumber } = req.params;
@@ -482,53 +517,57 @@ function rollback(connection, res, error) {
 router.get("/credit-notes-table", (req, res) => {
   const query = `
     SELECT 
-      VoucherID,
-      TransactionType,
-      VchNo,
-      product_id,
-      batch_id,
-      InvoiceNumber,
-      Date,
-      PaymentTerms,
-      Freight,
-      TotalQty,
-      TotalPacks,
-      TotalQty1,
-      TaxAmount,
-      Subtotal,
-      BillSundryAmount,
-      TotalAmount,
-      ChequeNo,
-      ChequeDate,
-      BankName,
-      AccountID,
-      AccountName,
-      PartyID,
-      PartyName,
-      BasicAmount,
-      ValueOfGoods,
-      EntryDate,
-      SGSTPercentage,
-      CGSTPercentage,
-      IGSTPercentage,
-      SGSTAmount,
-      CGSTAmount,
-      IGSTAmount,
-      TaxSystem,
-      BatchDetails,
-      paid_amount,
-      created_at,
-      balance_amount,
-      receipt_number,
-      status,
-      paid_date,
-      pdf_data,
-      DC,
-      pdf_file_name,
-      pdf_created_at
-    FROM voucher
-    WHERE TransactionType = 'creditnote' 
-    ORDER BY VoucherID DESC
+      v.VoucherID,
+      v.TransactionType,
+      v.VchNo,
+      v.product_id,
+      v.batch_id,
+      v.InvoiceNumber,
+      v.Date,
+      v.PaymentTerms,
+      v.Freight,
+      v.TotalQty,
+      v.TotalPacks,
+      v.TotalQty1,
+      v.TaxAmount,
+      v.Subtotal,
+      v.BillSundryAmount,
+      v.TotalAmount,
+      v.ChequeNo,
+      v.ChequeDate,
+      v.BankName,
+      v.AccountID,
+      
+      -- Fetch correct Party ID and Name from accounts table
+      v.PartyID,
+      a.name AS PartyName,
+      a.id AS AccountPartyID,
+
+      v.BasicAmount,
+      v.ValueOfGoods,
+      v.EntryDate,
+      v.SGSTPercentage,
+      v.CGSTPercentage,
+      v.IGSTPercentage,
+      v.SGSTAmount,
+      v.CGSTAmount,
+      v.IGSTAmount,
+      v.TaxSystem,
+      v.BatchDetails,
+      v.paid_amount,
+      v.created_at,
+      v.balance_amount,
+      v.receipt_number,
+      v.status,
+      v.paid_date,
+      v.pdf_data,
+      v.DC,
+      v.pdf_file_name,
+      v.pdf_created_at
+    FROM voucher v
+    LEFT JOIN accounts a ON v.PartyID = a.id
+    WHERE v.TransactionType = 'creditnote'
+    ORDER BY v.VoucherID DESC
   `;
 
   db.query(query, (err, results) => {
@@ -549,6 +588,7 @@ router.get("/credit-notes-table", (req, res) => {
     });
   });
 });
+
 
 
 module.exports = router;
