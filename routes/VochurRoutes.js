@@ -11,20 +11,20 @@ router.get("/next-invoice-number", async (req, res) => {
       WHERE TransactionType = 'Sales' 
       AND InvoiceNumber LIKE 'INV%'
     `;
-    
+
     db.query(query, (err, results) => {
       if (err) {
         console.error('Error fetching next invoice number:', err);
         return res.status(500).send({ error: 'Failed to get next invoice number' });
       }
-      
+
       let nextNumber = 1;
       if (results[0].maxNumber !== null && !isNaN(results[0].maxNumber)) {
         nextNumber = parseInt(results[0].maxNumber) + 1;
       }
-      
+
       const nextInvoiceNumber = `INV${nextNumber.toString().padStart(3, '0')}`;
-      
+
       res.send({ nextInvoiceNumber });
     });
   } catch (error) {
@@ -47,9 +47,9 @@ router.get("/next-invoice-number", async (req, res) => {
 router.post("/transactions/:id/pdf", async (req, res) => {
   const voucherId = req.params.id;
   const { pdfData, fileName } = req.body;
-  
+
   console.log('Storing PDF for voucher:', voucherId);
-  
+
   if (!pdfData || !fileName) {
     return res.status(400).json({
       success: false,
@@ -63,7 +63,7 @@ router.post("/transactions/:id/pdf", async (req, res) => {
       SET pdf_data = ?, pdf_file_name = ?, pdf_created_at = NOW() 
       WHERE VoucherID = ?
     `;
-    
+
     db.query(updateQuery, [pdfData, fileName, voucherId], (err, results) => {
       if (err) {
         console.error('Error storing PDF:', err);
@@ -73,14 +73,14 @@ router.post("/transactions/:id/pdf", async (req, res) => {
           error: err.message
         });
       }
-      
+
       if (results.affectedRows === 0) {
         return res.status(404).json({
           success: false,
           message: 'Voucher not found'
         });
       }
-      
+
       console.log('PDF stored successfully for voucher:', voucherId);
       res.json({
         success: true,
@@ -105,13 +105,13 @@ router.post("/transactions/:id/pdf", async (req, res) => {
 // Get PDF data for invoice
 router.get("/transactions/:id/pdf", (req, res) => {
   const voucherId = req.params.id;
-  
+
   const query = `
     SELECT pdf_data, pdf_file_name, pdf_created_at 
     FROM voucher 
     WHERE VoucherID = ? AND pdf_data IS NOT NULL
   `;
-  
+
   db.query(query, [voucherId], (err, results) => {
     if (err) {
       console.error('Error fetching PDF:', err);
@@ -121,14 +121,14 @@ router.get("/transactions/:id/pdf", (req, res) => {
         error: err.message
       });
     }
-    
+
     if (results.length === 0) {
       return res.status(404).json({
         success: false,
         message: 'PDF not found for this invoice'
       });
     }
-    
+
     const pdfInfo = results[0];
     res.json({
       success: true,
@@ -142,15 +142,15 @@ router.get("/transactions/:id/pdf", (req, res) => {
 // Download PDF endpoint
 router.get("/transactions/:id/download-pdf", (req, res) => {
   const voucherId = req.params.id;
-  
+
   console.log('Downloading PDF for voucher:', voucherId);
-  
+
   const query = `
     SELECT pdf_data, pdf_file_name 
     FROM voucher 
     WHERE VoucherID = ? AND pdf_data IS NOT NULL
   `;
-  
+
   db.query(query, [voucherId], (err, results) => {
     if (err) {
       console.error('Error fetching PDF for download:', err);
@@ -159,7 +159,7 @@ router.get("/transactions/:id/download-pdf", (req, res) => {
         message: 'Failed to fetch PDF'
       });
     }
-    
+
     if (results.length === 0) {
       console.log('PDF not found for voucher:', voucherId);
       return res.status(404).json({
@@ -167,31 +167,31 @@ router.get("/transactions/:id/download-pdf", (req, res) => {
         message: 'PDF not found for this invoice'
       });
     }
-    
+
     const pdfInfo = results[0];
     console.log('PDF found:', pdfInfo.pdf_file_name);
-    
+
     try {
       // Extract base64 data (remove data URL prefix if present)
       let base64Data = pdfInfo.pdf_data;
       if (base64Data.startsWith('data:application/pdf;base64,')) {
         base64Data = base64Data.replace('data:application/pdf;base64,', '');
       }
-      
+
       // Convert base64 to buffer
       const pdfBuffer = Buffer.from(base64Data, 'base64');
-      
+
       // Set headers for file download
       res.setHeader('Content-Type', 'application/pdf');
       res.setHeader('Content-Disposition', `attachment; filename="${pdfInfo.pdf_file_name}"`);
       res.setHeader('Content-Length', pdfBuffer.length);
       res.setHeader('Cache-Control', 'no-cache');
-      
+
       console.log('Sending PDF buffer, size:', pdfBuffer.length);
-      
+
       // Send the PDF buffer
       res.send(pdfBuffer);
-      
+
     } catch (error) {
       console.error('Error processing PDF data:', error);
       res.status(500).json({
@@ -475,7 +475,7 @@ router.delete("/transactions/:id", async (req, res) => {
 //     LEFT JOIN accounts a ON v.PartyID = a.id
 //     WHERE v.VoucherID = ?
 //   `;
-    
+
 //   db.query(query, [req.params.id], (err, results) => {
 //     if (err) {
 //       console.error('Error fetching transaction:', err);
@@ -485,16 +485,16 @@ router.delete("/transactions/:id", async (req, res) => {
 //         error: err.message
 //       });
 //     }
-    
+
 //     if (results.length === 0) {
 //       return res.status(404).json({
 //         success: false,
 //         message: 'Transaction not found'
 //       });
 //     }
-    
+
 //     const transaction = results[0];
-    
+
 //     // Parse batch details from JSON string with better error handling
 //     try {
 //       if (transaction.batch_details) {
@@ -508,7 +508,7 @@ router.delete("/transactions/:id", async (req, res) => {
 //       console.error('Error parsing batch details:', error);
 //       transaction.batch_details = [];
 //     }
-    
+
 //     res.json({
 //       success: true,
 //       data: transaction
@@ -603,13 +603,13 @@ router.get("/transactions/:id", (req, res) => {
 // Get all transactions with batch details
 router.get("/transactions", (req, res) => {
   const query = "SELECT *, JSON_UNQUOTE(BatchDetails) as batch_details FROM voucher ORDER BY VoucherID DESC";
-  
+
   db.query(query, (err, results) => {
     if (err) {
       console.error('Error fetching transactions:', err);
       return res.status(500).send(err);
     }
-    
+
     // Parse batch details for each transaction
     results.forEach(transaction => {
       try {
@@ -623,7 +623,7 @@ router.get("/transactions", (req, res) => {
         transaction.batch_details = [];
       }
     });
-    
+
     res.send(results);
   });
 });
@@ -632,7 +632,7 @@ router.get("/transactions", (req, res) => {
 // router.post("/transaction", (req, res) => {
 //   const transactionData = req.body;
 //   console.log('Received sales transaction data:', transactionData);
-  
+
 //   db.getConnection((err, connection) => {
 //     if (err) {
 //       console.error('Database connection error:', err);
@@ -679,7 +679,7 @@ router.get("/transactions", (req, res) => {
 //             ORDER BY created_at DESC, id DESC 
 //             LIMIT 1
 //           `;
-          
+
 //           connection.query(getBalanceQuery, [accountID], (balanceErr, balanceResults) => {
 //             if (balanceErr) {
 //               console.error('Error fetching balance:', balanceErr);
@@ -696,10 +696,10 @@ router.get("/transactions", (req, res) => {
 
 //             const currentAmount = parseFloat(amount);
 //             const currentPaidAmount = parseFloat(paidAmount);
-            
+
 //             // Calculate new balance correctly: previous balance + sales amount (debit)
 //             const newBalanceAfterSales = previousBalance + currentAmount;
-            
+
 //             // Calculate final balance after payment (if any)
 //             const finalBalance = newBalanceAfterSales - currentPaidAmount;
 
@@ -820,7 +820,7 @@ router.get("/transactions", (req, res) => {
 //           console.error('Sales transaction error:', error);
 //           connection.rollback(() => {
 //             connection.release();
-            
+
 //             if (error.code === 'ER_BAD_FIELD_ERROR') {
 //               console.error('Database field error - checking table structure');
 //               connection.query("SHOW COLUMNS FROM voucher", (structErr, structResults) => {
@@ -831,7 +831,7 @@ router.get("/transactions", (req, res) => {
 //                 }
 //               });
 //             }
-            
+
 //             res.status(500).send({ 
 //               error: 'Sales transaction failed', 
 //               details: error.message,
@@ -1073,7 +1073,7 @@ router.post("/transaction", (req, res) => {
           }
 
           connection.release();
-          
+
           // Return appropriate response based on transaction type
           if (transactionType === "CreditNote") {
             res.send({
@@ -1081,6 +1081,14 @@ router.post("/transaction", (req, res) => {
               message: "Credit note created successfully",
               voucherId,
               creditNoteNumber: vchNo,
+              invoiceNumber,
+              batchDetails,
+            });
+          } else if (transactionType === "Purchase") {
+            res.send({
+              success: true,
+              message: "Purchase transaction completed successfully",
+              voucherId,
               invoiceNumber,
               batchDetails,
             });
@@ -1120,7 +1128,7 @@ const processTransaction = async (transactionData, transactionType, connection) 
 
   // 2️⃣ Parse batch details - handle both batchDetails and items arrays
   let batchDetails = [];
-  
+
   if (Array.isArray(transactionData.batchDetails)) {
     batchDetails = transactionData.batchDetails;
   } else if (Array.isArray(transactionData.items)) {
@@ -1148,38 +1156,43 @@ const processTransaction = async (transactionData, transactionType, connection) 
 
   console.log("Processed batch details:", batchDetails);
 
-  // 3️⃣ Determine VchNo and InvoiceNumber based on transaction type
-  let vchNo, invoiceNumber;
-  
-  if (transactionType === "CreditNote") {
-    // For Credit Note: Use creditNoteNumber as VchNo and keep original invoiceNumber
-    vchNo = transactionData.creditNoteNumber || "CNOTE001";
-    invoiceNumber = transactionData.invoiceNumber || "INV001";
-    console.log("📝 Credit Note - VchNo:", vchNo, "InvoiceNumber:", invoiceNumber);
-  } else {
-    // For Sales: Use invoiceNumber for both
-    vchNo = transactionData.invoiceNumber || "INV001";
-    invoiceNumber = transactionData.invoiceNumber || "INV001";
-    console.log("💰 Sales - VchNo:", vchNo, "InvoiceNumber:", invoiceNumber);
-  }
+// 3️⃣ Determine VchNo and InvoiceNumber based on transaction type
+let vchNo, invoiceNumber;
+
+if (transactionType === "CreditNote") {
+  // For Credit Note: Use creditNoteNumber as VchNo and keep original invoiceNumber
+  vchNo = transactionData.creditNoteNumber || "CNOTE001";
+  invoiceNumber = transactionData.invoiceNumber || "INV001";
+  console.log("📝 Credit Note - VchNo:", vchNo, "InvoiceNumber:", invoiceNumber);
+} else if (transactionType === "Purchase") {
+  // For Purchase: Use invoiceNumber for both
+  vchNo = transactionData.invoiceNumber || "PINV001";
+  invoiceNumber = transactionData.invoiceNumber || "PINV001";
+  console.log("🛒 Purchase - VchNo:", vchNo, "InvoiceNumber:", invoiceNumber);
+} else {
+  // For Sales: Use invoiceNumber for both
+  vchNo = transactionData.invoiceNumber || "INV001";
+  invoiceNumber = transactionData.invoiceNumber || "INV001";
+  console.log("💰 Sales - VchNo:", vchNo, "InvoiceNumber:", invoiceNumber);
+}
 
   // 4️⃣ Prepare voucher data with proper field mapping
   const totalQty = batchDetails.reduce((sum, item) => sum + item.quantity, 0);
-  
+
   // Get supplier/customer info - handle both supplier and customer data
   const supplierInfo = transactionData.supplierInfo || {};
   const customerData = transactionData.customerData || {};
-  
+
   // Determine AccountID and PartyID
-  let accountID = transactionData.selectedSupplierId || 
-                 supplierInfo.account_id || 
-                 customerData.account_id || 
-                 null;
-  
-  let partyID = transactionData.selectedSupplierId || 
-                supplierInfo.party_id || 
-                customerData.party_id || 
-                null;
+  let accountID = transactionData.selectedSupplierId ||
+    supplierInfo.account_id ||
+    customerData.account_id ||
+    null;
+
+  let partyID = transactionData.selectedSupplierId ||
+    supplierInfo.party_id ||
+    customerData.party_id ||
+    null;
 
   // If no IDs found in direct fields, try to extract from nested objects
   if (!accountID && customerData) {
@@ -1192,28 +1205,28 @@ const processTransaction = async (transactionData, transactionType, connection) 
   console.log("AccountID:", accountID, "PartyID:", partyID);
 
   // Determine names for AccountName and PartyName
-  const accountName = supplierInfo.businessName || 
-                     supplierInfo.business_name || 
-                     customerData.business_name || 
-                     customerData.name || 
-                     "";
+  const accountName = supplierInfo.businessName ||
+    supplierInfo.business_name ||
+    customerData.business_name ||
+    customerData.name ||
+    "";
 
-  const partyName = supplierInfo.name || 
-                   supplierInfo.businessName || 
-                   supplierInfo.business_name || 
-                   customerData.business_name || 
-                   customerData.name || 
-                   "";
+  const partyName = supplierInfo.name ||
+    supplierInfo.businessName ||
+    supplierInfo.business_name ||
+    customerData.business_name ||
+    customerData.name ||
+    "";
 
   // Calculate totals - use provided totals or calculate from items
-  const taxableAmount = parseFloat(transactionData.taxableAmount) || 
-                       batchDetails.reduce((sum, item) => sum + (item.quantity * item.price), 0);
-  
-  const totalGST = parseFloat(transactionData.totalGST) || 
-                  batchDetails.reduce((sum, item) => sum + (item.quantity * item.price * item.gst / 100), 0);
-  
-  const grandTotal = parseFloat(transactionData.grandTotal) || 
-                    (taxableAmount + totalGST);
+  const taxableAmount = parseFloat(transactionData.taxableAmount) ||
+    batchDetails.reduce((sum, item) => sum + (item.quantity * item.price), 0);
+
+  const totalGST = parseFloat(transactionData.totalGST) ||
+    batchDetails.reduce((sum, item) => sum + (item.quantity * item.price * item.gst / 100), 0);
+
+  const grandTotal = parseFloat(transactionData.grandTotal) ||
+    (taxableAmount + totalGST);
 
   console.log("Calculated totals - Taxable:", taxableAmount, "GST:", totalGST, "Grand Total:", grandTotal);
 
@@ -1271,12 +1284,12 @@ const processTransaction = async (transactionData, transactionType, connection) 
     if (transactionType === "CreditNote") {
       // For Credit Note: INCREASE quantity and stock_in
       const updateQuery = `
-        UPDATE batches
-        SET quantity = quantity + ?,
-            stock_in = stock_in + ?,
-            updated_at = NOW()
-        WHERE product_id = ? AND batch_number = ?
-      `;
+      UPDATE batches
+      SET quantity = quantity + ?,
+          stock_in = stock_in + ?,
+          updated_at = NOW()
+      WHERE product_id = ? AND batch_number = ?
+    `;
 
       const updateResult = await queryPromise(updateQuery, [
         quantity,
@@ -1292,15 +1305,39 @@ const processTransaction = async (transactionData, transactionType, connection) 
       }
 
       console.log(`Batch ${item.batch} updated for credit note: returned=${quantity}`);
+    } else if (transactionType === "Purchase") {
+      // For Purchase: INCREASE quantity and stock_in
+      const updateQuery = `
+      UPDATE batches
+      SET quantity = quantity + ?,
+          stock_in = stock_in + ?,
+          updated_at = NOW()
+      WHERE product_id = ? AND batch_number = ?
+    `;
+
+      const updateResult = await queryPromise(updateQuery, [
+        quantity,
+        quantity,
+        item.product_id,
+        item.batch,
+      ], connection);
+
+      if (updateResult.affectedRows === 0) {
+        throw new Error(
+          `Batch ${item.batch} for product_id ${item.product_id} not found`
+        );
+      }
+
+      console.log(`Batch ${item.batch} updated for purchase: added=${quantity}`);
     } else {
       // For Sales: DECREASE quantity and increase stock_out
       const updateQuery = `
-        UPDATE batches
-        SET quantity = quantity - ?,
-            stock_out = stock_out + ?,
-            updated_at = NOW()
-        WHERE product_id = ? AND batch_number = ? AND quantity >= ?
-      `;
+      UPDATE batches
+      SET quantity = quantity - ?,
+          stock_out = stock_out + ?,
+          updated_at = NOW()
+      WHERE product_id = ? AND batch_number = ? AND quantity >= ?
+    `;
 
       const updateResult = await queryPromise(updateQuery, [
         quantity,
@@ -1320,13 +1357,15 @@ const processTransaction = async (transactionData, transactionType, connection) 
     }
   }
 
-  return { 
-    voucherId, 
-    invoiceNumber, 
+  return {
+    voucherId,
+    invoiceNumber,
     vchNo,
-    batchDetails 
+    batchDetails
   };
 };
+
+
 // Get all vouchers for invoice number
 router.get('/invoices/:invoiceNumber', async (req, res) => {
   let connection;
@@ -1339,7 +1378,7 @@ router.get('/invoices/:invoiceNumber', async (req, res) => {
     });
 
     const { invoiceNumber } = req.params;
-    
+
     const query = `
       SELECT 
         VoucherID,
@@ -1389,25 +1428,25 @@ router.get('/invoices/:invoiceNumber', async (req, res) => {
         CASE WHEN TransactionType = 'Sales' THEN 1 ELSE 2 END,
         created_at ASC
     `;
-    
+
     const results = await new Promise((resolve, reject) => {
       connection.execute(query, [invoiceNumber], (error, results) => {
         if (error) reject(error);
         else resolve(results);
       });
     });
-    
+
     if (results.length === 0) {
       return res.status(404).json({
         success: false,
         message: 'Invoice not found'
       });
     }
-    
+
     // Separate sales and receipt entries
     const salesEntry = results.find(item => item.TransactionType === 'Sales');
     const receiptEntries = results.filter(item => item.TransactionType === 'Receipt');
-    
+
     res.json({
       success: true,
       data: {
@@ -1416,7 +1455,7 @@ router.get('/invoices/:invoiceNumber', async (req, res) => {
         allEntries: results
       }
     });
-    
+
   } catch (error) {
     console.error('Error fetching invoice:', error);
     res.status(500).json({
@@ -1433,17 +1472,17 @@ router.get('/invoices/:invoiceNumber', async (req, res) => {
 // Get last invoice number
 router.get("/last-invoice", (req, res) => {
   const query = "SELECT VchNo FROM voucher WHERE TransactionType = 'Sales' ORDER BY VoucherID DESC LIMIT 1";
-  
+
   db.query(query, (err, results) => {
     if (err) {
       console.error('Error fetching last invoice number:', err);
       return res.status(500).send(err);
     }
-    
+
     if (results.length === 0) {
       return res.send({ lastInvoiceNumber: null });
     }
-    
+
     res.send({ lastInvoiceNumber: results[0].VchNo });
   });
 });
@@ -1718,7 +1757,7 @@ router.put("/transactions/:id", async (req, res) => {
 
 router.get("/ledger", (req, res) => {
   // Fetch all vouchers ordered by AccountID and Date
-const query = `
+  const query = `
   SELECT 
     VoucherID AS id,
     VchNo AS voucherID,
@@ -1755,7 +1794,7 @@ const query = `
 // Function to recalculate running balances
 function recalculateRunningBalances(transactions) {
   const accounts = {};
-  
+
   // Group transactions by AccountID
   transactions.forEach(transaction => {
     if (!accounts[transaction.AccountID]) {
@@ -1830,9 +1869,9 @@ router.get("/voucherdetails", async (req, res) => {
     db.query(query, (err, results) => {
       if (err) {
         console.error("Error fetching voucher details:", err);
-        return res.status(500).json({ 
-          success: false, 
-          message: "Error fetching voucher details" 
+        return res.status(500).json({
+          success: false,
+          message: "Error fetching voucher details"
         });
       }
 
@@ -1844,9 +1883,9 @@ router.get("/voucherdetails", async (req, res) => {
     });
   } catch (error) {
     console.error("Error in voucherdetails API:", error);
-    res.status(500).json({ 
-      success: false, 
-      message: "Internal server error" 
+    res.status(500).json({
+      success: false,
+      message: "Internal server error"
     });
   }
 });
