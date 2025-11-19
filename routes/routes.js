@@ -94,6 +94,7 @@ router.get('/next-receipt-number', async (req, res) => {
 
 router.post('/receipts', upload.single('transaction_proof'), async (req, res) => {
   let connection;
+
   try {
     // ✅ Get DB connection
     connection = await new Promise((resolve, reject) => {
@@ -111,7 +112,7 @@ router.post('/receipts', upload.single('transaction_proof'), async (req, res) =>
       });
     });
 
-    // ✅ Extract data from frontend
+    // ✅ Extract data from frontend safely
     const {
       retailer_id,
       retailer_name,
@@ -129,11 +130,23 @@ router.post('/receipts', upload.single('transaction_proof'), async (req, res) =>
       batch_id
     } = req.body;
 
+    // ✅ Safe variables
+    const safeTransactionType = TransactionType || 'Receipt';
+    const safeProductId = product_id || null;
+    const safeBatchId = batch_id || null;
+    const safeInvoiceNumber = invoice_number || null;
+    const safeReceiptDate = receipt_date ? new Date(receipt_date) : new Date();
+    const safeBankName = bank_name || null;
+    const safeRetailerId = retailer_id || null;
+    const safeRetailerName = retailer_name || '';
+    const receiptAmount = parseFloat(amount || 0);
+    const currentDate = new Date();
+    const cashBankAccountID = 1;
+    const cashBankAccountName = bank_name ? `${bank_name} Bank` : 'Cash Account';
+
     // ✅ Handle uploaded file
     let transaction_proof_filename = null;
-    if (req.file) {
-      transaction_proof_filename = req.file.filename;
-    }
+    if (req.file) transaction_proof_filename = req.file.filename;
 
     // ✅ Fetch last receipt_number from voucher table
     const [rows] = await connection.promise().query(
@@ -144,11 +157,10 @@ router.post('/receipts', upload.single('transaction_proof'), async (req, res) =>
        LIMIT 1`
     );
 
-    // ✅ Generate next unique receipt number
+    // ✅ Generate next receipt number
     let receipt_number = 'REC001';
     if (rows.length > 0 && rows[0].receipt_number) {
-      const lastNumber = rows[0].receipt_number;
-      const match = lastNumber.match(/REC(\d+)/);
+      const match = rows[0].receipt_number.match(/REC(\d+)/);
       if (match) {
         const nextNum = parseInt(match[1], 10) + 1;
         receipt_number = `REC${nextNum.toString().padStart(3, '0')}`;
@@ -157,54 +169,47 @@ router.post('/receipts', upload.single('transaction_proof'), async (req, res) =>
 
     console.log('🧾 Generated new receipt number:', receipt_number);
 
-    const receiptAmount = parseFloat(amount || 0);
-    const currentDate = new Date();
-    const cashBankAccountID = 1;
-    const cashBankAccountName = bank_name ? `${bank_name} Bank` : 'Cash Account';
-
-    // ✅ Insert new receipt entry into voucher table
-    console.log('💾 Inserting new Receipt voucher...');
+    // ✅ Insert new receipt voucher
     const [voucherResult] = await connection.promise().execute(
-  `INSERT INTO voucher (
-    TransactionType, VchNo, product_id, batch_id, InvoiceNumber, Date, 
-    PaymentTerms, Freight, TotalQty, TotalPacks, TotalQty1, TaxAmount, 
-    Subtotal, BillSundryAmount, TotalAmount, ChequeNo, ChequeDate, BankName, 
-    AccountID, AccountName, PartyID, PartyName, BasicAmount, ValueOfGoods, 
-    EntryDate, SGSTPercentage, CGSTPercentage, IGSTPercentage, SGSTAmount, 
-    CGSTAmount, IGSTAmount, TaxSystem, BatchDetails, paid_amount, created_at, 
-    balance_amount, receipt_number, status, paid_date, pdf_data, DC, 
-    pdf_file_name, pdf_created_at
-  ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-  [
-    TransactionType, receipt_number, product_id || null, batch_id || null,
-    invoice_number || null, receipt_date || currentDate, 'Immediate',
-    0, 0, 0, 0, 0,
-    receiptAmount, 0, receiptAmount, null, null,
-    bank_name || null, retailer_id, cashBankAccountName,
-    retailer_id || null, retailer_name || '', receiptAmount, receiptAmount,
-    currentDate, 0, 0, 0, 0, 0, 0, 'GST', '[]',
-    receiptAmount, currentDate, 0, receipt_number, 'Paid',
-    currentDate, null, 'C', null, null // ✅ added missing null for pdf_created_at
-  ]
-);
-
+      `INSERT INTO voucher (
+        TransactionType, VchNo, product_id, batch_id, InvoiceNumber, Date, 
+        PaymentTerms, Freight, TotalQty, TotalPacks, TotalQty1, TaxAmount, 
+        Subtotal, BillSundryAmount, TotalAmount, ChequeNo, ChequeDate, BankName, 
+        AccountID, AccountName, PartyID, PartyName, BasicAmount, ValueOfGoods, 
+        EntryDate, SGSTPercentage, CGSTPercentage, IGSTPercentage, SGSTAmount, 
+        CGSTAmount, IGSTAmount, TaxSystem, BatchDetails, paid_amount, created_at, 
+        balance_amount, receipt_number, status, paid_date, pdf_data, DC, 
+        pdf_file_name, pdf_created_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      [
+        safeTransactionType, receipt_number, safeProductId, safeBatchId,
+        safeInvoiceNumber, safeReceiptDate, 'Immediate',
+        0, 0, 0, 0, 0,
+        receiptAmount, 0, receiptAmount, null, null,
+        safeBankName, safeRetailerId, cashBankAccountName,
+        safeRetailerId, safeRetailerName, receiptAmount, receiptAmount,
+        currentDate, 0, 0, 0, 0, 0, 0, 'GST', '[]',
+        receiptAmount, currentDate, 0, receipt_number, 'Paid',
+        currentDate, null, 'C', null, null
+      ]
+    );
 
     const voucherId = voucherResult.insertId;
     console.log('✅ Receipt voucher created with ID:', voucherId);
 
-    // ✅ Apply payment to outstanding sales vouchers if any
-    if (retailer_id) {
+    // ✅ Apply payment to sales vouchers
+    if (safeRetailerId) {
       let voucherQuery = `
         SELECT * FROM voucher 
         WHERE PartyID = ? 
         AND TransactionType = 'Sales' 
         AND (status != 'Paid' OR status IS NULL)
       `;
-      const queryParams = [retailer_id];
+      const queryParams = [safeRetailerId];
 
-      if (invoice_number) {
+      if (safeInvoiceNumber) {
         voucherQuery += ` AND InvoiceNumber = ?`;
-        queryParams.push(invoice_number);
+        queryParams.push(safeInvoiceNumber);
       }
 
       voucherQuery += ` ORDER BY Date ASC, VoucherID ASC`;
@@ -242,27 +247,10 @@ router.post('/receipts', upload.single('transaction_proof'), async (req, res) =>
           console.log(`Applied ₹${amountToApply} to Sales Voucher ${voucher.VoucherID}, Remaining: ₹${remainingAmount}`);
         }
 
-        // If leftover amount exists, record as Advance
         if (remainingAmount > 0) {
-          // await connection.promise().execute(
-          //   `INSERT INTO voucher (
-          //     TransactionType, VchNo, product_id, batch_id, Date, TotalAmount, 
-          //     BankName, PartyID, PartyName, BasicAmount, ValueOfGoods, EntryDate, 
-          //     paid_amount, balance_amount, receipt_number, status, paid_date, 
-          //     Subtotal, AccountID, AccountName, DC, created_at
-          //   ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-          //   [
-          //     'Receipt', receipt_number, product_id || null, batch_id || null,
-          //     currentDate, remainingAmount, bank_name || '', retailer_id,
-          //     retailer_name || '', remainingAmount, remainingAmount, currentDate,
-          //     remainingAmount, 0, receipt_number, 'Advance', currentDate,
-          //     remainingAmount, cashBankAccountID, cashBankAccountName, 'C', currentDate
-          //   ]
-          // );
           console.log('💰 Advance payment voucher created.');
         }
       } else {
-        // No sales vouchers found — mark as advance
         await connection.promise().execute(
           `UPDATE voucher SET status = 'Advance' WHERE VoucherID = ?`,
           [voucherId]
@@ -279,8 +267,8 @@ router.post('/receipts', upload.single('transaction_proof'), async (req, res) =>
       message: 'Receipt created successfully',
       receipt_number,
       transaction_proof_filename,
-      product_id,
-      batch_id
+      product_id: safeProductId,
+      batch_id: safeBatchId
     });
 
   } catch (error) {
@@ -293,7 +281,6 @@ router.post('/receipts', upload.single('transaction_proof'), async (req, res) =>
     if (connection) connection.release();
   }
 });
-
 
 
 router.get('/receipts-with-vouchers', async (req, res) => {
