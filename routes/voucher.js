@@ -885,7 +885,38 @@ router.get('/sales-receipt-totals', (req, res) => {
 });
 
 
+router.get('/total-payables', (req, res) => {
+  const sqlQuery = `
+    SELECT 
+      COALESCE(SUM(CASE WHEN TransactionType = 'Purchase' THEN TotalAmount ELSE 0 END), 0) as totalPurchase,
+      COALESCE(SUM(CASE WHEN TransactionType = 'purchase voucher' THEN paid_amount ELSE 0 END), 0) as totalPurchaseVoucher
+    FROM voucher 
+    WHERE TransactionType IN ('Purchase', 'purchase voucher')
+  `;
 
+  db.query(sqlQuery, (err, results) => {
+    if (err) {
+      console.error('Database error:', err);
+      return res.status(500).json({
+        success: false,
+        error: 'Failed to fetch Purchase and purchase voucher totals',
+        details: err.message
+      });
+    }
+
+    const totalPurchase = parseFloat(results[0].totalPurchase) || 0;
+    const totalPurchaseVoucher = parseFloat(results[0].totalPurchaseVoucher) || 0;
+
+    res.json({
+      success: true,
+      data: {
+        totalPurchase: totalPurchase,
+        totalPurchaseVoucher: totalPurchaseVoucher,
+        netAmount: totalPurchase - totalPurchaseVoucher
+      }
+    });
+  });
+});
 
 
 

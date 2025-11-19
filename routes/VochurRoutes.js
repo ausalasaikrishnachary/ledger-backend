@@ -1366,6 +1366,137 @@ if (transactionType === "CreditNote") {
 };
 
 
+// router.get('/invoices/:invoiceNumber', async (req, res) => {
+//   let connection;
+//   try {
+//     connection = await new Promise((resolve, reject) => {
+//       db.getConnection((err, conn) => {
+//         if (err) reject(err);
+//         else resolve(conn);
+//       });
+//     });
+
+//     const { invoiceNumber } = req.params;
+//     console.log()
+
+//     const query = `
+//       SELECT 
+//         v.VoucherID,
+//         v.TransactionType,
+//         v.VchNo,
+//         v.product_id,
+//         v.batch_id,
+//         v.InvoiceNumber,
+//         v.Date,
+//         v.PaymentTerms,
+//         v.Freight,
+//         v.TotalQty,
+//         v.TotalPacks,
+//         v.TotalQty1,
+//         v.TaxAmount,
+//         v.Subtotal,
+//         v.BillSundryAmount,
+//         v.TotalAmount,
+//         v.ChequeNo,
+//         v.ChequeDate,
+//         v.BankName,
+//         v.AccountID,
+//         v.AccountName,
+//         v.PartyID,
+//         a.name AS PartyName,   -- Correct Party Name from accounts table
+//         v.BasicAmount,
+//         v.ValueOfGoods,
+//         v.EntryDate,
+//         v.SGSTPercentage,
+//         v.CGSTPercentage,
+//         v.IGSTPercentage,
+//         v.SGSTAmount,
+//         v.CGSTAmount,
+//         v.IGSTAmount,
+//         v.TaxSystem,
+//         v.BatchDetails,
+//         v.paid_amount,
+//         v.created_at,
+//         v.balance_amount,
+//         v.receipt_number,
+//         v.status,
+//         v.paid_date,
+//         v.pdf_data,
+//         v.DC,
+//         v.pdf_file_name,
+//         v.pdf_created_at
+//       FROM voucher v
+//       LEFT JOIN accounts a ON v.PartyID = a.id
+//       WHERE v.InvoiceNumber = ?
+//       ORDER BY 
+//         CASE 
+//           WHEN v.TransactionType = 'Sales' THEN 1
+//           WHEN v.TransactionType = 'Receipt' THEN 2
+//           WHEN v.TransactionType = 'CreditNote' THEN 3
+//           WHEN v.TransactionType = 'purchase voucher' THEN 4
+//           ELSE 5
+//         END,
+//         v.created_at ASC
+//     `;
+
+//     const results = await new Promise((resolve, reject) => {
+//       connection.execute(query, [invoiceNumber], (error, results) => {
+//         if (error) reject(error);
+//         else resolve(results);
+//       });
+//     });
+
+//     if (results.length === 0) {
+//       return res.status(404).json({
+//         success: false,
+//         message: 'Invoice not found'
+//       });
+//     }
+
+//     // Group by TransactionType
+//     const salesEntry = results.find(r => r.TransactionType === 'Sales');
+//     const receiptEntries = results.filter(r => r.TransactionType === 'Receipt');
+//     const creditNoteEntries = results.filter(r => r.TransactionType === 'CreditNote');
+//     const purchasevoucherEntries = results.filter(r => r.TransactionType === 'purchase voucher');
+
+//     // Check if there are receipts for the party
+//     const hasReceipts = receiptEntries.length > 0;
+
+//     // Final response - conditionally include credit notes
+//     const responseData = {
+//       success: true,
+//       data: {
+//         sales: salesEntry,
+//         receipts: receiptEntries,
+//         allEntries: results,
+//         purchasevoucher:purchasevoucherEntries
+//       }
+//     };
+
+//     // Only include credit notes if there are receipts
+//     if (hasReceipts) {
+//       responseData.data.creditnotes = creditNoteEntries;
+//     } else {
+//       responseData.data.creditnotes = []; // or you can omit this field entirely
+//     }
+
+//     res.json(responseData);
+
+//   } catch (error) {
+//     console.error('Error fetching invoice:', error);
+//     res.status(500).json({
+//       success: false,
+//       message: 'Internal server error'
+//     });
+//   } finally {
+//     if (connection) {
+//       connection.release();
+//     }
+//   }
+// });
+
+// Get last invoice number
+
 router.get('/invoices/:invoiceNumber', async (req, res) => {
   let connection;
   try {
@@ -1402,7 +1533,7 @@ router.get('/invoices/:invoiceNumber', async (req, res) => {
         v.AccountID,
         v.AccountName,
         v.PartyID,
-        a.name AS PartyName,   -- Correct Party Name from accounts table
+        a.name AS PartyName,
         v.BasicAmount,
         v.ValueOfGoods,
         v.EntryDate,
@@ -1432,7 +1563,9 @@ router.get('/invoices/:invoiceNumber', async (req, res) => {
           WHEN v.TransactionType = 'Sales' THEN 1
           WHEN v.TransactionType = 'Receipt' THEN 2
           WHEN v.TransactionType = 'CreditNote' THEN 3
-          ELSE 4
+          WHEN v.TransactionType = 'purchase voucher' THEN 4
+          WHEN v.TransactionType = 'Purchase' THEN 5
+          ELSE 6
         END,
         v.created_at ASC
     `;
@@ -1455,26 +1588,26 @@ router.get('/invoices/:invoiceNumber', async (req, res) => {
     const salesEntry = results.find(r => r.TransactionType === 'Sales');
     const receiptEntries = results.filter(r => r.TransactionType === 'Receipt');
     const creditNoteEntries = results.filter(r => r.TransactionType === 'CreditNote');
+    const purchasevoucherEntries = results.filter(r => r.TransactionType === 'purchase voucher');
 
-    // Check if there are receipts for the party
+    // ✅ New: Purchase Invoices
+    const purchaseEntries = results.filter(r => r.TransactionType === 'Purchase');
+
     const hasReceipts = receiptEntries.length > 0;
 
-    // Final response - conditionally include credit notes
     const responseData = {
       success: true,
       data: {
         sales: salesEntry,
         receipts: receiptEntries,
-        allEntries: results
+        purchases: purchaseEntries,          // ✅ Added purchases
+        allEntries: results,
+        purchasevoucher: purchasevoucherEntries
       }
     };
 
-    // Only include credit notes if there are receipts
-    if (hasReceipts) {
-      responseData.data.creditnotes = creditNoteEntries;
-    } else {
-      responseData.data.creditnotes = []; // or you can omit this field entirely
-    }
+    // Include credit notes if receipts exist
+    responseData.data.creditnotes = hasReceipts ? creditNoteEntries : [];
 
     res.json(responseData);
 
@@ -1490,7 +1623,9 @@ router.get('/invoices/:invoiceNumber', async (req, res) => {
     }
   }
 });
-// Get last invoice number
+
+
+
 router.get("/last-invoice", (req, res) => {
   const query = "SELECT VchNo FROM voucher WHERE TransactionType = 'Sales' ORDER BY VoucherID DESC LIMIT 1";
 

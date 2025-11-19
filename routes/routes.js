@@ -125,6 +125,7 @@ router.post('/receipts', upload.single('transaction_proof'), async (req, res) =>
       reconciliation_option,
       invoice_number,
       product_id,
+      TransactionType,
       batch_id
     } = req.body;
 
@@ -175,7 +176,7 @@ router.post('/receipts', upload.single('transaction_proof'), async (req, res) =>
     pdf_file_name, pdf_created_at
   ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
   [
-    'Receipt', receipt_number, product_id || null, batch_id || null,
+    TransactionType, receipt_number, product_id || null, batch_id || null,
     invoice_number || null, receipt_date || currentDate, 'Immediate',
     0, 0, 0, 0, 0,
     receiptAmount, 0, receiptAmount, null, null,
