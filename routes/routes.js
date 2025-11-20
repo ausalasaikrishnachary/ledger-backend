@@ -459,6 +459,99 @@ router.get('/receipts/:id', async (req, res) => {
   }
 });
 
+router.get('/voucher', async (req, res) => {
+  try {
+    db.execute(
+      `SELECT 
+         v.*, 
+         a.business_name, 
+         a.name AS payee_name,
+         (
+           SELECT GROUP_CONCAT(DISTINCT v2.InvoiceNumber)
+           FROM voucher v2
+           WHERE v2.receipt_number = v.receipt_number
+           AND v2.TransactionType IN ('Purchase', 'purchase voucher')
+           AND v2.InvoiceNumber IS NOT NULL
+           AND v2.InvoiceNumber != ''
+         ) AS invoice_numbers
+       FROM voucher v
+       LEFT JOIN accounts a ON v.PartyID = a.id
+       WHERE v.TransactionType = 'purchase voucher'
+       ORDER BY v.created_at DESC`,
+      (error, results) => {
+        if (error) {
+          console.error('Database error fetching vouchers (receipts):', error);
+          return res.status(500).json({ error: 'Failed to fetch receipts' });
+        }
+
+        // Convert invoice_numbers string to array
+        const processedResults = results.map(voucher => ({
+          ...voucher,
+          invoice_numbers: voucher.invoice_numbers ? voucher.invoice_numbers.split(',') : []
+        }));
+
+        console.log('Receipts fetched from voucher table:', processedResults.length);
+        res.json(processedResults || []);
+      }
+    );
+  } catch (error) {
+    console.error('Error in /receipts route:', error);
+    res.status(500).json({ error: 'Failed to fetch receipts' });
+  }
+});
+
+
+// ------------------------------
+// Get receipt by ID
+// ------------------------------
+router.get('/voucher/:id', async (req, res) => {
+  try {
+    db.execute(
+      `SELECT 
+         v.*, 
+         a.business_name, 
+         a.name AS payee_name,
+         (
+           SELECT GROUP_CONCAT(DISTINCT v2.InvoiceNumber)
+           FROM voucher v2
+           WHERE v2.receipt_number = v.receipt_number
+           AND v2.TransactionType IN ('Purchase', 'purchase voucher')
+           AND v2.InvoiceNumber IS NOT NULL
+           AND v2.InvoiceNumber != ''
+         ) AS invoice_numbers
+       FROM voucher v
+       LEFT JOIN accounts a ON v.PartyID = a.id
+       WHERE v.VoucherID = ? 
+       AND v.TransactionType = 'purchase voucher'`,
+      [req.params.id],
+      (error, results) => {
+        if (error) {
+          console.error('Database error fetching receipt from voucher:', error);
+          return res.status(500).json({ error: 'Failed to fetch receipt' });
+        }
+
+        if (!results || results.length === 0) {
+          return res.status(404).json({ error: 'Receipt not found' });
+        }
+
+        // Convert invoice_numbers to array
+        const receipt = {
+          ...results[0],
+          invoice_numbers: results[0].invoice_numbers
+            ? results[0].invoice_numbers.split(',')
+            : []
+        };
+
+        console.log('Receipt fetched from voucher table:', receipt);
+        res.json(receipt);
+      }
+    );
+  } catch (error) {
+    console.error('Error in /receipts/:id route:', error);
+    res.status(500).json({ error: 'Failed to fetch receipt' });
+  }
+});
+
 
 // router.put('/voucher/:id', upload.single('transaction_proof'), async (req, res) => {
 //   const voucherId = req.params.id;
@@ -942,6 +1035,134 @@ router.delete('/receipts/:id', async (req, res) => {
     const deleteResult = await new Promise((resolve, reject) => {
       connection.execute(
         `DELETE FROM voucher WHERE VoucherID = ? AND TransactionType = "Receipt"`,
+        [req.params.id],
+        (error, results) => {
+          if (error) reject(error);
+          else resolve(results);
+        }
+      );
+    });
+
+    if (deleteResult.affectedRows === 0) {
+      throw new Error('Failed to delete Receipt voucher');
+    }
+
+    // 4️⃣ Commit the transaction
+    await new Promise((resolve, reject) => {
+      connection.commit(err => {
+        if (err) reject(err);
+        else resolve();
+      });
+    });
+
+    res.json({
+      message: 'Receipt voucher deleted successfully',
+      deleted_voucher_id: req.params.id,
+      receipt_number: receiptNumber
+    });
+
+  } catch (error) {
+    if (connection) {
+      await new Promise(resolve => {
+        connection.rollback(() => resolve());
+      });
+    }
+
+    console.error('❌ Error in delete receipt route:', error);
+    res.status(500).json({ error: error.message || 'Failed to delete receipt voucher' });
+  } finally {
+    if (connection) {
+      connection.release();
+    }
+  }
+});
+
+router.delete('/voucher/:id', async (req, res) => {
+  let connection;
+  try {
+    // Get DB connection
+    connection = await new Promise((resolve, reject) => {
+      db.getConnection((err, conn) => {
+        if (err) reject(err);
+        else resolve(conn);
+      });
+    });
+
+    // Begin transaction
+    await new Promise((resolve, reject) => {
+      connection.beginTransaction(err => {
+        if (err) reject(err);
+        else resolve();
+      });
+    });
+
+    // 1️⃣ Fetch the voucher (Receipt type)
+    const receipt = await new Promise((resolve, reject) => {
+      connection.execute(
+        `SELECT * FROM voucher WHERE VoucherID = ? AND TransactionType = "purchase voucher"`,
+        [req.params.id],
+        (error, results) => {
+          if (error) reject(error);
+          else resolve(results[0]);
+        }
+      );
+    });
+
+    if (!receipt) {
+      return res.status(404).json({ error: 'Receipt not found in voucher table' });
+    }
+
+    const receiptAmount = parseFloat(receipt.TotalAmount);
+    const receiptNumber = receipt.receipt_number;
+    const retailerId = receipt.PartyID;
+
+    // 2️⃣ Update related Sales vouchers (reverse paid amount)
+    if (retailerId && receiptNumber) {
+      const salesVouchers = await new Promise((resolve, reject) => {
+        connection.execute(
+          `SELECT * FROM voucher 
+           WHERE PartyID = ? AND receipt_number = ? AND TransactionType = "Purchase"`,
+          [retailerId, receiptNumber],
+          (error, results) => {
+            if (error) reject(error);
+            else resolve(results);
+          }
+        );
+      });
+
+      for (const voucher of salesVouchers) {
+        const currentPaidAmount = parseFloat(voucher.paid_amount || 0);
+        const newPaidAmount = Math.max(0, currentPaidAmount - receiptAmount);
+        const newBalanceAmount = parseFloat(voucher.TotalAmount) - newPaidAmount;
+        const newStatus =
+          newBalanceAmount <= 0.01
+            ? 'Paid'
+            : newPaidAmount > 0
+            ? 'Partial'
+            : 'Pending';
+
+        await new Promise((resolve, reject) => {
+          connection.execute(
+            `UPDATE voucher SET 
+              paid_amount = ?, 
+              balance_amount = ?, 
+              receipt_number = NULL,
+              status = ? 
+             WHERE VoucherID = ?`,
+            [newPaidAmount, newBalanceAmount, newStatus, voucher.VoucherID],
+            error => {
+              if (error) reject(error);
+              else resolve();
+            }
+          );
+        });
+      }
+    }
+
+    // 3️⃣ Delete the Receipt voucher itself
+    const deleteResult = await new Promise((resolve, reject) => {
+      connection.execute(
+        `DELETE FROM voucher WHERE VoucherID = ? AND TransactionType = "purchase voucher"`,
         [req.params.id],
         (error, results) => {
           if (error) reject(error);
