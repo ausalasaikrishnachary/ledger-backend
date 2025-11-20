@@ -305,7 +305,12 @@ router.put("/creditnoteupdate/:id", async (req, res) => {
           0
         );
 
-        // 4️⃣ UPDATE voucher
+        const grandTotal =
+          Number(updateData.TotalAmount) ||
+          Number(updateData.grandTotal) ||
+          Number(originalVoucher[0].TotalAmount);
+
+        // 4️⃣ UPDATE voucher + set paid_amount = grandTotal
         await queryPromise(
           `
           UPDATE voucher SET 
@@ -318,7 +323,8 @@ router.put("/creditnoteupdate/:id", async (req, res) => {
             TotalAmount = ?, 
             TotalQty = ?, 
             BatchDetails = ?, 
-            TransactionType = ?
+            TransactionType = ?,
+            paid_amount = ?    -- automatically add grandTotal to paid_amount
           WHERE VoucherID = ?
         `,
           [
@@ -347,15 +353,15 @@ router.put("/creditnoteupdate/:id", async (req, res) => {
               Number(updateData.totalGST) ||
               Number(originalVoucher[0].TaxAmount),
 
-            Number(updateData.TotalAmount) ||
-              Number(updateData.grandTotal) ||
-              Number(originalVoucher[0].TotalAmount),
+            grandTotal,
 
             totalQty,
 
             JSON.stringify(newBatchDetails),
 
             transactionType,
+
+            grandTotal, // ✅ paid_amount = grandTotal
 
             voucherId,
           ],
@@ -438,6 +444,7 @@ router.put("/creditnoteupdate/:id", async (req, res) => {
     });
   });
 });
+
 
 
 
