@@ -2071,7 +2071,7 @@ router.get('/invoices/:invoiceNumber', async (req, res) => {
     };
 
     // Include credit notes if receipts exist
-    responseData.data.creditnotes = hasReceipts ? creditNoteEntries : [];
+responseData.data.creditnotes = creditNoteEntries;
 
     res.json(responseData);
 

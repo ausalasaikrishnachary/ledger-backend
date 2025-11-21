@@ -505,6 +505,100 @@ function rollback(connection, res, error) {
 }
 
 
+// ------------------------------
+// Get all credit notes
+// ------------------------------
+router.get('/creditnotes', async (req, res) => {
+  try {
+    db.execute(
+      `SELECT 
+         v.*, 
+         a.business_name, 
+         a.name AS payee_name,
+         (
+           SELECT GROUP_CONCAT(DISTINCT v2.InvoiceNumber)
+           FROM voucher v2
+           WHERE v2.VchNo = v.VchNo
+           AND v2.TransactionType IN ('Sales', 'CreditNote')
+           AND v2.InvoiceNumber IS NOT NULL
+           AND v2.InvoiceNumber != ''
+         ) AS invoice_numbers
+       FROM voucher v
+       LEFT JOIN accounts a ON v.PartyID = a.id
+       WHERE v.TransactionType = 'CreditNote'
+       ORDER BY v.created_at DESC`,
+      (error, results) => {
+        if (error) {
+          console.error('Database error fetching credit notes:', error);
+          return res.status(500).json({ error: 'Failed to fetch credit notes' });
+        }
+
+        // Convert invoice_numbers string to array
+        const processedResults = results.map(creditNote => ({
+          ...creditNote,
+          invoice_numbers: creditNote.invoice_numbers ? creditNote.invoice_numbers.split(',') : []
+        }));
+
+        console.log('Credit notes fetched from voucher table:', processedResults.length);
+        res.json(processedResults || []);
+      }
+    );
+  } catch (error) {
+    console.error('Error in /creditnotes route:', error);
+    res.status(500).json({ error: 'Failed to fetch credit notes' });
+  }
+});
+
+// ------------------------------
+// Get credit note by ID
+// ------------------------------
+router.get('/creditnotes/:id', async (req, res) => {
+  try {
+    db.execute(
+      `SELECT 
+         v.*, 
+         a.business_name, 
+         a.name AS payee_name,
+         (
+           SELECT GROUP_CONCAT(DISTINCT v2.InvoiceNumber)
+           FROM voucher v2
+           WHERE v2.VchNo = v.VchNo
+           AND v2.TransactionType IN ('Sales', 'CreditNote')
+           AND v2.InvoiceNumber IS NOT NULL
+           AND v2.InvoiceNumber != ''
+         ) AS invoice_numbers
+       FROM voucher v
+       LEFT JOIN accounts a ON v.PartyID = a.id
+       WHERE v.VoucherID = ? 
+       AND v.TransactionType = 'CreditNote'`,
+      [req.params.id],
+      (error, results) => {
+        if (error) {
+          console.error('Database error fetching credit note:', error);
+          return res.status(500).json({ error: 'Failed to fetch credit note' });
+        }
+
+        if (!results || results.length === 0) {
+          return res.status(404).json({ error: 'Credit note not found' });
+        }
+
+        // Convert invoice_numbers to array
+        const creditNote = {
+          ...results[0],
+          invoice_numbers: results[0].invoice_numbers
+            ? results[0].invoice_numbers.split(',')
+            : []
+        };
+
+        console.log('Credit note fetched from voucher table:', creditNote);
+        res.json(creditNote);
+      }
+    );
+  } catch (error) {
+    console.error('Error in /creditnotes/:id route:', error);
+    res.status(500).json({ error: 'Failed to fetch credit note' });
+  }
+});
 
 
 
