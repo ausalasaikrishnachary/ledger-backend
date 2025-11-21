@@ -26,6 +26,7 @@ const salesReportRoutes = require("./routes/salesReportRoutes");
 
 const pdfRoutes = require('./routes/pdfRoutes'); // Add this line
 const creditnoteRoutes = require('./routes/creditnote');
+const debitnoteRoutes = require('./routes/debitnote');
 const voucher = require('./routes/voucher');
 const orderRoutes = require('./routes/orders');
 const categoriesRoutes = require('./routes/categories');
@@ -64,6 +65,7 @@ app.use("/", expensiveRoutes);
 app.use('/api', receiptsRouter);
 app.use('/', pdfRoutes);
 app.use("/api", creditnoteRoutes);
+app.use("/api", debitnoteRoutes);
 app.use('/api', voucher);
 app.use('/api', orderRoutes); 
 app.use('/api', categoriesRoutes);

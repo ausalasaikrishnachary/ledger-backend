@@ -264,19 +264,22 @@ router.put("/creditnoteupdate/:id", async (req, res) => {
 
           const qty = Number(item.quantity) || 0;
 
-          if (transactionType === "Sales") {
+          if (transactionType === "Sales" || transactionType === "DebitNote") {
+            // Reverse: previously stock OUT → now add back
             await queryPromise(
               "UPDATE batches SET quantity = quantity + ?, stock_out = stock_out - ? WHERE id = ?",
               [qty, qty, batch.id],
               connection
             );
           } else if (transactionType === "CreditNote") {
+            // Reverse: previously stock IN → now remove
             await queryPromise(
               "UPDATE batches SET quantity = quantity - ?, stock_in = stock_in - ? WHERE id = ?",
               [qty, qty, batch.id],
               connection
             );
           }
+
         }
 
         // Delete old voucherdetails
@@ -329,29 +332,29 @@ router.put("/creditnoteupdate/:id", async (req, res) => {
         `,
           [
             updateData.VchNo ||
-              updateData.creditNoteNumber ||
-              originalVoucher[0].VchNo,
+            updateData.creditNoteNumber ||
+            originalVoucher[0].VchNo,
 
             updateData.Date ||
-              updateData.invoiceDate ||
-              originalVoucher[0].Date,
+            updateData.invoiceDate ||
+            originalVoucher[0].Date,
 
             updateData.InvoiceNumber ||
-              updateData.originalInvoiceNumber ||
-              updateData.InvoiceNo ||
-              originalVoucher[0].InvoiceNumber,
+            updateData.originalInvoiceNumber ||
+            updateData.InvoiceNo ||
+            originalVoucher[0].InvoiceNumber,
 
             updateData.PartyName ||
-              updateData.customerData?.business_name ||
-              originalVoucher[0].PartyName,
+            updateData.customerData?.business_name ||
+            originalVoucher[0].PartyName,
 
             Number(updateData.BasicAmount) ||
-              Number(updateData.taxableAmount) ||
-              Number(originalVoucher[0].BasicAmount),
+            Number(updateData.taxableAmount) ||
+            Number(originalVoucher[0].BasicAmount),
 
             Number(updateData.TaxAmount) ||
-              Number(updateData.totalGST) ||
-              Number(originalVoucher[0].TaxAmount),
+            Number(updateData.totalGST) ||
+            Number(originalVoucher[0].TaxAmount),
 
             grandTotal,
 
@@ -408,7 +411,8 @@ router.put("/creditnoteupdate/:id", async (req, res) => {
 
           const qty = Number(item.quantity) || 0;
 
-          if (transactionType === "Sales") {
+          if (transactionType === "Sales" || transactionType === "DebitNote") {
+            // Stock OUT
             if (batch.quantity < qty)
               throw new Error(`Insufficient stock for batch ${item.batch}`);
 
@@ -418,12 +422,14 @@ router.put("/creditnoteupdate/:id", async (req, res) => {
               connection
             );
           } else if (transactionType === "CreditNote") {
+            // Stock IN
             await queryPromise(
               "UPDATE batches SET quantity = quantity + ?, stock_in = stock_in + ? WHERE id = ?",
               [qty, qty, batch.id],
               connection
             );
           }
+
         }
 
         connection.commit(() => {
@@ -881,6 +887,47 @@ router.delete("/transactions/:id", async (req, res) => {
             }
           }
         }
+
+        // -----------------------------------------------------------------------
+// 3️⃣➖ Reverse stock for DEBIT NOTE
+// -----------------------------------------------------------------------
+if (voucherData.TransactionType === "DebitNote" && batchDetails.length > 0) {
+  console.log("Reversing STOCK for DEBIT NOTE");
+
+  for (const item of batchDetails) {
+    if (!item.product_id || !item.batch) continue;
+
+    const batchResult = await queryPromise(
+      "SELECT id, opening_stock, stock_in, stock_out FROM batches WHERE product_id = ? AND batch_number = ?",
+      [item.product_id, item.batch],
+      connection
+    );
+
+    if (batchResult.length > 0) {
+      const batch = batchResult[0];
+      const qty = Number(item.quantity) || 0;
+
+      // Reverse debit note = reverse stock_out
+      const newStockOut = Number(batch.stock_out) - qty;
+
+      const newQuantity =
+        Number(batch.opening_stock) +
+        Number(batch.stock_in) -
+        newStockOut;
+
+      await queryPromise(
+        "UPDATE batches SET quantity = ?, stock_out = ?, updated_at = NOW() WHERE id = ?",
+        [newQuantity, newStockOut, batch.id],
+        connection
+      );
+
+      console.log(
+        `✔ DEBIT NOTE reversed batch ${item.batch}: qty=${newQuantity}, stock_out=${newStockOut}`
+      );
+    }
+  }
+}
+
 
         // -----------------------------------------------------------------------
         // 4️⃣ Delete voucherdetails
@@ -1801,37 +1848,51 @@ const processTransaction = async (transactionData, transactionType, connection) 
   // Update batches
   for (const item of batchDetails) {
     if (transactionType === "CreditNote" || transactionType === "Purchase") {
+      // Stock IN
       await queryPromise(
         `
-          UPDATE batches
-          SET quantity = quantity + ?, stock_in = stock_in + ?, updated_at = NOW()
-          WHERE product_id = ? AND batch_number = ?
-        `,
+      UPDATE batches
+      SET quantity = quantity + ?, 
+          stock_in = stock_in + ?, 
+          updated_at = NOW()
+      WHERE product_id = ? AND batch_number = ?
+    `,
         [item.quantity, item.quantity, item.product_id, item.batch],
         connection
       );
-    } else {
+    } else if (transactionType === "DebitNote") {
+      // ⭐ Debit Note should behave like Sales → Stock OUT
       await queryPromise(
         `
-          UPDATE batches
-          SET quantity = quantity - ?, stock_out = stock_out + ?, updated_at = NOW()
-          WHERE product_id = ? AND batch_number = ? AND quantity >= ?
-        `,
-        [
-          item.quantity,
-          item.quantity,
-          item.product_id,
-          item.batch,
-          item.quantity,
-        ],
+      UPDATE batches
+      SET quantity = quantity - ?, 
+          stock_out = stock_out + ?, 
+          updated_at = NOW()
+      WHERE product_id = ? AND batch_number = ? AND quantity >= ?
+    `,
+        [item.quantity, item.quantity, item.product_id, item.batch, item.quantity],
+        connection
+      );
+    } else {
+      // Sales stock OUT
+      await queryPromise(
+        `
+      UPDATE batches
+      SET quantity = quantity - ?, 
+          stock_out = stock_out + ?, 
+          updated_at = NOW()
+      WHERE product_id = ? AND batch_number = ? AND quantity >= ?
+    `,
+        [item.quantity, item.quantity, item.product_id, item.batch, item.quantity],
         connection
       );
     }
+
   }
 
   if (transactionType === "CreditNote") {
     const originalInvoiceNumber = transactionData.originalInvoiceNumber || transactionData.InvoiceNumber;
-    
+
     console.log("🔄 Processing CreditNote - Finding original sales transaction for:", {
       originalInvoiceNumber,
       batchDetails
@@ -1845,9 +1906,9 @@ const processTransaction = async (transactionData, transactionType, connection) 
         AND InvoiceNumber = ?
       LIMIT 1
     `;
-    
+
     const originalSalesRows = await queryPromise(findOriginalSalesQuery, [originalInvoiceNumber], connection);
-    
+
     if (originalSalesRows.length > 0) {
       const originalSales = originalSalesRows[0];
       console.log("📋 Found original sales transaction:", {
@@ -1881,15 +1942,15 @@ const processTransaction = async (transactionData, transactionType, connection) 
 
       // Calculate total credit note quantity to subtract
       let totalCreditNoteQty = 0;
-      
+
       for (const creditItem of batchDetails) {
         const key = `${creditItem.product_id}-${creditItem.batch}`;
         const originalItem = originalItemsMap.get(key);
-        
+
         if (originalItem) {
           const creditQty = parseFloat(creditItem.quantity) || 0;
           totalCreditNoteQty += creditQty;
-          
+
           console.log("➖ Subtracting quantity:", {
             product_id: creditItem.product_id,
             batch: creditItem.batch,
@@ -1918,9 +1979,9 @@ const processTransaction = async (transactionData, transactionType, connection) 
           SET updated_quantity = ? 
           WHERE VoucherID = ?
         `;
-        
+
         await queryPromise(updateSalesQuery, [newUpdatedQty, originalSales.VoucherID], connection);
-        
+
         console.log("✅ Updated original sales transaction:", {
           voucherId: originalSales.VoucherID,
           oldUpdatedQty: originalUpdatedQty,
@@ -2176,7 +2237,7 @@ router.get('/invoices/:invoiceNumber', async (req, res) => {
     };
 
     // Include credit notes if receipts exist
-responseData.data.creditnotes = creditNoteEntries;
+    responseData.data.creditnotes = creditNoteEntries;
 
     res.json(responseData);
 
@@ -2371,11 +2432,11 @@ router.put("/transactions/:id", async (req, res) => {
             updateData.invoiceDate || originalVoucher[0].Date,
             updateData.supplierInfo?.name || originalVoucher[0].PartyName,
             parseFloat(updateData.taxableAmount) ||
-              parseFloat(originalVoucher[0].BasicAmount),
+            parseFloat(originalVoucher[0].BasicAmount),
             parseFloat(updateData.totalGST) ||
-              parseFloat(originalVoucher[0].TaxAmount),
+            parseFloat(originalVoucher[0].TaxAmount),
             parseFloat(updateData.grandTotal) ||
-              parseFloat(originalVoucher[0].TotalAmount),
+            parseFloat(originalVoucher[0].TotalAmount),
             totalQty,
             JSON.stringify(newBatchDetails),
             voucherId,
