@@ -1549,10 +1549,10 @@ router.post("/transaction", (req, res) => {
       try {
         // 🧾 Step 1: Create voucher + update batches
         const result = await processTransaction(transactionData, transactionType, connection);
-const { voucherId, invoiceNumber, vchNo, batchDetails, grandTotal } = result;
-console.log("Grand Total:", grandTotal); // Add this to verify
-        // ⭐⭐⭐ NEW BLOCK ADDED ⭐⭐⭐
-        // Fetch correct InvoiceNumber from voucher table after insert
+        const { voucherId, invoiceNumber, vchNo, batchDetails, grandTotal } = result;
+        console.log("Grand Total:", grandTotal);
+
+        // ⭐⭐⭐ Fetch correct InvoiceNumber from voucher table after insert
         const invoiceQuery = `
           SELECT InvoiceNumber 
           FROM voucher 
@@ -1564,33 +1564,33 @@ console.log("Grand Total:", grandTotal); // Add this to verify
 
         console.log("✔ Final InvoiceNumber from DB:", finalInvoiceNumber);
 
-      // ---- Insert into voucherdetails ----
-const insertDetailQuery = `
-  INSERT INTO voucherdetails (
-    voucher_id, product, product_id, InvoiceNumber,
-    batch, quantity, price, discount,
-    gst, cgst, sgst, igst, cess, total, created_at
-  ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW())
-`;
+        // ---- Insert into voucherdetails ----
+        const insertDetailQuery = `
+          INSERT INTO voucherdetails (
+            voucher_id, product, product_id, InvoiceNumber,
+            batch, quantity, price, discount,
+            gst, cgst, sgst, igst, cess, total, created_at
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW())
+        `;
 
-for (const item of batchDetails) {
-  await queryPromise(insertDetailQuery, [
-    voucherId,
-    item.product,
-    item.product_id,
-    finalInvoiceNumber, // ⭐ from voucher table
-    item.batch,
-    item.quantity,
-    item.price,
-    item.discount,
-    item.gst,
-    item.cgst,
-    item.sgst,
-    item.igst,
-    item.cess,
-    grandTotal, // <-- replace item.total with grandTotal
-  ], connection);
-}
+        for (const item of batchDetails) {
+          await queryPromise(insertDetailQuery, [
+            voucherId,
+            item.product,
+            item.product_id,
+            finalInvoiceNumber,
+            item.batch,
+            item.quantity,
+            item.price,
+            item.discount,
+            item.gst,
+            item.cgst,
+            item.sgst,
+            item.igst,
+            item.cess,
+            grandTotal,
+          ], connection);
+        }
 
         // Commit
         connection.commit((commitErr) => {
@@ -1650,9 +1650,8 @@ for (const item of batchDetails) {
   });
 });
 
-
 // -------------------------------------------------------------
-//  PROCESS TRANSACTION FUNCTION — NO LOGIC CHANGED
+//  PROCESS TRANSACTION FUNCTION WITH UPDATED_QUANTITY LOGIC
 // -------------------------------------------------------------
 
 const processTransaction = async (transactionData, transactionType, connection) => {
@@ -1687,7 +1686,6 @@ const processTransaction = async (transactionData, transactionType, connection) 
     cess: parseFloat(item.cess) || 0,
     total: parseFloat(item.total) || 0,
   }));
-
 
   // Invoice + VchNo logic
   let vchNo, invoiceNumber;
@@ -1748,6 +1746,9 @@ const processTransaction = async (transactionData, transactionType, connection) 
   const grandTotal =
     parseFloat(transactionData.grandTotal) || taxableAmount + totalGST;
 
+  // For CreditNote, set updated_quantity same as TotalQty initially
+  let updated_quantity = totalQty;
+
   const voucherData = {
     VoucherID: nextVoucherId,
     TransactionType: transactionType,
@@ -1759,6 +1760,7 @@ const processTransaction = async (transactionData, transactionType, connection) 
       new Date().toISOString().split("T")[0],
     PaymentTerms: "Immediate",
     Freight: 0,
+    updated_quantity: updated_quantity, // ⭐ Set initial updated_quantity
     TotalQty: totalQty,
     TotalPacks: batchDetails.length,
     TotalQty1: totalQty,
@@ -1827,7 +1829,110 @@ const processTransaction = async (transactionData, transactionType, connection) 
     }
   }
 
-  return { voucherId, invoiceNumber, vchNo, batchDetails };
+  if (transactionType === "CreditNote") {
+    const originalInvoiceNumber = transactionData.originalInvoiceNumber || transactionData.InvoiceNumber;
+    
+    console.log("🔄 Processing CreditNote - Finding original sales transaction for:", {
+      originalInvoiceNumber,
+      batchDetails
+    });
+
+    // Find the original sales transaction
+    const findOriginalSalesQuery = `
+      SELECT VoucherID, BatchDetails, updated_quantity, TotalQty
+      FROM voucher 
+      WHERE TransactionType = 'Sales' 
+        AND InvoiceNumber = ?
+      LIMIT 1
+    `;
+    
+    const originalSalesRows = await queryPromise(findOriginalSalesQuery, [originalInvoiceNumber], connection);
+    
+    if (originalSalesRows.length > 0) {
+      const originalSales = originalSalesRows[0];
+      console.log("📋 Found original sales transaction:", {
+        voucherId: originalSales.VoucherID,
+        originalUpdatedQty: originalSales.updated_quantity,
+        originalTotalQty: originalSales.TotalQty
+      });
+
+      let originalBatchDetails = [];
+      try {
+        originalBatchDetails = JSON.parse(originalSales.BatchDetails || "[]");
+      } catch (e) {
+        console.error("Error parsing original batch details:", e);
+        originalBatchDetails = [];
+      }
+
+      console.log("🔄 Original batch details:", originalBatchDetails);
+
+      // Create a map for easy lookup of original quantities
+      const originalItemsMap = new Map();
+      originalBatchDetails.forEach(item => {
+        const key = `${item.product_id}-${item.batch}`;
+        originalItemsMap.set(key, {
+          quantity: parseFloat(item.quantity) || 0,
+          product_id: item.product_id,
+          batch: item.batch
+        });
+      });
+
+      console.log("🗺️ Original items map:", Array.from(originalItemsMap.entries()));
+
+      // Calculate total credit note quantity to subtract
+      let totalCreditNoteQty = 0;
+      
+      for (const creditItem of batchDetails) {
+        const key = `${creditItem.product_id}-${creditItem.batch}`;
+        const originalItem = originalItemsMap.get(key);
+        
+        if (originalItem) {
+          const creditQty = parseFloat(creditItem.quantity) || 0;
+          totalCreditNoteQty += creditQty;
+          
+          console.log("➖ Subtracting quantity:", {
+            product_id: creditItem.product_id,
+            batch: creditItem.batch,
+            originalQty: originalItem.quantity,
+            creditQty: creditQty
+          });
+        } else {
+          console.warn("⚠️ No matching original item found for:", key);
+        }
+      }
+
+      // Calculate new updated_quantity for original sales
+      const originalUpdatedQty = parseFloat(originalSales.updated_quantity) || parseFloat(originalSales.TotalQty) || 0;
+      const newUpdatedQty = Math.max(0, originalUpdatedQty - totalCreditNoteQty);
+
+      console.log("🧮 Updated quantity calculation:", {
+        originalUpdatedQty,
+        totalCreditNoteQty,
+        newUpdatedQty
+      });
+
+      // Update the original sales transaction's updated_quantity
+      if (totalCreditNoteQty > 0) {
+        const updateSalesQuery = `
+          UPDATE voucher 
+          SET updated_quantity = ? 
+          WHERE VoucherID = ?
+        `;
+        
+        await queryPromise(updateSalesQuery, [newUpdatedQty, originalSales.VoucherID], connection);
+        
+        console.log("✅ Updated original sales transaction:", {
+          voucherId: originalSales.VoucherID,
+          oldUpdatedQty: originalUpdatedQty,
+          newUpdatedQty: newUpdatedQty
+        });
+      }
+    } else {
+      console.warn("⚠️ No original sales transaction found for invoice:", originalInvoiceNumber);
+    }
+  }
+
+  return { voucherId, invoiceNumber, vchNo, batchDetails, grandTotal };
 };
 
 // router.get('/invoices/:invoiceNumber', async (req, res) => {

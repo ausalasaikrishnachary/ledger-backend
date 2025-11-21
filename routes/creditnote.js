@@ -685,4 +685,282 @@ router.get("/credit-notes-table", (req, res) => {
 
 
 
+
+
+// router.get("/vouchercredinote/:id", (req, res) => {
+//   const voucherId = req.params.id;
+
+//   // 1️⃣ Fetch voucher + account info
+//   const voucherQuery = `
+//     SELECT 
+//       v.*, 
+//       a.billing_address_line1,
+//       a.billing_address_line2,
+//       a.billing_city,
+//       a.billing_pin_code,
+//       a.billing_state,
+//       a.shipping_address_line1,
+//       a.shipping_address_line2,
+//       a.shipping_city,
+//       a.shipping_pin_code,
+//       a.shipping_state,
+//       a.gstin,
+//       a.business_name
+//     FROM voucher v
+//     LEFT JOIN accounts a ON v.PartyID = a.id
+//     WHERE v.VoucherID = ?
+//   `;
+
+//   db.query(voucherQuery, [voucherId], (err, voucherResults) => {
+//     if (err) {
+//       console.error("Error fetching voucher:", err);
+//       return res.status(500).json({
+//         success: false,
+//         message: "Database error fetching voucher",
+//         error: err.message,
+//       });
+//     }
+
+//     if (voucherResults.length === 0) {
+//       return res.status(404).json({
+//         success: false,
+//         message: "Voucher not found",
+//       });
+//     }
+
+//     const transaction = voucherResults[0];
+
+//     // 2️⃣ Fetch batch details from voucherdetails table
+//     const detailsQuery = `
+//       SELECT 
+//         product, 
+//         product_id, 
+//         batch, 
+//         quantity, 
+//         price, 
+//         discount, 
+//         gst, 
+//         cgst, 
+//         sgst, 
+//         igst, 
+//         cess, 
+//         total
+//       FROM voucherdetails
+//       WHERE voucher_id = ?
+//     `;
+
+//     db.query(detailsQuery, [voucherId], (detailsErr, detailsResults) => {
+//       if (detailsErr) {
+//         console.error("Error fetching batch details:", detailsErr);
+//         return res.status(500).json({
+//           success: false,
+//           message: "Database error fetching batch details",
+//           error: detailsErr.message,
+//         });
+//       }
+
+//       // Attach batch details to transaction
+//       transaction.batch_details = detailsResults || [];
+
+//       // Calculate total quantity for this transaction
+//       let transactionQty = 0;
+//       if (transaction.batch_details && transaction.batch_details.length > 0) {
+//         transaction.batch_details.forEach(batch => {
+//           transactionQty += parseFloat(batch.quantity) || 0;
+//         });
+//       }
+
+//       // Get all transactions for this PartyID and InvoiceNumber to calculate remaining quantity
+//       const relatedTransactionsQuery = `
+//         SELECT 
+//           v.VoucherID,
+//           v.TransactionType,
+//           v.InvoiceNumber,
+//           v.PartyID,
+//           v.Date,
+//           JSON_UNQUOTE(v.BatchDetails) as batch_details
+//         FROM voucher v
+//         WHERE v.PartyID = ? AND v.InvoiceNumber = ? AND v.TransactionType IN ('Sales', 'CreditNote')
+//         ORDER BY v.VoucherID DESC
+//       `;
+
+//       db.query(relatedTransactionsQuery, [transaction.PartyID, transaction.InvoiceNumber], (relatedErr, relatedResults) => {
+//         if (relatedErr) {
+//           console.error("Error fetching related transactions:", relatedErr);
+//           return res.status(500).json({
+//             success: false,
+//             message: "Database error fetching related transactions",
+//             error: relatedErr.message,
+//           });
+//         }
+
+//         // Parse batch details for related transactions
+//         let sales_quantity = 0;
+//         let creditnote_quantity = 0;
+//         const transactions = [];
+
+//         relatedResults.forEach(relatedTransaction => {
+//           try {
+//             if (relatedTransaction.batch_details) {
+//               relatedTransaction.batch_details = JSON.parse(relatedTransaction.batch_details);
+//             } else {
+//               relatedTransaction.batch_details = [];
+//             }
+//           } catch (error) {
+//             console.error('Error parsing batch details:', error);
+//             relatedTransaction.batch_details = [];
+//           }
+
+//           // Calculate quantity for this related transaction
+//           let relatedQty = 0;
+//           if (relatedTransaction.batch_details && relatedTransaction.batch_details.length > 0) {
+//             relatedTransaction.batch_details.forEach(batch => {
+//               relatedQty += parseFloat(batch.quantity) || 0;
+//             });
+//           }
+
+//           // Add to appropriate quantity type
+//           if (relatedTransaction.TransactionType === 'Sales') {
+//             sales_quantity += relatedQty;
+//           } else if (relatedTransaction.TransactionType === 'CreditNote') {
+//             creditnote_quantity += relatedQty;
+//           }
+
+//           // Store transaction details WITHOUT batch_details
+//           transactions.push({
+//             VoucherID: relatedTransaction.VoucherID,
+//             TransactionType: relatedTransaction.TransactionType,
+//             quantity: relatedQty,
+//             Date: relatedTransaction.Date
+//           });
+//         });
+
+//         const remaining_quantity = sales_quantity - creditnote_quantity;
+
+//         // Format the response to match the other endpoint
+//         const responseData = {
+//           PartyID: transaction.PartyID,
+//           InvoiceNumber: transaction.InvoiceNumber,
+//           business_name: transaction.business_name,
+//           sales_quantity: sales_quantity,
+//           creditnote_quantity: creditnote_quantity,
+//           remaining_quantity: remaining_quantity,
+//           transactions: transactions
+//         };
+
+//         res.json({
+//           success: true,
+//           data: responseData
+//         });
+//       });
+//     });
+//   });
+// });
+
+// router.get("/vouchercreditnote", (req, res) => {
+//   const query = `
+//     SELECT 
+//       v.*, 
+//       JSON_UNQUOTE(v.BatchDetails) as batch_details,
+//       a.business_name,
+//       a.email,
+//       a.mobile_number,
+//       a.gstin,
+//       a.billing_address_line1,
+//       a.billing_address_line2,
+//       a.billing_city,
+//       a.billing_state,
+//       a.billing_country,
+//       a.billing_pin_code,
+//       a.shipping_address_line1,
+//       a.shipping_address_line2,
+//       a.shipping_city,
+//       a.shipping_state,
+//       a.shipping_country,
+//       a.shipping_pin_code
+//     FROM voucher v
+//     LEFT JOIN accounts a ON v.PartyID = a.id
+//     WHERE v.TransactionType IN ('Sales', 'CreditNote')
+//     ORDER BY v.VoucherID DESC
+//   `;
+
+//   db.query(query, (err, results) => {
+//     if (err) {
+//       console.error('Error fetching transactions:', err);
+//       return res.status(500).send(err);
+//     }
+
+//     // Parse batch details for each transaction
+//     results.forEach(transaction => {
+//       try {
+//         if (transaction.batch_details) {
+//           transaction.batch_details = JSON.parse(transaction.batch_details);
+//         } else {
+//           transaction.batch_details = [];
+//         }
+//       } catch (error) {
+//         console.error('Error parsing batch details for transaction:', transaction.VoucherID, error);
+//         transaction.batch_details = [];
+//       }
+//     });
+
+//     // Group by PartyID and InvoiceNumber to calculate remaining quantities
+//     const groupedData = {};
+    
+//     results.forEach(transaction => {
+//       const key = `${transaction.PartyID}_${transaction.InvoiceNumber}`;
+      
+//       if (!groupedData[key]) {
+//         groupedData[key] = {
+//           PartyID: transaction.PartyID,
+//           InvoiceNumber: transaction.InvoiceNumber,
+//           business_name: transaction.business_name,
+//           sales_quantity: 0,
+//           creditnote_quantity: 0,
+//           remaining_quantity: 0,
+//           transactions: []
+//         };
+//       }
+      
+//       // Calculate total quantity for this transaction
+//       let transactionQty = 0;
+//       if (transaction.batch_details && transaction.batch_details.length > 0) {
+//         transaction.batch_details.forEach(batch => {
+//           transactionQty += parseFloat(batch.quantity) || 0;
+//         });
+//       }
+      
+//       // Add to appropriate quantity type based on TransactionType
+//       if (transaction.TransactionType === 'Sales') {
+//         groupedData[key].sales_quantity += transactionQty;
+//       } else if (transaction.TransactionType === 'CreditNote') {
+//         groupedData[key].creditnote_quantity += transactionQty;
+//       }
+      
+//       // Store the transaction details WITHOUT batch_details
+//       groupedData[key].transactions.push({
+//         VoucherID: transaction.VoucherID,
+//         TransactionType: transaction.TransactionType,
+//         quantity: transactionQty,
+//         Date: transaction.Date
+//       });
+//     });
+    
+//     // Calculate remaining quantity for each group
+//     Object.keys(groupedData).forEach(key => {
+//       groupedData[key].remaining_quantity = 
+//         groupedData[key].sales_quantity - groupedData[key].creditnote_quantity;
+//     });
+
+//     // Convert grouped data to array
+//     const finalResults = Object.values(groupedData);
+
+//     res.json({
+//       success: true,
+//       data: finalResults
+//     });
+//   });
+// });
+
+
 module.exports = router;
