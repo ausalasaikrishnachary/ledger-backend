@@ -55,11 +55,13 @@ const upload = multer({
 router.get('/next-receipt-number', async (req, res) => {
   try {
     db.execute(
-      // Use receipt_number column from voucher table and ensure correct sorting
-      `SELECT receipt_number 
+      `SELECT VchNo 
        FROM voucher 
-       WHERE receipt_number IS NOT NULL AND receipt_number != ''
-       ORDER BY CAST(SUBSTRING(receipt_number, 4) AS UNSIGNED) DESC 
+       WHERE TransactionType = 'Receipt' 
+         AND VchNo IS NOT NULL 
+         AND VchNo != ''
+         AND VchNo LIKE 'REC%'
+       ORDER BY VoucherID DESC 
        LIMIT 1`,
       (error, results) => {
         if (error) {
@@ -69,14 +71,19 @@ router.get('/next-receipt-number', async (req, res) => {
 
         let nextReceiptNumber = 'REC001';
 
-        if (results && results.length > 0 && results[0].receipt_number) {
-          const lastNumber = results[0].receipt_number;
+        if (results && results.length > 0 && results[0].VchNo) {
+          const lastNumber = results[0].VchNo;
           const match = lastNumber.match(/REC(\d+)/);
 
           if (match) {
             const nextNum = parseInt(match[1], 10) + 1;
             nextReceiptNumber = `REC${nextNum.toString().padStart(3, '0')}`;
+            console.log(`Incremented from ${lastNumber} to ${nextReceiptNumber}`);
+          } else {
+            console.log('VchNo exists but no REC pattern found, using default:', nextReceiptNumber);
           }
+        } else {
+          console.log('No previous receipts found, using default:', nextReceiptNumber);
         }
 
         console.log('Next receipt number:', nextReceiptNumber);
@@ -96,7 +103,6 @@ router.post('/receipts', upload.single('transaction_proof'), async (req, res) =>
   let connection;
 
   try {
-    // ✅ Get DB connection
     connection = await new Promise((resolve, reject) => {
       db.getConnection((err, conn) => {
         if (err) reject(err);
@@ -104,179 +110,233 @@ router.post('/receipts', upload.single('transaction_proof'), async (req, res) =>
       });
     });
 
-    // ✅ Start transaction
-    await new Promise((resolve, reject) => {
-      connection.beginTransaction(err => {
-        if (err) reject(err);
-        else resolve();
-      });
-    });
+    await connection.promise().beginTransaction();
 
-    // ✅ Extract data from frontend safely
     const {
       retailer_id,
       retailer_name,
       amount,
-      currency,
-      payment_method,
-      receipt_date,
-      note,
       bank_name,
-      transaction_date,
-      reconciliation_option,
       invoice_number,
       product_id,
-      TransactionType,
-      batch_id
+      batch_id, // This should be the batch_id
+      batch,    // This should be the batch_number
+      quantity,
+      price,
+      discount,
+      gst,
+      cgst,
+      sgst,
+      igst,
+      cess,
+      total,
+      TransactionType
     } = req.body;
 
-    // ✅ Safe variables
-    const safeTransactionType = TransactionType || 'Receipt';
-    const safeProductId = product_id || null;
-    const safeBatchId = batch_id || null;
-    const safeInvoiceNumber = invoice_number || null;
-    const safeReceiptDate = receipt_date ? new Date(receipt_date) : new Date();
-    const safeBankName = bank_name || null;
-    const safeRetailerId = retailer_id || null;
-    const safeRetailerName = retailer_name || '';
+    // 🔥 CONDITIONAL TRANSACTION TYPE
+    let safeTransactionType =
+      TransactionType === "purchase voucher"
+        ? "purchase voucher"
+        : "Receipt";
+
     const receiptAmount = parseFloat(amount || 0);
     const currentDate = new Date();
-    const cashBankAccountID = 1;
-    const cashBankAccountName = bank_name ? `${bank_name} Bank` : 'Cash Account';
+    const safeInvoiceNumber = invoice_number || null;
 
-    // ✅ Handle uploaded file
+    // FILE UPLOAD
     let transaction_proof_filename = null;
     if (req.file) transaction_proof_filename = req.file.filename;
 
-    // ✅ Fetch last receipt_number from voucher table
-    const [rows] = await connection.promise().query(
-      `SELECT receipt_number 
+    // Debug logging
+    console.log("🔍 Receipt Form Data:", {
+      batch_id: batch_id,
+      batch: batch,
+      product_id: product_id,
+      retailer_name: retailer_name
+    });
+
+    // -------------------------------------------
+    // 1️⃣ Generate NEXT receipt number using VchNo
+    // -------------------------------------------
+    let queryCondition =
+      safeTransactionType === "purchase voucher"
+        ? "TransactionType = 'purchase voucher'"
+        : "TransactionType = 'Receipt'";
+
+    const [recRows] = await connection.promise().query(
+      `SELECT VchNo 
        FROM voucher 
-       WHERE receipt_number IS NOT NULL AND receipt_number != ''
-       ORDER BY CAST(SUBSTRING(receipt_number, 4) AS UNSIGNED) DESC 
+       WHERE ${queryCondition}
+       ORDER BY VoucherID DESC
        LIMIT 1`
     );
 
-    // ✅ Generate next receipt number
-    let receipt_number = 'REC001';
-    if (rows.length > 0 && rows[0].receipt_number) {
-      const match = rows[0].receipt_number.match(/REC(\d+)/);
+    let nextReceipt = "REC001";
+
+    if (recRows.length > 0) {
+      const match = recRows[0].VchNo?.match(/REC(\d+)/);
       if (match) {
         const nextNum = parseInt(match[1], 10) + 1;
-        receipt_number = `REC${nextNum.toString().padStart(3, '0')}`;
+        nextReceipt = "REC" + nextNum.toString().padStart(3, "0");
       }
     }
 
-    console.log('🧾 Generated new receipt number:', receipt_number);
+    console.log("Generated Receipt No:", nextReceipt);
+    console.log("Transaction Type:", safeTransactionType);
 
-    // ✅ Insert new receipt voucher
-    const [voucherResult] = await connection.promise().execute(
+    // -------------------------------------------
+    // 2️⃣ INSERT RECEIPT INTO VOUCHER TABLE (with batch_id)
+    // -------------------------------------------
+    const [receiptInsert] = await connection.promise().execute(
       `INSERT INTO voucher (
-        TransactionType, VchNo, product_id, batch_id, InvoiceNumber, Date, 
-        PaymentTerms, Freight, TotalQty, TotalPacks, TotalQty1, TaxAmount, 
-        Subtotal, BillSundryAmount, TotalAmount, ChequeNo, ChequeDate, BankName, 
-        AccountID, AccountName, PartyID, PartyName, BasicAmount, ValueOfGoods, 
-        EntryDate, SGSTPercentage, CGSTPercentage, IGSTPercentage, SGSTAmount, 
-        CGSTAmount, IGSTAmount, TaxSystem, BatchDetails, paid_amount, created_at, 
-        balance_amount, receipt_number, status, paid_date, pdf_data, DC, 
-        pdf_file_name, pdf_created_at
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        TransactionType, VchNo, product_id, batch_id, InvoiceNumber, Date,
+        PaymentTerms, Freight, TotalPacks, TaxAmount, Subtotal, BillSundryAmount,
+        TotalAmount, ChequeNo, ChequeDate, BankName, AccountID, AccountName, 
+        PartyID, PartyName, BasicAmount, ValueOfGoods, EntryDate, SGSTPercentage, 
+        CGSTPercentage, IGSTPercentage, SGSTAmount, CGSTAmount, IGSTAmount, 
+        TaxSystem, paid_amount, created_at, balance_amount, status, paid_date, 
+        pdf_data, DC, pdf_file_name, pdf_created_at
+      )
+      VALUES (?, ?, ?, ?, ?, ?, 'Immediate', 0, 0, 0, ?, 0, ?, NULL, NULL, ?, ?, ?, ?, ?, ?, ?, ?, 0, 0, 0, 0, 0, 0,
+              'GST', ?, ?, 0, 'Paid', ?, ?, 'C', ?, ?)`,
       [
-        safeTransactionType, receipt_number, safeProductId, safeBatchId,
-        safeInvoiceNumber, safeReceiptDate, 'Immediate',
-        0, 0, 0, 0, 0,
-        receiptAmount, 0, receiptAmount, null, null,
-        safeBankName, safeRetailerId, cashBankAccountName,
-        safeRetailerId, safeRetailerName, receiptAmount, receiptAmount,
-        currentDate, 0, 0, 0, 0, 0, 0, 'GST', '[]',
-        receiptAmount, currentDate, 0, receipt_number, 'Paid',
-        currentDate, null, 'C', null, null
+        safeTransactionType,
+        nextReceipt,
+        product_id || null,
+        batch_id || null, // ✅ Store batch_id in voucher table
+        safeInvoiceNumber,
+        currentDate,
+
+        receiptAmount, // Subtotal
+        receiptAmount, // TotalAmount
+        bank_name || null,
+        retailer_id || null,
+        retailer_name || "",
+        retailer_id || null,
+        retailer_name || "",
+        receiptAmount, // BasicAmount
+        receiptAmount, // ValueOfGoods
+
+        currentDate,
+        receiptAmount, // paid_amount
+        currentDate,   // created_at
+        currentDate,   // paid_date
+        null,          // pdf_data
+        transaction_proof_filename,
+        currentDate    // pdf_created_at
       ]
     );
 
-    const voucherId = voucherResult.insertId;
-    console.log('✅ Receipt voucher created with ID:', voucherId);
+    const receiptVoucherId = receiptInsert.insertId;
 
-    // ✅ Apply payment to sales vouchers
-    if (safeRetailerId) {
-      let voucherQuery = `
-        SELECT * FROM voucher 
-        WHERE PartyID = ? 
-        AND TransactionType = 'Sales' 
-        AND (status != 'Paid' OR status IS NULL)
-      `;
-      const queryParams = [safeRetailerId];
+    console.log("✅ Voucher Inserted - VoucherID:", receiptVoucherId, "batch_id:", batch_id);
 
-      if (safeInvoiceNumber) {
-        voucherQuery += ` AND InvoiceNumber = ?`;
-        queryParams.push(safeInvoiceNumber);
-      }
+    // ---------------------------------------------------
+    // 3️⃣ INSERT INTO VOUCHERDETAILS TABLE (with batch number)
+    // ---------------------------------------------------
+    // FIXED: Remove JavaScript comments from SQL query
+    await connection.promise().execute(
+      `INSERT INTO voucherdetails (
+        voucher_id,
+        product,
+        product_id,
+        InvoiceNumber,
+        batch,           -- This stores batch number (batch_number)
+        quantity,
+        price,
+        discount,
+        gst,
+        cgst,
+        sgst,
+        igst,
+        cess,
+        total,
+        created_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      [
+        receiptVoucherId,
+        retailer_name || "",
+        product_id || null,
+        safeInvoiceNumber,
+        batch || null,   // ✅ Store batch number here (not batch_id)
+        quantity || 0,
+        price || 0,
+        discount || 0,
+        gst || 0,
+        cgst || 0,
+        sgst || 0,
+        igst || 0,
+        cess || 0,
+        total || receiptAmount,
+        currentDate
+      ]
+    );
 
-      voucherQuery += ` ORDER BY Date ASC, VoucherID ASC`;
+    console.log("✅ VoucherDetails Inserted - batch:", batch);
 
-      const [salesVouchers] = await connection.promise().query(voucherQuery, queryParams);
+    // ---------------------------------------------------
+    // 4️⃣ APPLY PAYMENT TO SALES VOUCHERS (ONLY RECEIPT)
+    // ---------------------------------------------------
+    if (retailer_id && safeTransactionType === "Receipt") {
+      const [sales] = await connection.promise().query(
+        `SELECT * FROM voucher 
+         WHERE PartyID = ? AND TransactionType = 'Sales' 
+         ORDER BY VoucherID ASC`,
+        [retailer_id]
+      );
 
-      if (salesVouchers.length > 0) {
-        let remainingAmount = receiptAmount;
+      let remaining = receiptAmount;
 
-        for (const voucher of salesVouchers) {
-          if (remainingAmount <= 0) break;
+      for (const s of sales) {
+        if (remaining <= 0) break;
 
-          const totalAmount = parseFloat(voucher.TotalAmount || 0);
-          const alreadyPaid = parseFloat(voucher.paid_amount || 0);
-          const outstandingBalance = totalAmount - alreadyPaid;
+        const total = parseFloat(s.TotalAmount || 0);
+        const paid = parseFloat(s.paid_amount || 0);
+        const balance = total - paid;
 
-          if (outstandingBalance <= 0) continue;
+        if (balance <= 0) continue;
 
-          const amountToApply = Math.min(remainingAmount, outstandingBalance);
-          const newPaidAmount = alreadyPaid + amountToApply;
-          const newBalanceAmount = totalAmount - newPaidAmount;
-          const newStatus = newBalanceAmount <= 0.01 ? 'Paid' : 'Partial';
+        const apply = Math.min(remaining, balance);
 
-          await connection.promise().execute(
-            `UPDATE voucher SET 
-              paid_amount = ?, 
-              balance_amount = ?, 
-              status = ?, 
-              paid_date = ? 
-             WHERE VoucherID = ?`,
-            [newPaidAmount, newBalanceAmount, newStatus, currentDate, voucher.VoucherID]
-          );
+        const newPaid = paid + apply;
+        const newBalance = total - newPaid;
+        const status = newBalance <= 0 ? "Paid" : "Partial";
 
-          remainingAmount -= amountToApply;
-          console.log(`Applied ₹${amountToApply} to Sales Voucher ${voucher.VoucherID}, Remaining: ₹${remainingAmount}`);
-        }
-
-        if (remainingAmount > 0) {
-          console.log('💰 Advance payment voucher created.');
-        }
-      } else {
         await connection.promise().execute(
-          `UPDATE voucher SET status = 'Advance' WHERE VoucherID = ?`,
-          [voucherId]
+          `UPDATE voucher 
+           SET paid_amount = ?, balance_amount = ?, status = ?, paid_date = ? 
+           WHERE VoucherID = ?`,
+          [newPaid, newBalance, status, currentDate, s.VoucherID]
         );
-        console.log('ℹ️ No Sales found — marked as Advance.');
+
+        remaining -= apply;
       }
     }
 
-    // ✅ Commit transaction
+    // -------------------------------------------
+    // 5️⃣ COMMIT
+    // -------------------------------------------
     await connection.promise().commit();
 
-    res.status(201).json({
-      id: voucherId,
-      message: 'Receipt created successfully',
-      receipt_number,
-      transaction_proof_filename,
-      product_id: safeProductId,
-      batch_id: safeBatchId
+    res.json({
+      success: true,
+      message: `${safeTransactionType} created successfully`,
+      receipt_no: nextReceipt,
+      voucherId: receiptVoucherId,
+      transaction_proof: transaction_proof_filename,
+      transactionType: safeTransactionType,
+      stored_batch_id: batch_id,    // For debugging
+      stored_batch_number: batch    // For debugging
     });
 
   } catch (error) {
     if (connection) await connection.promise().rollback();
-    if (req.file) fs.unlinkSync(req.file.path);
+    console.error("Error creating receipt:", error);
 
-    console.error('❌ Error in create receipt route:', error);
-    res.status(500).json({ error: error.message || 'Failed to create receipt' });
+    res.status(500).json({
+      success: false,
+      error: error.message
+    });
   } finally {
     if (connection) connection.release();
   }
@@ -287,31 +347,62 @@ router.get('/receipts-with-vouchers', async (req, res) => {
   try {
     const query = `
       SELECT 
-        v1.*, 
+        r.*, 
         a.business_name,
         a.name AS account_name,
-        GROUP_CONCAT(DISTINCT v2.InvoiceNumber) AS related_invoices,
-        SUM(v2.TotalAmount) AS total_invoice_amount,
-        SUM(v2.paid_amount) AS total_paid_amount,
-        SUM(v2.balance_amount) AS total_balance_amount
-      FROM voucher v1
-      LEFT JOIN accounts a ON v1.PartyID = a.id
-      LEFT JOIN voucher v2 
-        ON v1.receipt_number = v2.receipt_number
-        AND v2.TransactionType IN ('Sales', 'Purchase', 'Invoice')
-      WHERE v1.TransactionType = 'Receipt'
-      GROUP BY v1.VoucherID
-      ORDER BY v1.created_at DESC
+
+        -- All invoices (Sales or Purchase) belonging to same Party + same InvoiceNumber
+        (
+          SELECT GROUP_CONCAT(DISTINCT v.InvoiceNumber)
+          FROM voucher v
+          WHERE 
+            v.PartyID = r.PartyID
+            AND v.InvoiceNumber = r.InvoiceNumber
+            AND v.TransactionType IN ('Sales', 'Purchase')
+        ) AS related_invoices,
+
+        (
+          SELECT SUM(v.TotalAmount)
+          FROM voucher v
+          WHERE 
+            v.PartyID = r.PartyID
+            AND v.InvoiceNumber = r.InvoiceNumber
+            AND v.TransactionType IN ('Sales', 'Purchase')
+        ) AS total_invoice_amount,
+
+        (
+          SELECT SUM(v.paid_amount)
+          FROM voucher v
+          WHERE 
+            v.PartyID = r.PartyID
+            AND v.InvoiceNumber = r.InvoiceNumber
+            AND v.TransactionType IN ('Sales', 'Purchase')
+        ) AS total_paid_amount,
+
+        (
+          SELECT SUM(v.balance_amount)
+          FROM voucher v
+          WHERE 
+            v.PartyID = r.PartyID
+            AND v.InvoiceNumber = r.InvoiceNumber
+            AND v.TransactionType IN ('Sales', 'Purchase')
+        ) AS total_balance_amount
+
+      FROM voucher r
+      LEFT JOIN accounts a ON r.PartyID = a.id
+      WHERE r.TransactionType = 'Receipt'
+      ORDER BY r.created_at DESC
     `;
 
     db.execute(query, (error, results) => {
       if (error) {
-        console.error('Database error fetching vouchers with receipts:', error);
+        console.error('Database error fetching receipts:', error);
         return res.status(500).json({ error: 'Failed to fetch receipts' });
       }
 
       res.json(results || []);
     });
+
   } catch (error) {
     console.error('Error in /receipts-with-vouchers route:', error);
     res.status(500).json({ error: 'Failed to fetch receipts' });
@@ -319,13 +410,15 @@ router.get('/receipts-with-vouchers', async (req, res) => {
 });
 
 
+
 // ------------------------------
 // Get last receipt (fallback)
+// ------------------------------
 // ------------------------------
 router.get('/last-receipt', async (req, res) => {
   try {
     db.execute(
-      `SELECT receipt_number 
+      `SELECT VchNo 
        FROM voucher 
        WHERE TransactionType = 'Receipt' 
        ORDER BY VoucherID DESC 
@@ -337,7 +430,7 @@ router.get('/last-receipt', async (req, res) => {
         }
 
         if (results && results.length > 0) {
-          res.json({ lastReceiptNumber: results[0].receipt_number });
+          res.json({ lastReceiptNumber: results[0].VchNo });
         } else {
           res.json({ lastReceiptNumber: null });
         }
@@ -355,44 +448,78 @@ router.get('/last-receipt', async (req, res) => {
 // ------------------------------
 router.get('/receipts', async (req, res) => {
   try {
-    db.execute(
-      `SELECT 
-         v.*, 
-         a.business_name, 
-         a.name AS payee_name,
-         (
-           SELECT GROUP_CONCAT(DISTINCT v2.InvoiceNumber)
-           FROM voucher v2
-           WHERE v2.receipt_number = v.receipt_number
-           AND v2.TransactionType IN ('Sales', 'Receipt')
-           AND v2.InvoiceNumber IS NOT NULL
-           AND v2.InvoiceNumber != ''
-         ) AS invoice_numbers
-       FROM voucher v
-       LEFT JOIN accounts a ON v.PartyID = a.id
-       WHERE v.TransactionType = 'Receipt'
-       ORDER BY v.created_at DESC`,
-      (error, results) => {
-        if (error) {
-          console.error('Database error fetching vouchers (receipts):', error);
-          return res.status(500).json({ error: 'Failed to fetch receipts' });
-        }
+    const sql = `
+      SELECT 
+        r.*,
+        a.business_name,
+        a.name AS payee_name,
 
-        // Convert invoice_numbers string to array
-        const processedResults = results.map(voucher => ({
-          ...voucher,
-          invoice_numbers: voucher.invoice_numbers ? voucher.invoice_numbers.split(',') : []
-        }));
+        -- All related invoices for same customer + same invoice number
+        (
+          SELECT GROUP_CONCAT(DISTINCT v.InvoiceNumber)
+          FROM voucher v
+          WHERE 
+            v.PartyID = r.PartyID
+            AND v.InvoiceNumber = r.InvoiceNumber
+            AND v.TransactionType IN ('Sales', 'Purchase')
+        ) AS invoice_numbers,
 
-        console.log('Receipts fetched from voucher table:', processedResults.length);
-        res.json(processedResults || []);
+        (
+          SELECT SUM(v.TotalAmount)
+          FROM voucher v
+          WHERE 
+            v.PartyID = r.PartyID
+            AND v.InvoiceNumber = r.InvoiceNumber
+            AND v.TransactionType IN ('Sales', 'Purchase')
+        ) AS total_invoice_amount,
+
+        (
+          SELECT SUM(v.paid_amount)
+          FROM voucher v
+          WHERE 
+            v.PartyID = r.PartyID
+            AND v.InvoiceNumber = r.InvoiceNumber
+            AND v.TransactionType IN ('Sales', 'Purchase')
+        ) AS total_paid_amount,
+
+        (
+          SELECT SUM(v.balance_amount)
+          FROM voucher v
+          WHERE 
+            v.PartyID = r.PartyID
+            AND v.InvoiceNumber = r.InvoiceNumber
+            AND v.TransactionType IN ('Sales', 'Purchase')
+        ) AS total_balance_amount
+
+      FROM voucher r
+      LEFT JOIN accounts a ON r.PartyID = a.id
+      WHERE r.TransactionType = 'Receipt'
+      ORDER BY r.created_at DESC
+    `;
+
+    db.execute(sql, (err, results) => {
+      if (err) {
+        console.error("Database error fetching vouchers (receipts):", err);
+        return res.status(500).json({ error: "Failed to fetch receipts" });
       }
-    );
+
+      const processed = results.map(r => ({
+        ...r,
+        invoice_numbers: r.invoice_numbers 
+          ? r.invoice_numbers.split(",") 
+          : []
+      }));
+
+      console.log("Receipts fetched:", processed.length);
+      res.json(processed);
+    });
+
   } catch (error) {
-    console.error('Error in /receipts route:', error);
-    res.status(500).json({ error: 'Failed to fetch receipts' });
+    console.error("Error in /receipts route:", error);
+    res.status(500).json({ error: "Failed to fetch receipts" });
   }
 });
+
 
 
 // ------------------------------
@@ -400,51 +527,82 @@ router.get('/receipts', async (req, res) => {
 // ------------------------------
 router.get('/receipts/:id', async (req, res) => {
   try {
-    db.execute(
-      `SELECT 
-         v.*, 
-         a.business_name, 
-         a.name AS payee_name,
-         (
-           SELECT GROUP_CONCAT(DISTINCT v2.InvoiceNumber)
-           FROM voucher v2
-           WHERE v2.receipt_number = v.receipt_number
-           AND v2.TransactionType IN ('Sales', 'Receipt')
-           AND v2.InvoiceNumber IS NOT NULL
-           AND v2.InvoiceNumber != ''
-         ) AS invoice_numbers
-       FROM voucher v
-       LEFT JOIN accounts a ON v.PartyID = a.id
-       WHERE v.VoucherID = ? 
-       AND v.TransactionType = 'Receipt'`,
-      [req.params.id],
-      (error, results) => {
-        if (error) {
-          console.error('Database error fetching receipt from voucher:', error);
-          return res.status(500).json({ error: 'Failed to fetch receipt' });
-        }
+    const sql = `
+      SELECT 
+        r.*,
+        a.business_name,
+        a.name AS payee_name,
 
-        if (!results || results.length === 0) {
-          return res.status(404).json({ error: 'Receipt not found' });
-        }
+        -- List of invoices linked to this receipt (same customer + same invoice number)
+        (
+          SELECT GROUP_CONCAT(DISTINCT v.InvoiceNumber)
+          FROM voucher v
+          WHERE 
+            v.PartyID = r.PartyID
+            AND v.InvoiceNumber = r.InvoiceNumber
+            AND v.TransactionType IN ('Sales', 'Purchase')
+        ) AS invoice_numbers,
 
-        // Convert invoice_numbers to array
-        const receipt = {
-          ...results[0],
-          invoice_numbers: results[0].invoice_numbers
-            ? results[0].invoice_numbers.split(',')
-            : []
-        };
+        (
+          SELECT SUM(v.TotalAmount)
+          FROM voucher v
+          WHERE 
+            v.PartyID = r.PartyID
+            AND v.InvoiceNumber = r.InvoiceNumber
+            AND v.TransactionType IN ('Sales', 'Purchase')
+        ) AS total_invoice_amount,
 
-        console.log('Receipt fetched from voucher table:', receipt);
-        res.json(receipt);
+        (
+          SELECT SUM(v.paid_amount)
+          FROM voucher v
+          WHERE 
+            v.PartyID = r.PartyID
+            AND v.InvoiceNumber = r.InvoiceNumber
+            AND v.TransactionType IN ('Sales', 'Purchase')
+        ) AS total_paid_amount,
+
+        (
+          SELECT SUM(v.balance_amount)
+          FROM voucher v
+          WHERE 
+            v.PartyID = r.PartyID
+            AND v.InvoiceNumber = r.InvoiceNumber
+            AND v.TransactionType IN ('Sales', 'Purchase')
+        ) AS total_balance_amount
+
+      FROM voucher r
+      LEFT JOIN accounts a ON r.PartyID = a.id
+      WHERE r.VoucherID = ?
+      AND r.TransactionType = 'Receipt'
+    `;
+
+    db.execute(sql, [req.params.id], (error, results) => {
+      if (error) {
+        console.error("Database error fetching receipt:", error);
+        return res.status(500).json({ error: "Failed to fetch receipt" });
       }
-    );
+
+      if (!results || results.length === 0) {
+        return res.status(404).json({ error: "Receipt not found" });
+      }
+
+      const receipt = {
+        ...results[0],
+        invoice_numbers: results[0].invoice_numbers
+          ? results[0].invoice_numbers.split(",")
+          : []
+      };
+
+      console.log("Receipt fetched:", receipt);
+      res.json(receipt);
+    });
+
   } catch (error) {
-    console.error('Error in /receipts/:id route:', error);
-    res.status(500).json({ error: 'Failed to fetch receipt' });
+    console.error("Error in /receipts/:id route:", error);
+    res.status(500).json({ error: "Failed to fetch receipt" });
   }
 });
+
 
 router.get('/voucher', async (req, res) => {
   try {
@@ -456,7 +614,7 @@ router.get('/voucher', async (req, res) => {
          (
            SELECT GROUP_CONCAT(DISTINCT v2.InvoiceNumber)
            FROM voucher v2
-           WHERE v2.receipt_number = v.receipt_number
+           WHERE v2.VchNo = v.VchNo  -- Use VchNo instead of receipt_number
            AND v2.TransactionType IN ('Purchase', 'purchase voucher')
            AND v2.InvoiceNumber IS NOT NULL
            AND v2.InvoiceNumber != ''
@@ -487,7 +645,6 @@ router.get('/voucher', async (req, res) => {
   }
 });
 
-
 // ------------------------------
 // Get receipt by ID
 // ------------------------------
@@ -501,7 +658,7 @@ router.get('/voucher/:id', async (req, res) => {
          (
            SELECT GROUP_CONCAT(DISTINCT v2.InvoiceNumber)
            FROM voucher v2
-           WHERE v2.receipt_number = v.receipt_number
+           WHERE v2.VchNo = v.VchNo  -- Use VchNo instead of receipt_number
            AND v2.TransactionType IN ('Purchase', 'purchase voucher')
            AND v2.InvoiceNumber IS NOT NULL
            AND v2.InvoiceNumber != ''
@@ -936,6 +1093,7 @@ router.put('/voucher/:id', upload.single('transaction_proof'), async (req, res) 
 
 
 // ✅ DELETE Receipt (without touching ledger table)
+
 router.delete('/receipts/:id', async (req, res) => {
   let connection;
   try {
@@ -974,6 +1132,22 @@ router.delete('/receipts/:id', async (req, res) => {
     const receiptAmount = parseFloat(receipt.TotalAmount);
     const receiptNumber = receipt.receipt_number;
     const retailerId = receipt.PartyID;
+
+    // 🔥 CRITICAL FIX: Delete from voucherdetails FIRST
+    console.log('Deleting voucher details for VoucherID:', req.params.id);
+    await new Promise((resolve, reject) => {
+      connection.execute(
+        `DELETE FROM voucherdetails WHERE voucher_id = ?`,
+        [req.params.id],
+        (error, results) => {
+          if (error) reject(error);
+          else {
+            console.log('Deleted voucher details rows:', results.affectedRows);
+            resolve(results);
+          }
+        }
+      );
+    });
 
     // 2️⃣ Update related Sales vouchers (reverse paid amount)
     if (retailerId && receiptNumber) {
@@ -1100,7 +1274,7 @@ router.delete('/voucher/:id', async (req, res) => {
     }
 
     const receiptAmount = parseFloat(receipt.TotalAmount);
-    const receiptNumber = receipt.receipt_number;
+    const receiptNumber = receipt.VchNo; // Using VchNo instead of receipt_number
     const retailerId = receipt.PartyID;
 
     // 2️⃣ Update related Sales vouchers (reverse paid amount)
@@ -1108,7 +1282,7 @@ router.delete('/voucher/:id', async (req, res) => {
       const salesVouchers = await new Promise((resolve, reject) => {
         connection.execute(
           `SELECT * FROM voucher 
-           WHERE PartyID = ? AND receipt_number = ? AND TransactionType = "Purchase"`,
+           WHERE PartyID = ? AND VchNo = ? AND TransactionType = "Purchase"`,
           [retailerId, receiptNumber],
           (error, results) => {
             if (error) reject(error);
@@ -1133,7 +1307,7 @@ router.delete('/voucher/:id', async (req, res) => {
             `UPDATE voucher SET 
               paid_amount = ?, 
               balance_amount = ?, 
-              receipt_number = NULL,
+              VchNo = NULL,
               status = ? 
              WHERE VoucherID = ?`,
             [newPaidAmount, newBalanceAmount, newStatus, voucher.VoucherID],
@@ -1146,7 +1320,21 @@ router.delete('/voucher/:id', async (req, res) => {
       }
     }
 
-    // 3️⃣ Delete the Receipt voucher itself
+    // 3️⃣ FIRST delete related records from voucherdetails table
+    const deleteDetailsResult = await new Promise((resolve, reject) => {
+      connection.execute(
+        `DELETE FROM voucherdetails WHERE voucher_id = ?`,
+        [req.params.id],
+        (error, results) => {
+          if (error) reject(error);
+          else resolve(results);
+        }
+      );
+    });
+
+    console.log(`Deleted ${deleteDetailsResult.affectedRows} records from voucherdetails`);
+
+    // 4️⃣ NOW delete the Receipt voucher itself
     const deleteResult = await new Promise((resolve, reject) => {
       connection.execute(
         `DELETE FROM voucher WHERE VoucherID = ? AND TransactionType = "purchase voucher"`,
@@ -1162,7 +1350,7 @@ router.delete('/voucher/:id', async (req, res) => {
       throw new Error('Failed to delete Receipt voucher');
     }
 
-    // 4️⃣ Commit the transaction
+    // 5️⃣ Commit the transaction
     await new Promise((resolve, reject) => {
       connection.commit(err => {
         if (err) reject(err);
@@ -1173,7 +1361,8 @@ router.delete('/voucher/:id', async (req, res) => {
     res.json({
       message: 'Receipt voucher deleted successfully',
       deleted_voucher_id: req.params.id,
-      receipt_number: receiptNumber
+      receipt_number: receiptNumber,
+      deleted_details_count: deleteDetailsResult.affectedRows
     });
 
   } catch (error) {

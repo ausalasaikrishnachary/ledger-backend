@@ -943,91 +943,78 @@ router.get('/products/:id/with-batches', async (req, res) => {
 // Get vouchers by product_id
 router.get("/vouchers/by-product/:product_id", (req, res) => {
   const productId = req.params.product_id;
-  
+
   if (!productId) {
-    return res.status(400).send({ error: 'Product ID is required' });
+    return res.status(400).send({ error: "Product ID is required" });
   }
 
   db.getConnection((err, connection) => {
     if (err) {
-      console.error('Database connection error:', err);
-      return res.status(500).send({ error: 'Database connection failed' });
+      console.error("Database connection error:", err);
+      return res.status(500).send({ error: "Database connection failed" });
     }
 
-    // Query to get vouchers that contain the specific product_id
+    // Query joins voucher and voucherdetails
     const query = `
       SELECT 
         v.*,
-        JSON_UNQUOTE(JSON_EXTRACT(v.BatchDetails, '$')) as parsed_batch_details
+        vd.id AS detail_id,
+        vd.quantity AS detail_quantity,
+        vd.total AS detail_total,
+        vd.batch AS detail_batch,
+        vd.product_id AS detail_product_id
       FROM voucher v
-      WHERE 
-        v.product_id LIKE ? 
-        OR v.product_id = ?
-        OR v.product_id LIKE ?
-        OR v.product_id LIKE ?
+      INNER JOIN voucherdetails vd ON v.VoucherID = vd.voucher_id
+      WHERE vd.product_id = ?
       ORDER BY v.Date DESC, v.EntryDate DESC
     `;
 
-    // Search patterns for comma-separated product_ids
-    const searchPatterns = [
-      `%${productId}%`,  // Contains the product_id anywhere
-      productId,         // Exact match
-      `${productId},%`,  // Starts with product_id
-      `%,${productId}%`  // Contains product_id with comma
-    ];
-
-    connection.query(query, searchPatterns, (err, results) => {
+    connection.query(query, [productId], (err, results) => {
       connection.release();
 
       if (err) {
-        console.error('Database query error:', err);
-        return res.status(500).send({ error: 'Failed to fetch vouchers', details: err.message });
+        console.error("Database query error:", err);
+        return res.status(500).send({ error: "Failed to fetch vouchers", details: err.message });
       }
 
-      // Parse BatchDetails and filter to only include items with matching product_id
-      const filteredResults = results.map(voucher => {
-        try {
-          let batchDetails = [];
-          if (voucher.BatchDetails) {
-            batchDetails = typeof voucher.BatchDetails === 'string' 
-              ? JSON.parse(voucher.BatchDetails) 
-              : voucher.BatchDetails;
-          }
+      // Group vouchers by VoucherID
+      const grouped = {};
 
-          // Filter batch details to only include items with matching product_id
-          const filteredBatchDetails = batchDetails.filter(item => 
-            item.product_id && item.product_id.toString() === productId.toString()
-          );
-
-          return {
-            ...voucher,
-            batchDetails: filteredBatchDetails,
-            totalItems: filteredBatchDetails.length,
-            totalQuantity: filteredBatchDetails.reduce((sum, item) => sum + (parseFloat(item.quantity) || 0), 0),
-            totalAmount: filteredBatchDetails.reduce((sum, item) => sum + (parseFloat(item.total) || 0), 0)
-          };
-        } catch (parseError) {
-          console.error('Error parsing batch details for voucher:', voucher.VoucherID, parseError);
-          return {
-            ...voucher,
+      results.forEach(row => {
+        if (!grouped[row.VoucherID]) {
+          grouped[row.VoucherID] = {
+            ...row,
             batchDetails: [],
-            totalItems: 0,
             totalQuantity: 0,
-            totalAmount: 0
+            totalAmount: 0,
           };
         }
-      }).filter(voucher => voucher.totalItems > 0); // Only return vouchers that have matching items
 
-      console.log(`Found ${filteredResults.length} vouchers for product ID: ${productId}`);
+        // Push voucherdetails record
+        grouped[row.VoucherID].batchDetails.push({
+          id: row.detail_id,
+          product_id: row.detail_product_id,
+          batch: row.detail_batch,
+          quantity: row.detail_quantity,
+          total: row.detail_total
+        });
+
+        // Add totals
+        grouped[row.VoucherID].totalQuantity += parseFloat(row.detail_quantity || 0);
+        grouped[row.VoucherID].totalAmount += parseFloat(row.detail_total || 0);
+      });
+
+      const finalVouchers = Object.values(grouped);
 
       res.send({
         success: true,
-        productId: productId,
-        totalVouchers: filteredResults.length,
-        vouchers: filteredResults
+        productId,
+        totalVouchers: finalVouchers.length,
+        vouchers: finalVouchers
       });
     });
   });
 });
+
 
 module.exports = router;
