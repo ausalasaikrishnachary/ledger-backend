@@ -1856,7 +1856,7 @@ const processTransaction = async (transactionData, transactionType, connection) 
       voucher_id, product, product_id, transaction_type, InvoiceNumber,
       batch, quantity, price, discount,
       gst, cgst, sgst, igst, cess, total, created_at
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW())
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW())
   `;
 
   for (const i of items) {
