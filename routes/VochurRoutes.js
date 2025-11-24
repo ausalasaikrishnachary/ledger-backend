@@ -1853,7 +1853,7 @@ const processTransaction = async (transactionData, transactionType, connection) 
   // STEP 8: INSERT ITEMS INTO voucherdetails
   const insertDetailQuery = `
     INSERT INTO voucherdetails (
-      voucher_id, product, product_id, InvoiceNumber,
+      voucher_id, product, product_id, transaction_type, InvoiceNumber,
       batch, quantity, price, discount,
       gst, cgst, sgst, igst, cess, total, created_at
     ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW())
@@ -1864,6 +1864,7 @@ const processTransaction = async (transactionData, transactionType, connection) 
       nextVoucherId,
       i.product,
       i.product_id,
+      transactionType,
       invoiceNumber,
       i.batch,
       i.quantity,
