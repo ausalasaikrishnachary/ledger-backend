@@ -607,9 +607,7 @@ router.get("/debit-notes-table", (req, res) => {
       v.Date,
       v.PaymentTerms,
       v.Freight,
-      v.TotalQty,
       v.TotalPacks,
-      v.TotalQty1,
       v.TaxAmount,
       v.Subtotal,
       v.BillSundryAmount,
@@ -618,8 +616,8 @@ router.get("/debit-notes-table", (req, res) => {
       v.ChequeDate,
       v.BankName,
       v.AccountID,
-      
-      -- Fetch correct Party ID and Name from accounts table
+
+      -- Correct Party Name via accounts table
       v.PartyID,
       a.name AS PartyName,
       a.id AS AccountPartyID,
@@ -634,11 +632,9 @@ router.get("/debit-notes-table", (req, res) => {
       v.CGSTAmount,
       v.IGSTAmount,
       v.TaxSystem,
-      v.BatchDetails,
       v.paid_amount,
       v.created_at,
       v.balance_amount,
-      v.receipt_number,
       v.status,
       v.paid_date,
       v.pdf_data,
@@ -654,21 +650,23 @@ router.get("/debit-notes-table", (req, res) => {
   db.query(query, (err, results) => {
     if (err) {
       console.error("Database error:", err);
-      return res.status(500).json({ 
+      return res.status(500).json({
         success: false,
         error: "Database error",
-        message: err.message 
+        message: err.message
       });
     }
 
-    console.log(`Found ${results.length} credit notes`);
+    console.log(`Found ${results.length} debit notes`);
+
     res.json({
       success: true,
       count: results.length,
-      creditNotes: results
+      debitNotes: results
     });
   });
 });
+
 
 
 
