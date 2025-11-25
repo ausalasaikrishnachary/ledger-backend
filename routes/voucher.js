@@ -940,7 +940,7 @@ router.get('/vouchersnumber', (req, res) => {
   });
 });
 
-router.get('/vouchersnumber', (req, res) => {
+router.get('/purchasevouchersnumber', (req, res) => {
   const query = `
     SELECT VoucherID, TransactionType, VchNo 
     FROM voucher 

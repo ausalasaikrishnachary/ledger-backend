@@ -192,8 +192,10 @@ router.get("/transactions/:id/download-pdf", (req, res) => {
   });
 });
 
-// Helper function to wrap connection.query in a promise
-function queryPromise(connection, sql, params = []) {
+// -----------------------------------------
+// PROMISIFIED QUERY FOR mysql2 (non-promise)
+// -----------------------------------------
+function queryPromise(sql, params, connection) {
   return new Promise((resolve, reject) => {
     connection.query(sql, params, (err, results) => {
       if (err) return reject(err);
@@ -201,6 +203,10 @@ function queryPromise(connection, sql, params = []) {
     });
   });
 }
+
+// -----------------------------------------
+// UPDATE CREDIT NOTE ROUTE
+// -----------------------------------------
 
 router.put("/creditnoteupdate/:id", async (req, res) => {
   const voucherId = req.params.id;
@@ -230,27 +236,36 @@ router.put("/creditnoteupdate/:id", async (req, res) => {
           originalVoucher.TransactionType ||
           "Sales";
 
-        // Parse OLD batch details stored in this voucher (the credit note previous state)
-        let oldVoucherBatchDetails = [];
-        try {
-          oldVoucherBatchDetails = JSON.parse(originalVoucher.BatchDetails || "[]");
-        } catch {
-          oldVoucherBatchDetails = [];
-        }
+        // Since there's no BatchDetails column in voucher table, we'll use voucherdetails table
+        // Fetch old batch details from voucherdetails table
+        const oldVoucherDetails = await queryPromise(
+          "SELECT * FROM voucherdetails WHERE voucher_id = ?",
+          [voucherId],
+          connection
+        );
 
         // Build a map of old credit quantities by key productid-batch
         const oldCreditMap = new Map();
         if (transactionType === "CreditNote") {
-          for (const it of oldVoucherBatchDetails) {
+          for (const it of oldVoucherDetails) {
             const key = `${it.product_id}-${it.batch}`;
             oldCreditMap.set(key, (oldCreditMap.get(key) || 0) + (Number(it.quantity) || 0));
+          }
+        }
+
+        // For DebitNote - build old debit map
+        const oldDebitMap = new Map();
+        if (transactionType === "DebitNote") {
+          for (const it of oldVoucherDetails) {
+            const key = `${it.product_id}-${it.batch}`;
+            oldDebitMap.set(key, (oldDebitMap.get(key) || 0) + (Number(it.quantity) || 0));
           }
         }
 
         // -------------------------
         // 2️⃣ Reverse OLD STOCK (undo what the old voucher did)
         // -------------------------
-        for (const item of oldVoucherBatchDetails) {
+        for (const item of oldVoucherDetails) {
           if (!item.product_id || !item.batch) continue;
 
           const [batchRow] = await queryPromise(
@@ -322,7 +337,7 @@ router.put("/creditnoteupdate/:id", async (req, res) => {
           Number(originalVoucher.TotalAmount) ||
           0;
 
-        // 5️⃣ Update voucher row itself (update BatchDetails JSON, totals, updated_quantity, etc.)
+        // 5️⃣ Update voucher row itself - only update existing columns
         await queryPromise(
           `UPDATE voucher SET
             VchNo = ?,
@@ -332,9 +347,6 @@ router.put("/creditnoteupdate/:id", async (req, res) => {
             BasicAmount = ?,
             TaxAmount = ?,
             TotalAmount = ?,
-            TotalQty = ?,
-            updated_quantity = ?,
-            BatchDetails = ?,
             TransactionType = ?,
             paid_amount = ?
           WHERE VoucherID = ?`,
@@ -346,10 +358,6 @@ router.put("/creditnoteupdate/:id", async (req, res) => {
             Number(updateData.BasicAmount) || Number(updateData.taxableAmount) || Number(originalVoucher.BasicAmount) || 0,
             Number(updateData.TaxAmount) || Number(updateData.totalGST) || Number(originalVoucher.TaxAmount) || 0,
             grandTotal,
-            totalQty,
-            // For CreditNote set updated_quantity = totalQty (credit note quantity), otherwise allow provided or fallback
-            (transactionType === "CreditNote" ? totalQty : (Number(updateData.updated_quantity) || totalQty)),
-            JSON.stringify(newBatchDetails),
             transactionType,
             grandTotal,
             voucherId,
@@ -361,12 +369,13 @@ router.put("/creditnoteupdate/:id", async (req, res) => {
         for (const item of newBatchDetails) {
           await queryPromise(
             `INSERT INTO voucherdetails
-              (voucher_id, product, product_id, InvoiceNumber, batch, quantity, price, discount, gst, cgst, sgst, igst, cess, total, created_at)
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW())`,
+              (voucher_id, product, product_id, transaction_type, InvoiceNumber, batch, quantity, price, discount, gst, cgst, sgst, igst, cess, total, created_at)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW())`,
             [
               voucherId,
               item.product || "",
               item.product_id || 0,
+              transactionType,
               item.InvoiceNumber || updateData.InvoiceNumber || originalVoucher.InvoiceNumber || "",
               item.batch || "",
               item.quantity || 0,
@@ -392,7 +401,6 @@ router.put("/creditnoteupdate/:id", async (req, res) => {
           );
 
           if (!batch) {
-            // Option: create batch if not exists (here we throw so you can handle)
             throw new Error(`Batch not found for product_id=${item.product_id}, batch=${item.batch}`);
           }
 
@@ -419,7 +427,7 @@ router.put("/creditnoteupdate/:id", async (req, res) => {
         }
 
         // -------------------------
-        // 8️⃣ CRITICAL: Update original Sales voucher BatchDetails quantities (reverse old credit then apply new credit)
+        // 8️⃣ CRITICAL: Update original Sales voucher quantities
         // -------------------------
         if (transactionType === "CreditNote") {
           const originalInvoiceNumber = updateData.originalInvoiceNumber || updateData.InvoiceNumber || originalVoucher.InvoiceNumber;
@@ -429,7 +437,7 @@ router.put("/creditnoteupdate/:id", async (req, res) => {
           });
 
           const findOriginalSalesQuery = `
-            SELECT VoucherID, BatchDetails, updated_quantity, TotalQty
+            SELECT VoucherID, TotalAmount
             FROM voucher
             WHERE TransactionType = 'Sales'
               AND InvoiceNumber = ?
@@ -441,13 +449,12 @@ router.put("/creditnoteupdate/:id", async (req, res) => {
           if (originalSalesRows.length > 0) {
             const originalSales = originalSalesRows[0];
 
-            // Parse original sales BatchDetails
-            let salesBatchDetails = [];
-            try {
-              salesBatchDetails = JSON.parse(originalSales.BatchDetails || "[]");
-            } catch {
-              salesBatchDetails = [];
-            }
+            // Fetch sales voucher details to update quantities
+            const salesVoucherDetails = await queryPromise(
+              "SELECT * FROM voucherdetails WHERE voucher_id = ?",
+              [originalSales.VoucherID],
+              connection
+            );
 
             // compute oldTotalCredit and newTotalCredit
             let oldTotalCredit = 0;
@@ -463,135 +470,90 @@ router.put("/creditnoteupdate/:id", async (req, res) => {
 
             console.log("📊 CreditNote changes -> oldTotal:", oldTotalCredit, "newTotal:", newTotalCredit);
 
-            // Build updated sales BatchDetails: for each sales item, first add back old credit (reverse previous credit),
-            // then subtract new credit.
-            const updatedSalesBatchDetails = salesBatchDetails.map(salesItem => {
+            // Update sales voucherdetails quantities
+            for (const salesItem of salesVoucherDetails) {
               const key = `${salesItem.product_id}-${salesItem.batch}`;
-              const origQty = Number(salesItem.quantity) || 0;
               const oldCredQty = oldCreditMap.get(key) || 0;
               const newCredQty = newCreditMap.get(key) || 0;
 
-              // after reversing old credit and applying new credit:
-              const restoredQty = origQty + oldCredQty; // add back what the previous credit removed
+              // Calculate new quantity: add back old credit, subtract new credit
+              const restoredQty = Number(salesItem.quantity) + oldCredQty;
               const finalQty = Math.max(0, restoredQty - newCredQty);
 
-              return {
-                ...salesItem,
-                quantity: finalQty
-              };
-            });
+              await queryPromise(
+                "UPDATE voucherdetails SET quantity = ? WHERE id = ?",
+                [finalQty, salesItem.id],
+                connection
+              );
+            }
 
-            // Update updated_quantity on sales voucher using difference (this keeps your previous approach)
-            const currentSalesUpdatedQty = parseFloat(originalSales.updated_quantity) || parseFloat(originalSales.TotalQty) || 0;
-            const quantityDifference = newTotalCredit - oldTotalCredit; // positive means more credits now, so reduce updated_quantity
-            const newUpdatedQty = Math.max(0, currentSalesUpdatedQty - quantityDifference);
-
-            // Persist both BatchDetails JSON and updated_quantity back to the original Sales voucher
-            await queryPromise(
-              `UPDATE voucher SET BatchDetails = ?, updated_quantity = ? WHERE VoucherID = ?`,
-              [JSON.stringify(updatedSalesBatchDetails), newUpdatedQty, originalSales.VoucherID],
-              connection
-            );
-
-            console.log("✅ Updated original sales BatchDetails + updated_quantity:", {
-              salesVoucherId: originalSales.VoucherID,
-              newUpdatedQty,
-              updatedSalesBatchDetails
-            });
+            console.log("✅ Updated original sales voucherdetails quantities");
           } else {
             console.warn("⚠️ No original sales transaction found for invoice:", originalInvoiceNumber);
           }
+        } else if (transactionType === "DebitNote") {
+          const originalInvoiceNumber = updateData.originalInvoiceNumber || updateData.InvoiceNumber || originalVoucher.InvoiceNumber;
+
+          console.log("🔄 Processing DebitNote UPDATE - Finding original purchase transaction for:", {
+            originalInvoiceNumber,
+            newBatchDetails
+          });
+
+          const findOriginalPurchaseQuery = `
+            SELECT VoucherID
+            FROM voucher
+            WHERE TransactionType = 'Purchase'
+              AND InvoiceNumber = ?
+            LIMIT 1
+          `;
+
+          const originalPurchaseRows = await queryPromise(findOriginalPurchaseQuery, [originalInvoiceNumber], connection);
+
+          if (originalPurchaseRows.length > 0) {
+            const originalPurchase = originalPurchaseRows[0];
+
+            // Fetch purchase voucher details to update quantities
+            const purchaseVoucherDetails = await queryPromise(
+              "SELECT * FROM voucherdetails WHERE voucher_id = ?",
+              [originalPurchase.VoucherID],
+              connection
+            );
+
+            // compute oldTotalDebit and newTotalDebit
+            let oldTotalDebit = 0;
+            for (const val of oldDebitMap.values()) oldTotalDebit += val;
+
+            let newTotalDebit = 0;
+            const newDebitMap = new Map();
+            for (const it of newBatchDetails) {
+              const k = `${it.product_id}-${it.batch}`;
+              newDebitMap.set(k, (newDebitMap.get(k) || 0) + (Number(it.quantity) || 0));
+              newTotalDebit += Number(it.quantity) || 0;
+            }
+
+            console.log("📊 DebitNote changes -> oldTotal:", oldTotalDebit, "newTotal:", newTotalDebit);
+
+            // Update purchase voucherdetails quantities
+            for (const purchaseItem of purchaseVoucherDetails) {
+              const key = `${purchaseItem.product_id}-${purchaseItem.batch}`;
+              const oldDebitQty = oldDebitMap.get(key) || 0;
+              const newDebitQty = newDebitMap.get(key) || 0;
+
+              const restoredQty = Number(purchaseItem.quantity) + oldDebitQty;
+              const finalQty = Math.max(0, restoredQty - newDebitQty);
+
+              await queryPromise(
+                "UPDATE voucherdetails SET quantity = ? WHERE id = ?",
+                [finalQty, purchaseItem.id],
+                connection
+              );
+            }
+
+            console.log("✅ Updated original purchase voucherdetails quantities");
+          } else {
+            console.warn("⚠️ No original purchase transaction found for invoice:", originalInvoiceNumber);
+          }
         }
-        else if (transactionType === "DebitNote") {
-  const originalInvoiceNumber =
-    updateData.originalInvoiceNumber ||
-    updateData.InvoiceNumber ||
-    originalVoucher.InvoiceNumber;
-
-  console.log("🔄 Processing DebitNote UPDATE - Finding original purchase transaction for:", {
-    originalInvoiceNumber,
-    newBatchDetails
-  });
-
-  const findOriginalPurchaseQuery = `
-    SELECT VoucherID, BatchDetails, updated_quantity, TotalQty
-    FROM voucher
-    WHERE TransactionType = 'Purchase'
-      AND InvoiceNumber = ?
-    LIMIT 1
-  `;
-
-  const originalPurchaseRows = await queryPromise(findOriginalPurchaseQuery, [originalInvoiceNumber], connection);
-
-  if (originalPurchaseRows.length > 0) {
-    const originalPurchase = originalPurchaseRows[0];
-
-    // Parse original purchase BatchDetails
-    let purchaseBatchDetails = [];
-    try {
-      purchaseBatchDetails = JSON.parse(originalPurchase.BatchDetails || "[]");
-    } catch {
-      purchaseBatchDetails = [];
-    }
-
-    // compute oldTotalDebit and newTotalDebit
-    let oldTotalDebit = 0;
-    for (const val of oldDebitMap.values()) oldTotalDebit += val;
-
-    let newTotalDebit = 0;
-    const newDebitMap = new Map();
-    for (const it of newBatchDetails) {
-      const k = `${it.product_id}-${it.batch}`;
-      newDebitMap.set(k, (newDebitMap.get(k) || 0) + (Number(it.quantity) || 0));
-      newTotalDebit += Number(it.quantity) || 0;
-    }
-
-    console.log("📊 DebitNote changes -> oldTotal:", oldTotalDebit, "newTotal:", newTotalDebit);
-
-    // Build updated purchase BatchDetails:
-    // For each purchase item → first add back old debit → then subtract new debit
-    const updatedPurchaseBatchDetails = purchaseBatchDetails.map(purchaseItem => {
-      const key = `${purchaseItem.product_id}-${purchaseItem.batch}`;
-      const origQty = Number(purchaseItem.quantity) || 0;
-      const oldDebitQty = oldDebitMap.get(key) || 0;
-      const newDebitQty = newDebitMap.get(key) || 0;
-
-      // after reversing old debit and applying new debit:
-      const restoredQty = origQty + oldDebitQty; // add back previous debit
-      const finalQty = Math.max(0, restoredQty - newDebitQty);
-
-      return {
-        ...purchaseItem,
-        quantity: finalQty
-      };
-    });
-
-    // Update updated_quantity on purchase voucher
-    const currentPurchaseUpdatedQty =
-      parseFloat(originalPurchase.updated_quantity) ||
-      parseFloat(originalPurchase.TotalQty) ||
-      0;
-
-    const quantityDifference = newTotalDebit - oldTotalDebit; // positive → reduce updated_quantity
-    const newUpdatedQty = Math.max(0, currentPurchaseUpdatedQty - quantityDifference);
-
-    // Persist back to DB
-    await queryPromise(
-      `UPDATE voucher SET BatchDetails = ?, updated_quantity = ? WHERE VoucherID = ?`,
-      [JSON.stringify(updatedPurchaseBatchDetails), newUpdatedQty, originalPurchase.VoucherID],
-      connection
-    );
-
-    console.log("✅ Updated original purchase BatchDetails + updated_quantity:", {
-      purchaseVoucherId: originalPurchase.VoucherID,
-      newUpdatedQty,
-      updatedPurchaseBatchDetails
-    });
-  } else {
-    console.warn("⚠️ No original purchase transaction found for invoice:", originalInvoiceNumber);
-  }
-}
-
 
         // Commit
         connection.commit(() => {
@@ -612,6 +574,7 @@ router.put("/creditnoteupdate/:id", async (req, res) => {
     });
   });
 });
+
 
 
 router.delete("/transactions/:id", async (req, res) => {
