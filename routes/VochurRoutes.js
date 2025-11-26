@@ -486,6 +486,288 @@ router.put("/creditnoteupdate/:id", async (req, res) => {
   });
 });
 
+router.put("/debitnoteupdate/:id", async (req, res) => {
+  const voucherId = req.params.id;
+  const updateData = req.body;
+
+  console.log("UPDATE RECEIVED => ", voucherId, updateData);
+
+  db.getConnection((err, connection) => {
+    if (err)
+      return res.status(500).send({ error: "Database connection failed" });
+
+    connection.beginTransaction(async (err) => {
+      if (err)
+        return res.status(500).send({ error: "Transaction could not start" });
+
+      try {
+        // 1️⃣ Fetch ORIGINAL VOUCHER
+        const originalVoucherRows = await queryPromise(
+          connection,
+          "SELECT * FROM voucher WHERE VoucherID = ?",
+          [voucherId]
+        );
+
+        if (originalVoucherRows.length === 0) {
+          throw new Error("Voucher not found");
+        }
+
+        const originalVoucher = originalVoucherRows[0];
+        const transactionType =
+          updateData.transactionType ||
+          originalVoucher.TransactionType ||
+          "DebitNote";
+
+        // 2️⃣ FETCH OLD VOUCHERDETAILS (to reverse stock)
+        const oldDetails = await queryPromise(
+          connection,
+          "SELECT * FROM voucherdetails WHERE voucher_id = ?",
+          [voucherId]
+        );
+
+        // Reverse OLD STOCK
+        for (const item of oldDetails) {
+          const batchRows = await queryPromise(
+            connection,
+            "SELECT * FROM batches WHERE product_id = ? AND batch_number = ?",
+            [item.product_id, item.batch]
+          );
+
+          if (!batchRows[0]) continue;
+          const batch = batchRows[0];
+          const qty = Number(item.quantity) || 0;
+
+          // Credit Note = stock IN (reverse stock OUT of sales)
+await queryPromise(
+  connection,
+  "UPDATE batches SET quantity = quantity - ?, stock_in = IF(stock_in - ? >= 0, stock_in - ?, 0) WHERE id = ?",
+  [qty, qty, qty, batch.id]
+);
+
+        }
+
+        // 3️⃣ DELETE OLD VOUCHERDETAILS
+        await queryPromise(
+          connection,
+          "DELETE FROM voucherdetails WHERE voucher_id = ?",
+          [voucherId]
+        );
+
+        // 4️⃣ PARSE NEW ITEMS
+        let newBatchDetails =
+          updateData.batchDetails ||
+          updateData.items ||
+          updateData.batch_details ||
+          [];
+
+        if (!Array.isArray(newBatchDetails)) {
+          try {
+            newBatchDetails = JSON.parse(newBatchDetails);
+          } catch {
+            newBatchDetails = [];
+          }
+        }
+
+        newBatchDetails = newBatchDetails.map((it) => ({
+          product: it.product || "",
+          product_id: Number(it.product_id || it.productId || 0),
+          batch: it.batch || it.batch_number || "",
+          quantity: Number(it.quantity) || 0,
+          price: Number(it.price) || 0,
+          discount: Number(it.discount) || 0,
+          gst: Number(it.gst) || 0,
+          cgst: Number(it.cgst) || 0,
+          sgst: Number(it.sgst) || 0,
+          igst: Number(it.igst) || 0,
+          cess: Number(it.cess) || 0,
+          total: Number(it.total) || 0,
+        }));
+
+        // 🔴 NEW VALIDATION: Check if Credit Note quantity exceeds Sales quantity
+        const invoiceNumber = updateData.InvoiceNumber || originalVoucher.InvoiceNumber;
+        
+        if (invoiceNumber) {
+          // Find the original Sales voucher for this invoice
+          const salesVoucherRows = await queryPromise(
+            connection,
+            "SELECT * FROM voucher WHERE InvoiceNumber = ? AND TransactionType = 'Purchase'",
+            [invoiceNumber]
+          );
+
+          if (salesVoucherRows.length > 0) {
+            const salesVoucherId = salesVoucherRows[0].VoucherID;
+            
+            // Get all sales details for this invoice
+            const salesDetails = await queryPromise(
+              connection,
+              "SELECT * FROM voucherdetails WHERE voucher_id = ?",
+              [salesVoucherId]
+            );
+
+            // Create a map of product_id+batch to sales quantity
+            const salesQuantityMap = new Map();
+            for (const salesItem of salesDetails) {
+              const key = `${salesItem.product_id}_${salesItem.batch}`;
+              salesQuantityMap.set(key, Number(salesItem.quantity) || 0);
+            }
+
+            // Validate each credit note item
+            for (const creditNoteItem of newBatchDetails) {
+              const key = `${creditNoteItem.product_id}_${creditNoteItem.batch}`;
+              const salesQuantity = salesQuantityMap.get(key) || 0;
+              const creditNoteQuantity = Number(creditNoteItem.quantity) || 0;
+
+              if (creditNoteQuantity > salesQuantity) {
+                // 🔴 IMPORTANT: Rollback transaction before sending response
+                connection.rollback(() => {
+                  connection.release();
+                  return res.status(400).json({ 
+                    success: false, 
+                    message: `Quantity exceeds sales quantity! Product: ${creditNoteItem.product}, Batch: ${creditNoteItem.batch}. Sales Quantity: ${salesQuantity}, Credit Note Quantity: ${creditNoteQuantity}`
+                  });
+                });
+                return; // Stop execution
+              }
+            }
+          } else {
+            // 🔴 Rollback and send error for no sales voucher found
+            connection.rollback(() => {
+              connection.release();
+              return res.status(400).json({ 
+                success: false, 
+                message: `No Sales voucher found for Invoice Number: ${invoiceNumber}`
+              });
+            });
+            return; // Stop execution
+          }
+        }
+
+        // 5️⃣ UPDATE voucher TABLE (ONLY REAL FIELDS)
+        await queryPromise(
+          connection,
+          `UPDATE voucher SET
+            VchNo = ?,
+            Date = ?,
+            InvoiceNumber = ?,
+            PartyName = ?,
+            BasicAmount = ?,
+            TaxAmount = ?,
+            TotalAmount = ?,
+            Subtotal = ?,
+            SGSTAmount = ?,
+            CGSTAmount = ?,
+            IGSTAmount = ?,
+            SGSTPercentage = ?,
+            CGSTPercentage = ?,
+            IGSTPercentage = ?,
+            paid_amount = ?
+          WHERE VoucherID = ?`,
+          [
+            updateData.VchNo || updateData.creditNoteNumber || originalVoucher.VchNo,
+            updateData.Date || originalVoucher.Date,
+            updateData.InvoiceNumber || originalVoucher.InvoiceNumber,
+            updateData.PartyName || originalVoucher.PartyName,
+
+            Number(updateData.BasicAmount) || originalVoucher.BasicAmount,
+            Number(updateData.TaxAmount) || originalVoucher.TaxAmount,
+            Number(updateData.TotalAmount) || originalVoucher.TotalAmount,
+
+            // Subtotal = BasicAmount
+            Number(updateData.BasicAmount) || originalVoucher.Subtotal,
+
+            Number(updateData.SGSTAmount) || 0,
+            Number(updateData.CGSTAmount) || 0,
+            Number(updateData.IGSTAmount) || 0,
+
+            Number(updateData.SGSTPercentage) || 0,
+            Number(updateData.CGSTPercentage) || 0,
+            Number(updateData.IGSTPercentage) || 0,
+
+            Number(updateData.TotalAmount) || originalVoucher.paid_amount,
+
+            voucherId,
+          ]
+        );
+
+        // 6️⃣ INSERT NEW voucherdetails ROWS
+        for (const it of newBatchDetails) {
+          await queryPromise(
+            connection,
+            `INSERT INTO voucherdetails 
+              (voucher_id, product, product_id, transaction_type, InvoiceNumber, batch, quantity, price, discount, gst, cgst, sgst, igst, cess, total, created_at)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW())`,
+            [
+              voucherId,
+              it.product,
+              it.product_id,
+              "DebitNote",
+              updateData.InvoiceNumber || originalVoucher.InvoiceNumber,
+              it.batch,
+              it.quantity,
+              it.price,
+              it.discount,
+              it.gst,
+              it.cgst,
+              it.sgst,
+              it.igst,
+              it.cess,
+              it.total,
+            ]
+          );
+        }
+
+        // 7️⃣ UPDATE NEW STOCK (CREDIT NOTE = STOCK IN)
+        for (const it of newBatchDetails) {
+          const rows = await queryPromise(
+            connection,
+            "SELECT * FROM batches WHERE product_id = ? AND batch_number = ?",
+            [it.product_id, it.batch]
+          );
+
+          if (!rows[0]) {
+            throw new Error(
+              `Batch not found for product ${it.product_id}, batch ${it.batch}`
+            );
+          }
+
+          const batch = rows[0];
+
+          await queryPromise(
+            connection,
+            "UPDATE batches SET quantity = quantity + ?, stock_out = stock_out - ? WHERE id = ?",
+            [it.quantity, it.quantity, batch.id]
+          );
+        }
+
+        // 8️⃣ COMMIT
+        connection.commit((err) => {
+          if (err) {
+            console.log("COMMIT ERROR:", err);
+            connection.rollback(() => {
+              connection.release();
+              return res.status(500).json({ success: false, message: "Commit failed" });
+            });
+            return;
+          }
+          
+          connection.release();
+          res.json({
+            success: true,
+            message: "Credit Note updated successfully",
+            voucherId,
+          });
+        });
+      } catch (err) {
+        console.log("UPDATE ERROR:", err);
+        connection.rollback(() => {
+          connection.release();
+          res.status(500).json({ success: false, message: err.message });
+        });
+      }
+    });
+  });
+});
+
 
 
 
@@ -1320,10 +1602,9 @@ router.put("/transactions/:id", async (req, res) => {
 
         console.log("🔎 Original transaction:", originalTransactionType);
 
-        // Since BatchDetails column doesn't exist, we'll get batch details from voucherdetails table
+        // Fetch batch details from voucherdetails table
         let originalBatchDetails = [];
         try {
-          // Fetch batch details from voucherdetails table instead
           const voucherDetails = await queryPromise(
             connection,
             "SELECT * FROM voucherdetails WHERE voucher_id = ?",
@@ -1348,7 +1629,7 @@ router.put("/transactions/:id", async (req, res) => {
         }
 
         // -------------------------------------------------------------------
-        // 2️⃣ REVERSE OLD STOCK (UNDO original stock effect) - FIXED FOR SALES
+        // 2️⃣ REVERSE OLD STOCK (UNDO original stock effect) - FIXED
         // -------------------------------------------------------------------
 
         for (const item of originalBatchDetails) {
@@ -1359,73 +1640,82 @@ router.put("/transactions/:id", async (req, res) => {
           // First, check current batch stock
           const batchCheck = await queryPromise(
             connection,
-            "SELECT quantity, stock_out FROM batches WHERE product_id = ? AND batch_number = ?",
+            "SELECT quantity, stock_out, stock_in FROM batches WHERE product_id = ? AND batch_number = ?",
             [item.product_id, item.batch]
           );
 
           if (batchCheck.length === 0) {
-            console.warn(`⚠️ Batch ${item.batch} not found during reversal - skipping`);
-            continue;
+            console.warn(`⚠️ Batch ${item.batch} not found during reversal - creating it`);
+            
+            // Create the batch if it doesn't exist
+            await queryPromise(
+              connection,
+              `INSERT INTO batches 
+               (product_id, batch_number, quantity, stock_in, stock_out, created_at, updated_at) 
+               VALUES (?, ?, 0, 0, 0, NOW(), NOW())`,
+              [item.product_id, item.batch]
+            );
+            console.log(`✔ Created missing batch: ${item.batch}`);
           }
 
-          const currentQuantity = parseFloat(batchCheck[0].quantity);
-          const currentStockOut = parseFloat(batchCheck[0].stock_out);
+          // Re-fetch batch data after potential creation
+          const updatedBatchCheck = await queryPromise(
+            connection,
+            "SELECT quantity, stock_out, stock_in FROM batches WHERE product_id = ? AND batch_number = ?",
+            [item.product_id, item.batch]
+          );
+
+          const currentQuantity = parseFloat(updatedBatchCheck[0].quantity);
+          const currentStockOut = parseFloat(updatedBatchCheck[0].stock_out);
+          const currentStockIn = parseFloat(updatedBatchCheck[0].stock_in);
+          const itemQuantity = parseFloat(item.quantity);
 
           if (originalTransactionType === "Purchase" || originalTransactionType === "CreditNote") {
-            // For Purchase and CreditNote reversal, check if we have enough stock to reverse
-            if (currentQuantity < item.quantity) {
-              throw new Error(
-                `Cannot reverse ${originalTransactionType}: insufficient stock in batch ${item.batch}. Available: ${currentQuantity}, Required: ${item.quantity}`
+            // For Purchase and CreditNote reversal, use safe subtraction
+            if (currentQuantity < itemQuantity) {
+              console.warn(`⚠️ Insufficient stock for reversal in batch ${item.batch}. Available: ${currentQuantity}, Required: ${item.quantity}. Adjusting...`);
+              
+              // Instead of throwing error, set to 0 if insufficient
+              const finalQuantity = Math.max(0, currentQuantity - itemQuantity);
+              const finalStockIn = Math.max(0, currentStockIn - itemQuantity);
+              
+              await queryPromise(
+                connection,
+                "UPDATE batches SET quantity = ?, stock_in = ?, updated_at = NOW() WHERE product_id = ? AND batch_number = ?",
+                [finalQuantity, finalStockIn, item.product_id, item.batch]
+              );
+            } else {
+              await queryPromise(
+                connection,
+                "UPDATE batches SET quantity = quantity - ?, stock_in = stock_in - ?, updated_at = NOW() WHERE product_id = ? AND batch_number = ?",
+                [itemQuantity, itemQuantity, item.product_id, item.batch]
               );
             }
 
-            const q = `
-              UPDATE batches
-              SET quantity = quantity - ?,
-                  stock_in = stock_in - ?,
-                  updated_at = NOW()
-              WHERE product_id = ? AND batch_number = ?
-            `;
-
-            const r = await queryPromise(
-              connection,
-              q,
-              [item.quantity, item.quantity, item.product_id, item.batch]
-            );
-
-            if (r.affectedRows === 0) {
-              console.warn(`⚠️ Failed to reverse ${originalTransactionType} for batch ${item.batch} - batch may not exist`);
-            } else {
-              console.log(`✔ Reversed ${originalTransactionType} for batch ${item.batch}`);
-            }
+            console.log(`✔ Reversed ${originalTransactionType} for batch ${item.batch}`);
 
           } else {
-            // SALES reversal → return stock
-            if (currentStockOut < item.quantity) {
-              throw new Error(
-                `Cannot reverse SALES: stock_out is less than quantity to reverse in batch ${item.batch}. Current stock_out: ${currentStockOut}, Required: ${item.quantity}`
+            // SALES reversal → return stock (use safe subtraction for stock_out)
+            if (currentStockOut < itemQuantity) {
+              console.warn(`⚠️ stock_out less than reversal quantity in batch ${item.batch}. Current: ${currentStockOut}, Required: ${item.quantity}. Adjusting...`);
+              
+              // Set stock_out to 0 if insufficient, but always add to quantity
+              const finalStockOut = Math.max(0, currentStockOut - itemQuantity);
+              
+              await queryPromise(
+                connection,
+                "UPDATE batches SET quantity = quantity + ?, stock_out = ?, updated_at = NOW() WHERE product_id = ? AND batch_number = ?",
+                [itemQuantity, finalStockOut, item.product_id, item.batch]
+              );
+            } else {
+              await queryPromise(
+                connection,
+                "UPDATE batches SET quantity = quantity + ?, stock_out = stock_out - ?, updated_at = NOW() WHERE product_id = ? AND batch_number = ?",
+                [itemQuantity, itemQuantity, item.product_id, item.batch]
               );
             }
 
-            const q = `
-              UPDATE batches
-              SET quantity = quantity + ?,
-                  stock_out = stock_out - ?,
-                  updated_at = NOW()
-              WHERE product_id = ? AND batch_number = ?
-            `;
-
-            const r = await queryPromise(
-              connection,
-              q,
-              [item.quantity, item.quantity, item.product_id, item.batch]
-            );
-
-            if (r.affectedRows === 0) {
-              console.warn(`⚠️ Batch ${item.batch} not found during SALES reversal - skipping`);
-            } else {
-              console.log(`✔ Reversed SALES for batch ${item.batch}`);
-            }
+            console.log(`✔ Reversed SALES for batch ${item.batch}`);
           }
         }
 
@@ -1507,6 +1797,8 @@ router.put("/transactions/:id", async (req, res) => {
         for (const item of newBatchDetails) {
           if (!item.batch || !item.product_id) continue;
 
+          const itemQuantity = parseFloat(item.quantity);
+
           // Check if batch exists before applying changes
           const batchExists = await queryPromise(
             connection,
@@ -1538,55 +1830,27 @@ router.put("/transactions/:id", async (req, res) => {
 
           if (originalTransactionType === "Purchase" || originalTransactionType === "CreditNote") {
             // PURCHASE/CREDIT NOTE → Add stock
-            const q = `
-              UPDATE batches
-              SET quantity = quantity + ?,
-                  stock_in = stock_in + ?,
-                  updated_at = NOW()
-              WHERE product_id = ? AND batch_number = ?
-            `;
-
-            const r = await queryPromise(
+            await queryPromise(
               connection,
-              q,
-              [item.quantity, item.quantity, item.product_id, item.batch]
+              "UPDATE batches SET quantity = quantity + ?, stock_in = stock_in + ?, updated_at = NOW() WHERE product_id = ? AND batch_number = ?",
+              [itemQuantity, itemQuantity, item.product_id, item.batch]
             );
-
-            if (r.affectedRows === 0) {
-              throw new Error(
-                `Failed to update batch ${item.batch} for ${originalTransactionType}`
-              );
-            }
 
             console.log(`✔ ${originalTransactionType} applied batch ${item.batch}`);
 
           } else {
             // SALES → Reduce stock (with quantity check)
-            if (currentQuantity < item.quantity) {
+            if (currentQuantity < itemQuantity) {
               throw new Error(
                 `Insufficient quantity for SALES update in batch ${item.batch}. Available: ${currentQuantity}, Required: ${item.quantity}`
               );
             }
 
-            const q = `
-              UPDATE batches
-              SET quantity = quantity - ?,
-                  stock_out = stock_out + ?,
-                  updated_at = NOW()
-              WHERE product_id = ? AND batch_number = ?
-            `;
-
-            const r = await queryPromise(
+            await queryPromise(
               connection,
-              q,
-              [item.quantity, item.quantity, item.product_id, item.batch]
+              "UPDATE batches SET quantity = quantity - ?, stock_out = stock_out + ?, updated_at = NOW() WHERE product_id = ? AND batch_number = ?",
+              [itemQuantity, itemQuantity, item.product_id, item.batch]
             );
-
-            if (r.affectedRows === 0) {
-              throw new Error(
-                `Failed to update batch ${item.batch} for SALES`
-              );
-            }
 
             console.log(`✔ SALES applied batch ${item.batch}`);
           }
@@ -1842,6 +2106,14 @@ const processTransaction = async (transactionData, transactionType, connection) 
       transactionData.vchNo ||
       transactionData.creditNoteNumber ||
       "CNOTE001";
+  }
+
+  if (transactionType === "DebitNote") {
+    vchNo =
+      transactionData.VchNo ||
+      transactionData.vchNo ||
+      transactionData.creditNoteNumber ||
+      "DNOTE001";
   }
 
   if (transactionType === "Purchase") {
