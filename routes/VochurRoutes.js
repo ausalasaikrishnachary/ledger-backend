@@ -486,6 +486,288 @@ router.put("/creditnoteupdate/:id", async (req, res) => {
   });
 });
 
+router.put("/debitnoteupdate/:id", async (req, res) => {
+  const voucherId = req.params.id;
+  const updateData = req.body;
+
+  console.log("UPDATE RECEIVED => ", voucherId, updateData);
+
+  db.getConnection((err, connection) => {
+    if (err)
+      return res.status(500).send({ error: "Database connection failed" });
+
+    connection.beginTransaction(async (err) => {
+      if (err)
+        return res.status(500).send({ error: "Transaction could not start" });
+
+      try {
+        // 1️⃣ Fetch ORIGINAL VOUCHER
+        const originalVoucherRows = await queryPromise(
+          connection,
+          "SELECT * FROM voucher WHERE VoucherID = ?",
+          [voucherId]
+        );
+
+        if (originalVoucherRows.length === 0) {
+          throw new Error("Voucher not found");
+        }
+
+        const originalVoucher = originalVoucherRows[0];
+        const transactionType =
+          updateData.transactionType ||
+          originalVoucher.TransactionType ||
+          "DebitNote";
+
+        // 2️⃣ FETCH OLD VOUCHERDETAILS (to reverse stock)
+        const oldDetails = await queryPromise(
+          connection,
+          "SELECT * FROM voucherdetails WHERE voucher_id = ?",
+          [voucherId]
+        );
+
+        // Reverse OLD STOCK
+        for (const item of oldDetails) {
+          const batchRows = await queryPromise(
+            connection,
+            "SELECT * FROM batches WHERE product_id = ? AND batch_number = ?",
+            [item.product_id, item.batch]
+          );
+
+          if (!batchRows[0]) continue;
+          const batch = batchRows[0];
+          const qty = Number(item.quantity) || 0;
+
+          // Credit Note = stock IN (reverse stock OUT of sales)
+await queryPromise(
+  connection,
+  "UPDATE batches SET quantity = quantity - ?, stock_in = IF(stock_in - ? >= 0, stock_in - ?, 0) WHERE id = ?",
+  [qty, qty, qty, batch.id]
+);
+
+        }
+
+        // 3️⃣ DELETE OLD VOUCHERDETAILS
+        await queryPromise(
+          connection,
+          "DELETE FROM voucherdetails WHERE voucher_id = ?",
+          [voucherId]
+        );
+
+        // 4️⃣ PARSE NEW ITEMS
+        let newBatchDetails =
+          updateData.batchDetails ||
+          updateData.items ||
+          updateData.batch_details ||
+          [];
+
+        if (!Array.isArray(newBatchDetails)) {
+          try {
+            newBatchDetails = JSON.parse(newBatchDetails);
+          } catch {
+            newBatchDetails = [];
+          }
+        }
+
+        newBatchDetails = newBatchDetails.map((it) => ({
+          product: it.product || "",
+          product_id: Number(it.product_id || it.productId || 0),
+          batch: it.batch || it.batch_number || "",
+          quantity: Number(it.quantity) || 0,
+          price: Number(it.price) || 0,
+          discount: Number(it.discount) || 0,
+          gst: Number(it.gst) || 0,
+          cgst: Number(it.cgst) || 0,
+          sgst: Number(it.sgst) || 0,
+          igst: Number(it.igst) || 0,
+          cess: Number(it.cess) || 0,
+          total: Number(it.total) || 0,
+        }));
+
+        // 🔴 NEW VALIDATION: Check if Credit Note quantity exceeds Sales quantity
+        const invoiceNumber = updateData.InvoiceNumber || originalVoucher.InvoiceNumber;
+        
+        if (invoiceNumber) {
+          // Find the original Sales voucher for this invoice
+          const salesVoucherRows = await queryPromise(
+            connection,
+            "SELECT * FROM voucher WHERE InvoiceNumber = ? AND TransactionType = 'Purchase'",
+            [invoiceNumber]
+          );
+
+          if (salesVoucherRows.length > 0) {
+            const salesVoucherId = salesVoucherRows[0].VoucherID;
+            
+            // Get all sales details for this invoice
+            const salesDetails = await queryPromise(
+              connection,
+              "SELECT * FROM voucherdetails WHERE voucher_id = ?",
+              [salesVoucherId]
+            );
+
+            // Create a map of product_id+batch to sales quantity
+            const salesQuantityMap = new Map();
+            for (const salesItem of salesDetails) {
+              const key = `${salesItem.product_id}_${salesItem.batch}`;
+              salesQuantityMap.set(key, Number(salesItem.quantity) || 0);
+            }
+
+            // Validate each credit note item
+            for (const creditNoteItem of newBatchDetails) {
+              const key = `${creditNoteItem.product_id}_${creditNoteItem.batch}`;
+              const salesQuantity = salesQuantityMap.get(key) || 0;
+              const creditNoteQuantity = Number(creditNoteItem.quantity) || 0;
+
+              if (creditNoteQuantity > salesQuantity) {
+                // 🔴 IMPORTANT: Rollback transaction before sending response
+                connection.rollback(() => {
+                  connection.release();
+                  return res.status(400).json({ 
+                    success: false, 
+                    message: `Quantity exceeds sales quantity! Product: ${creditNoteItem.product}, Batch: ${creditNoteItem.batch}. Sales Quantity: ${salesQuantity}, Credit Note Quantity: ${creditNoteQuantity}`
+                  });
+                });
+                return; // Stop execution
+              }
+            }
+          } else {
+            // 🔴 Rollback and send error for no sales voucher found
+            connection.rollback(() => {
+              connection.release();
+              return res.status(400).json({ 
+                success: false, 
+                message: `No Sales voucher found for Invoice Number: ${invoiceNumber}`
+              });
+            });
+            return; // Stop execution
+          }
+        }
+
+        // 5️⃣ UPDATE voucher TABLE (ONLY REAL FIELDS)
+        await queryPromise(
+          connection,
+          `UPDATE voucher SET
+            VchNo = ?,
+            Date = ?,
+            InvoiceNumber = ?,
+            PartyName = ?,
+            BasicAmount = ?,
+            TaxAmount = ?,
+            TotalAmount = ?,
+            Subtotal = ?,
+            SGSTAmount = ?,
+            CGSTAmount = ?,
+            IGSTAmount = ?,
+            SGSTPercentage = ?,
+            CGSTPercentage = ?,
+            IGSTPercentage = ?,
+            paid_amount = ?
+          WHERE VoucherID = ?`,
+          [
+            updateData.VchNo || updateData.creditNoteNumber || originalVoucher.VchNo,
+            updateData.Date || originalVoucher.Date,
+            updateData.InvoiceNumber || originalVoucher.InvoiceNumber,
+            updateData.PartyName || originalVoucher.PartyName,
+
+            Number(updateData.BasicAmount) || originalVoucher.BasicAmount,
+            Number(updateData.TaxAmount) || originalVoucher.TaxAmount,
+            Number(updateData.TotalAmount) || originalVoucher.TotalAmount,
+
+            // Subtotal = BasicAmount
+            Number(updateData.BasicAmount) || originalVoucher.Subtotal,
+
+            Number(updateData.SGSTAmount) || 0,
+            Number(updateData.CGSTAmount) || 0,
+            Number(updateData.IGSTAmount) || 0,
+
+            Number(updateData.SGSTPercentage) || 0,
+            Number(updateData.CGSTPercentage) || 0,
+            Number(updateData.IGSTPercentage) || 0,
+
+            Number(updateData.TotalAmount) || originalVoucher.paid_amount,
+
+            voucherId,
+          ]
+        );
+
+        // 6️⃣ INSERT NEW voucherdetails ROWS
+        for (const it of newBatchDetails) {
+          await queryPromise(
+            connection,
+            `INSERT INTO voucherdetails 
+              (voucher_id, product, product_id, transaction_type, InvoiceNumber, batch, quantity, price, discount, gst, cgst, sgst, igst, cess, total, created_at)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW())`,
+            [
+              voucherId,
+              it.product,
+              it.product_id,
+              "DebitNote",
+              updateData.InvoiceNumber || originalVoucher.InvoiceNumber,
+              it.batch,
+              it.quantity,
+              it.price,
+              it.discount,
+              it.gst,
+              it.cgst,
+              it.sgst,
+              it.igst,
+              it.cess,
+              it.total,
+            ]
+          );
+        }
+
+        // 7️⃣ UPDATE NEW STOCK (CREDIT NOTE = STOCK IN)
+        for (const it of newBatchDetails) {
+          const rows = await queryPromise(
+            connection,
+            "SELECT * FROM batches WHERE product_id = ? AND batch_number = ?",
+            [it.product_id, it.batch]
+          );
+
+          if (!rows[0]) {
+            throw new Error(
+              `Batch not found for product ${it.product_id}, batch ${it.batch}`
+            );
+          }
+
+          const batch = rows[0];
+
+          await queryPromise(
+            connection,
+            "UPDATE batches SET quantity = quantity + ?, stock_out = stock_out - ? WHERE id = ?",
+            [it.quantity, it.quantity, batch.id]
+          );
+        }
+
+        // 8️⃣ COMMIT
+        connection.commit((err) => {
+          if (err) {
+            console.log("COMMIT ERROR:", err);
+            connection.rollback(() => {
+              connection.release();
+              return res.status(500).json({ success: false, message: "Commit failed" });
+            });
+            return;
+          }
+          
+          connection.release();
+          res.json({
+            success: true,
+            message: "Credit Note updated successfully",
+            voucherId,
+          });
+        });
+      } catch (err) {
+        console.log("UPDATE ERROR:", err);
+        connection.rollback(() => {
+          connection.release();
+          res.status(500).json({ success: false, message: err.message });
+        });
+      }
+    });
+  });
+});
+
 
 
 
