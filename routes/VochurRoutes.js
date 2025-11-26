@@ -1844,6 +1844,14 @@ const processTransaction = async (transactionData, transactionType, connection) 
       "CNOTE001";
   }
 
+  if (transactionType === "DebitNote") {
+    vchNo =
+      transactionData.VchNo ||
+      transactionData.vchNo ||
+      transactionData.creditNoteNumber ||
+      "DNOTE001";
+  }
+
   if (transactionType === "Purchase") {
     vchNo =
       transactionData.InvoiceNumber ||

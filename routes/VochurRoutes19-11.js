@@ -1790,73 +1790,123 @@ router.put("/creditnoteupdate/:id", async (req, res) => {
 
         if (originalVoucher.length === 0) throw new Error("Voucher not found");
 
-        const transactionType =
-          updateData.transactionType ||
-          originalVoucher[0].TransactionType ||
-          "Sales";
+        // If frontend provided an invoice number that should reference an original Sales/ Purchase voucher,
+        // try to find it and pick a sensible transactionType based on that voucher.
+        let referencedInvoiceNumber =
+          updateData.originalInvoiceNumber ||
+          updateData.InvoiceNumber ||
+          updateData.invoiceNumber ||
+          updateData.InvoiceNo ||
+          null;
 
-        // Parse old batch details
-        let originalBatchDetails = [];
-        try {
-          originalBatchDetails = JSON.parse(originalVoucher[0].BatchDetails || "[]");
-        } catch {
-          originalBatchDetails = [];
-        }
-
-        // 2️⃣ Reverse OLD STOCK
-        for (const item of originalBatchDetails) {
-          if (!item.product_id || !item.batch) continue;
-
-          const [batch] = await queryPromise(
-            "SELECT * FROM batches WHERE product_id = ? AND batch_number = ?",
-            [item.product_id, item.batch],
+        let referencedVoucher = null;
+        if (referencedInvoiceNumber) {
+          const result = await queryPromise(
+            "SELECT * FROM voucher WHERE InvoiceNumber = ? LIMIT 1",
+            [referencedInvoiceNumber],
             connection
           );
-
-          if (!batch) continue;
-
-          const qty = Number(item.quantity) || 0;
-
-          if (transactionType === "Sales") {
-            await queryPromise(
-              "UPDATE batches SET quantity = quantity + ?, stock_out = stock_out - ? WHERE id = ?",
-              [qty, qty, batch.id],
-              connection
-            );
-          } else if (transactionType === "CreditNote") {
-            await queryPromise(
-              "UPDATE batches SET quantity = quantity - ?, stock_in = stock_in - ? WHERE id = ?",
-              [qty, qty, batch.id],
-              connection
+          if (result && result.length > 0) {
+            referencedVoucher = result[0];
+          } else {
+            // don't throw — just log. This is the likely source of your previous frontend error.
+            console.log(
+              `No voucher found for InvoiceNumber: ${referencedInvoiceNumber}. Continuing without it.`
             );
           }
         }
 
-        // Delete old voucherdetails
-        await queryPromise(
-          "DELETE FROM voucherdetails WHERE voucher_id = ?",
-          [voucherId],
-          connection
-        );
+        // Determine transaction type preference:
+        // priority: updateData.transactionType -> referencedVoucher.TransactionType -> originalVoucher.TransactionType -> default Sales
+        const transactionType =
+          (updateData.transactionType && String(updateData.transactionType).trim()) ||
+          (referencedVoucher && referencedVoucher.TransactionType) ||
+          originalVoucher[0].TransactionType ||
+          "Sales";
+
+        // Parse old batch details (be defensive)
+        let originalBatchDetails = [];
+        try {
+          originalBatchDetails = JSON.parse(originalVoucher[0].BatchDetails || "[]");
+          if (!Array.isArray(originalBatchDetails)) originalBatchDetails = [];
+        } catch (e) {
+          originalBatchDetails = [];
+        }
+
+        // Helper to safely select a batch row
+        const getBatchByProductAndNumber = async (product_id, batch_number) => {
+          const rows = await queryPromise(
+            "SELECT * FROM batches WHERE product_id = ? AND batch_number = ? LIMIT 1",
+            [product_id, batch_number],
+            connection
+          );
+          return rows && rows.length ? rows[0] : null;
+        };
+
+        // 2️⃣ Reverse OLD STOCK (defensive)
+        for (const item of originalBatchDetails) {
+          try {
+            if (!item.product_id || !item.batch) continue;
+
+            const batch = await getBatchByProductAndNumber(item.product_id, item.batch);
+            if (!batch) {
+              // log & continue — missing batch in DB, don't crash the whole update.
+              console.log(`Original batch not found for product ${item.product_id} batch ${item.batch}, skipping reversal.`);
+              continue;
+            }
+
+            const qty = Number(item.quantity) || 0;
+            if (qty === 0) continue;
+
+            if (transactionType === "Sales") {
+              await queryPromise(
+                "UPDATE batches SET quantity = quantity + ?, stock_out = stock_out - ? WHERE id = ?",
+                [qty, qty, batch.id],
+                connection
+              );
+            } else if (transactionType === "CreditNote") {
+              await queryPromise(
+                "UPDATE batches SET quantity = quantity - ?, stock_in = stock_in - ? WHERE id = ?",
+                [qty, qty, batch.id],
+                connection
+              );
+            } else if (transactionType === "DebitNote") {
+              await queryPromise(
+                "UPDATE batches SET quantity = quantity + ?, stock_out = stock_out - ? WHERE id = ?",
+                [qty, qty, batch.id],
+                connection
+              );
+            } else if (transactionType === "Purchase") {
+              await queryPromise(
+                "UPDATE batches SET quantity = quantity - ?, stock_in = stock_in - ? WHERE id = ?",
+                [qty, qty, batch.id],
+                connection
+              );
+            } else {
+              // Unknown type — treat conservatively (no-op or log)
+              console.log(`Unknown transactionType '${transactionType}' on reversal; skipping batch ${item.batch}`);
+            }
+          } catch (innerErr) {
+            console.log("Error reversing batch item (continuing):", innerErr);
+            // continue reversing other items rather than failing immediately
+          }
+        }
+
+        // Delete old voucherdetails (ok to proceed even if none)
+        await queryPromise("DELETE FROM voucherdetails WHERE voucher_id = ?", [voucherId], connection);
 
         // 3️⃣ HANDLE NEW BatchDetails
-        let batchData =
-          updateData.batchDetails || updateData.BatchDetails || updateData.items;
+        let batchData = updateData.batchDetails || updateData.BatchDetails || updateData.items || updateData.itemsList || [];
 
         let newBatchDetails = [];
-
         try {
-          newBatchDetails = Array.isArray(batchData)
-            ? batchData
-            : JSON.parse(batchData || "[]");
-        } catch {
+          newBatchDetails = Array.isArray(batchData) ? batchData : JSON.parse(batchData || "[]");
+          if (!Array.isArray(newBatchDetails)) newBatchDetails = [];
+        } catch (e) {
           newBatchDetails = [];
         }
 
-        const totalQty = newBatchDetails.reduce(
-          (sum, item) => sum + (Number(item.quantity) || 0),
-          0
-        );
+        const totalQty = newBatchDetails.reduce((sum, item) => sum + (Number(item.quantity) || 0), 0);
 
         // 4️⃣ UPDATE voucher
         await queryPromise(
@@ -1875,41 +1925,16 @@ router.put("/creditnoteupdate/:id", async (req, res) => {
           WHERE VoucherID = ?
         `,
           [
-            updateData.VchNo ||
-              updateData.creditNoteNumber ||
-              originalVoucher[0].VchNo,
-
-            updateData.Date ||
-              updateData.invoiceDate ||
-              originalVoucher[0].Date,
-
-            updateData.InvoiceNumber ||
-              updateData.originalInvoiceNumber ||
-              updateData.InvoiceNo ||
-              originalVoucher[0].InvoiceNumber,
-
-            updateData.PartyName ||
-              updateData.customerData?.business_name ||
-              originalVoucher[0].PartyName,
-
-            Number(updateData.BasicAmount) ||
-              Number(updateData.taxableAmount) ||
-              Number(originalVoucher[0].BasicAmount),
-
-            Number(updateData.TaxAmount) ||
-              Number(updateData.totalGST) ||
-              Number(originalVoucher[0].TaxAmount),
-
-            Number(updateData.TotalAmount) ||
-              Number(updateData.grandTotal) ||
-              Number(originalVoucher[0].TotalAmount),
-
+            updateData.VchNo || updateData.creditNoteNumber || originalVoucher[0].VchNo,
+            updateData.Date || updateData.invoiceDate || originalVoucher[0].Date,
+            updateData.InvoiceNumber || updateData.originalInvoiceNumber || updateData.InvoiceNo || originalVoucher[0].InvoiceNumber,
+            updateData.PartyName || (updateData.customerData && updateData.customerData.business_name) || originalVoucher[0].PartyName,
+            Number(updateData.BasicAmount) || Number(updateData.taxableAmount) || Number(originalVoucher[0].BasicAmount) || 0,
+            Number(updateData.TaxAmount) || Number(updateData.totalGST) || Number(originalVoucher[0].TaxAmount) || 0,
+            Number(updateData.TotalAmount) || Number(updateData.grandTotal) || Number(originalVoucher[0].TotalAmount) || 0,
             totalQty,
-
             JSON.stringify(newBatchDetails),
-
             transactionType,
-
             voucherId,
           ],
           connection
@@ -1942,33 +1967,62 @@ router.put("/creditnoteupdate/:id", async (req, res) => {
           );
         }
 
-        // 6️⃣ UPDATE NEW STOCK
+        // 6️⃣ UPDATE NEW STOCK (defensive)
         for (const item of newBatchDetails) {
-          const [batch] = await queryPromise(
-            "SELECT * FROM batches WHERE product_id = ? AND batch_number = ?",
-            [item.product_id, item.batch],
-            connection
-          );
+          try {
+            if (!item.product_id || !item.batch) {
+              console.log("Skipping stock update for item with missing product_id/batch", item);
+              continue;
+            }
 
-          if (!batch) throw new Error(`Batch not found: ${item.batch}`);
+            const batch = await getBatchByProductAndNumber(item.product_id, item.batch);
 
-          const qty = Number(item.quantity) || 0;
+            if (!batch) {
+              // If no batch exists, choose to either create a batch row or throw. For now, create a minimal batch row:
+              const insertRes = await queryPromise(
+                `INSERT INTO batches (product_id, batch_number, quantity, stock_in, stock_out) VALUES (?, ?, ?, 0, 0)`,
+                [item.product_id, item.batch, 0],
+                connection
+              );
+              // fetch newly created batch
+              const created = await queryPromise("SELECT * FROM batches WHERE id = ?", [insertRes.insertId], connection);
+              if (!created || created.length === 0) throw new Error(`Failed to create batch ${item.batch}`);
+              batch = created[0];
+            }
 
-          if (transactionType === "Sales") {
-            if (batch.quantity < qty)
-              throw new Error(`Insufficient stock for batch ${item.batch}`);
+            const qty = Number(item.quantity) || 0;
+            if (qty === 0) continue;
 
-            await queryPromise(
-              "UPDATE batches SET quantity = quantity - ?, stock_out = stock_out + ? WHERE id = ?",
-              [qty, qty, batch.id],
-              connection
-            );
-          } else if (transactionType === "CreditNote") {
-            await queryPromise(
-              "UPDATE batches SET quantity = quantity + ?, stock_in = stock_in + ? WHERE id = ?",
-              [qty, qty, batch.id],
-              connection
-            );
+            if (transactionType === "Sales") {
+              if (Number(batch.quantity) < qty) {
+                // fail: insufficient stock (this is legitimate)
+                throw new Error(`Insufficient stock for batch ${item.batch}`);
+              }
+              await queryPromise(
+                "UPDATE batches SET quantity = quantity - ?, stock_out = stock_out + ? WHERE id = ?",
+                [qty, qty, batch.id],
+                connection
+              );
+            } else if (transactionType === "CreditNote") {
+              await queryPromise(
+                "UPDATE batches SET quantity = quantity + ?, stock_in = stock_in + ? WHERE id = ?",
+                [qty, qty, batch.id],
+                connection
+              );
+            } else if (String(transactionType).toLowerCase() === "purchase" || String(transactionType).toLowerCase() === "purchaseinvoice") {
+              // For purchase-type transactions, adding stock:
+              await queryPromise(
+                "UPDATE batches SET quantity = quantity + ?, stock_in = stock_in + ? WHERE id = ?",
+                [qty, qty, batch.id],
+                connection
+              );
+            } else {
+              // Other types: log & skip or handle as needed
+              console.log(`Unhandled transactionType '${transactionType}' while applying new stock for batch ${item.batch}`);
+            }
+          } catch (innerErr) {
+            // If any per-item stock update fails, fail entire update to keep consistency.
+            throw innerErr;
           }
         }
 
@@ -1990,6 +2044,7 @@ router.put("/creditnoteupdate/:id", async (req, res) => {
     });
   });
 });
+
 
 // router.put("/transactions/:id", async (req, res) => {
 //   const voucherId = req.params.id;
