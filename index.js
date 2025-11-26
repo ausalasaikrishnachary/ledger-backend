@@ -47,6 +47,7 @@ app.use(express.urlencoded({ limit: '50mb', extended: true }));
 
 // Middleware to parse JSON
 app.use(express.json());
+app.use('/', AuthRoutes); 
 app.use('/', accountsRoutes);
 app.use('/', inventoryRoutes); // Use inventory routes
 app.use('/api', offersRoutes); 
@@ -59,7 +60,6 @@ app.use('/', transactionApiRoutes);
 app.use('/', accountsGroupRoutes);
 app.use('/api', staffRoutes);
 app.use('/', loginRoutes); 
-app.use('/', AuthRoutes); 
 app.use('/api', LogVisit); // ✅ mount LogVisit under /api
 app.use("/", expensiveRoutes);
 app.use('/api', receiptsRouter);

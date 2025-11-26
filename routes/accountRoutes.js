@@ -133,6 +133,42 @@ router.get("/accounts/retailers", (req, res) => {
   });
 });
 
+// Add this login route to your backend
+router.post("/accounts/login", async (req, res) => {
+  const { email, password } = req.body;
+
+  if (!email || !password) {
+    return res.status(400).json({ error: "Email and password are required" });
+  }
+
+  const sql = "SELECT * FROM accounts WHERE email = ? AND password = ? AND role = 'retailer'";
+
+  try {
+    const [results] = await db.promise().query(sql, [email, password]);
+    
+    if (results.length === 0) {
+      return res.status(401).json({ error: "Invalid email or password" });
+    }
+
+    // Login successful
+    const user = results[0];
+    res.status(200).json({
+      message: "Login successful",
+      user: {
+        id: user.id,
+        name: user.name,
+        email: user.email,
+        role: user.role,
+        phone_number: user.phone_number
+        // Add other fields you need
+      }
+    });
+  } catch (err) {
+    console.error("Login Error:", err);
+    res.status(500).json({ error: "Database query failed", details: err.message });
+  }
+});
+
 
 // --------------------- GET ACCOUNT BY ID ---------------------
 router.get("/accounts/:id", (req, res) => {
