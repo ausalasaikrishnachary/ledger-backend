@@ -124,6 +124,16 @@ router.get("/accounts", (req, res) => {
   });
 });
 
+router.get("/accounts/retailers", (req, res) => {
+  const query = "SELECT * FROM accounts WHERE role = 'retailer'";
+
+  db.query(query, (err, results) => {
+    if (err) return res.status(500).send(err);
+    res.send(results);
+  });
+});
+
+
 // --------------------- GET ACCOUNT BY ID ---------------------
 router.get("/accounts/:id", (req, res) => {
   const { id } = req.params;

@@ -820,7 +820,6 @@ router.get('/products/search/:query', async (req, res) => {
 });
 
 
-
 router.get('/products/:id/with-batches', async (req, res) => {
   try {
     const query = `
