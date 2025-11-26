@@ -1602,10 +1602,9 @@ router.put("/transactions/:id", async (req, res) => {
 
         console.log("🔎 Original transaction:", originalTransactionType);
 
-        // Since BatchDetails column doesn't exist, we'll get batch details from voucherdetails table
+        // Fetch batch details from voucherdetails table
         let originalBatchDetails = [];
         try {
-          // Fetch batch details from voucherdetails table instead
           const voucherDetails = await queryPromise(
             connection,
             "SELECT * FROM voucherdetails WHERE voucher_id = ?",
@@ -1630,7 +1629,7 @@ router.put("/transactions/:id", async (req, res) => {
         }
 
         // -------------------------------------------------------------------
-        // 2️⃣ REVERSE OLD STOCK (UNDO original stock effect) - FIXED FOR SALES
+        // 2️⃣ REVERSE OLD STOCK (UNDO original stock effect) - FIXED
         // -------------------------------------------------------------------
 
         for (const item of originalBatchDetails) {
@@ -1641,73 +1640,82 @@ router.put("/transactions/:id", async (req, res) => {
           // First, check current batch stock
           const batchCheck = await queryPromise(
             connection,
-            "SELECT quantity, stock_out FROM batches WHERE product_id = ? AND batch_number = ?",
+            "SELECT quantity, stock_out, stock_in FROM batches WHERE product_id = ? AND batch_number = ?",
             [item.product_id, item.batch]
           );
 
           if (batchCheck.length === 0) {
-            console.warn(`⚠️ Batch ${item.batch} not found during reversal - skipping`);
-            continue;
+            console.warn(`⚠️ Batch ${item.batch} not found during reversal - creating it`);
+            
+            // Create the batch if it doesn't exist
+            await queryPromise(
+              connection,
+              `INSERT INTO batches 
+               (product_id, batch_number, quantity, stock_in, stock_out, created_at, updated_at) 
+               VALUES (?, ?, 0, 0, 0, NOW(), NOW())`,
+              [item.product_id, item.batch]
+            );
+            console.log(`✔ Created missing batch: ${item.batch}`);
           }
 
-          const currentQuantity = parseFloat(batchCheck[0].quantity);
-          const currentStockOut = parseFloat(batchCheck[0].stock_out);
+          // Re-fetch batch data after potential creation
+          const updatedBatchCheck = await queryPromise(
+            connection,
+            "SELECT quantity, stock_out, stock_in FROM batches WHERE product_id = ? AND batch_number = ?",
+            [item.product_id, item.batch]
+          );
+
+          const currentQuantity = parseFloat(updatedBatchCheck[0].quantity);
+          const currentStockOut = parseFloat(updatedBatchCheck[0].stock_out);
+          const currentStockIn = parseFloat(updatedBatchCheck[0].stock_in);
+          const itemQuantity = parseFloat(item.quantity);
 
           if (originalTransactionType === "Purchase" || originalTransactionType === "CreditNote") {
-            // For Purchase and CreditNote reversal, check if we have enough stock to reverse
-            if (currentQuantity < item.quantity) {
-              throw new Error(
-                `Cannot reverse ${originalTransactionType}: insufficient stock in batch ${item.batch}. Available: ${currentQuantity}, Required: ${item.quantity}`
+            // For Purchase and CreditNote reversal, use safe subtraction
+            if (currentQuantity < itemQuantity) {
+              console.warn(`⚠️ Insufficient stock for reversal in batch ${item.batch}. Available: ${currentQuantity}, Required: ${item.quantity}. Adjusting...`);
+              
+              // Instead of throwing error, set to 0 if insufficient
+              const finalQuantity = Math.max(0, currentQuantity - itemQuantity);
+              const finalStockIn = Math.max(0, currentStockIn - itemQuantity);
+              
+              await queryPromise(
+                connection,
+                "UPDATE batches SET quantity = ?, stock_in = ?, updated_at = NOW() WHERE product_id = ? AND batch_number = ?",
+                [finalQuantity, finalStockIn, item.product_id, item.batch]
+              );
+            } else {
+              await queryPromise(
+                connection,
+                "UPDATE batches SET quantity = quantity - ?, stock_in = stock_in - ?, updated_at = NOW() WHERE product_id = ? AND batch_number = ?",
+                [itemQuantity, itemQuantity, item.product_id, item.batch]
               );
             }
 
-            const q = `
-              UPDATE batches
-              SET quantity = quantity - ?,
-                  stock_in = stock_in - ?,
-                  updated_at = NOW()
-              WHERE product_id = ? AND batch_number = ?
-            `;
-
-            const r = await queryPromise(
-              connection,
-              q,
-              [item.quantity, item.quantity, item.product_id, item.batch]
-            );
-
-            if (r.affectedRows === 0) {
-              console.warn(`⚠️ Failed to reverse ${originalTransactionType} for batch ${item.batch} - batch may not exist`);
-            } else {
-              console.log(`✔ Reversed ${originalTransactionType} for batch ${item.batch}`);
-            }
+            console.log(`✔ Reversed ${originalTransactionType} for batch ${item.batch}`);
 
           } else {
-            // SALES reversal → return stock
-            if (currentStockOut < item.quantity) {
-              throw new Error(
-                `Cannot reverse SALES: stock_out is less than quantity to reverse in batch ${item.batch}. Current stock_out: ${currentStockOut}, Required: ${item.quantity}`
+            // SALES reversal → return stock (use safe subtraction for stock_out)
+            if (currentStockOut < itemQuantity) {
+              console.warn(`⚠️ stock_out less than reversal quantity in batch ${item.batch}. Current: ${currentStockOut}, Required: ${item.quantity}. Adjusting...`);
+              
+              // Set stock_out to 0 if insufficient, but always add to quantity
+              const finalStockOut = Math.max(0, currentStockOut - itemQuantity);
+              
+              await queryPromise(
+                connection,
+                "UPDATE batches SET quantity = quantity + ?, stock_out = ?, updated_at = NOW() WHERE product_id = ? AND batch_number = ?",
+                [itemQuantity, finalStockOut, item.product_id, item.batch]
+              );
+            } else {
+              await queryPromise(
+                connection,
+                "UPDATE batches SET quantity = quantity + ?, stock_out = stock_out - ?, updated_at = NOW() WHERE product_id = ? AND batch_number = ?",
+                [itemQuantity, itemQuantity, item.product_id, item.batch]
               );
             }
 
-            const q = `
-              UPDATE batches
-              SET quantity = quantity + ?,
-                  stock_out = stock_out - ?,
-                  updated_at = NOW()
-              WHERE product_id = ? AND batch_number = ?
-            `;
-
-            const r = await queryPromise(
-              connection,
-              q,
-              [item.quantity, item.quantity, item.product_id, item.batch]
-            );
-
-            if (r.affectedRows === 0) {
-              console.warn(`⚠️ Batch ${item.batch} not found during SALES reversal - skipping`);
-            } else {
-              console.log(`✔ Reversed SALES for batch ${item.batch}`);
-            }
+            console.log(`✔ Reversed SALES for batch ${item.batch}`);
           }
         }
 
@@ -1789,6 +1797,8 @@ router.put("/transactions/:id", async (req, res) => {
         for (const item of newBatchDetails) {
           if (!item.batch || !item.product_id) continue;
 
+          const itemQuantity = parseFloat(item.quantity);
+
           // Check if batch exists before applying changes
           const batchExists = await queryPromise(
             connection,
@@ -1820,55 +1830,27 @@ router.put("/transactions/:id", async (req, res) => {
 
           if (originalTransactionType === "Purchase" || originalTransactionType === "CreditNote") {
             // PURCHASE/CREDIT NOTE → Add stock
-            const q = `
-              UPDATE batches
-              SET quantity = quantity + ?,
-                  stock_in = stock_in + ?,
-                  updated_at = NOW()
-              WHERE product_id = ? AND batch_number = ?
-            `;
-
-            const r = await queryPromise(
+            await queryPromise(
               connection,
-              q,
-              [item.quantity, item.quantity, item.product_id, item.batch]
+              "UPDATE batches SET quantity = quantity + ?, stock_in = stock_in + ?, updated_at = NOW() WHERE product_id = ? AND batch_number = ?",
+              [itemQuantity, itemQuantity, item.product_id, item.batch]
             );
-
-            if (r.affectedRows === 0) {
-              throw new Error(
-                `Failed to update batch ${item.batch} for ${originalTransactionType}`
-              );
-            }
 
             console.log(`✔ ${originalTransactionType} applied batch ${item.batch}`);
 
           } else {
             // SALES → Reduce stock (with quantity check)
-            if (currentQuantity < item.quantity) {
+            if (currentQuantity < itemQuantity) {
               throw new Error(
                 `Insufficient quantity for SALES update in batch ${item.batch}. Available: ${currentQuantity}, Required: ${item.quantity}`
               );
             }
 
-            const q = `
-              UPDATE batches
-              SET quantity = quantity - ?,
-                  stock_out = stock_out + ?,
-                  updated_at = NOW()
-              WHERE product_id = ? AND batch_number = ?
-            `;
-
-            const r = await queryPromise(
+            await queryPromise(
               connection,
-              q,
-              [item.quantity, item.quantity, item.product_id, item.batch]
+              "UPDATE batches SET quantity = quantity - ?, stock_out = stock_out + ?, updated_at = NOW() WHERE product_id = ? AND batch_number = ?",
+              [itemQuantity, itemQuantity, item.product_id, item.batch]
             );
-
-            if (r.affectedRows === 0) {
-              throw new Error(
-                `Failed to update batch ${item.batch} for SALES`
-              );
-            }
 
             console.log(`✔ SALES applied batch ${item.batch}`);
           }
