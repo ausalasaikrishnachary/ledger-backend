@@ -1041,7 +1041,7 @@ router.get('/get-sales-products', async (req, res) => {
       price: item.price,
       unit: item.unit,
       category_id: item.category_id,
-      category_name: item.category_name   // ⭐ added
+      category: item.category_name   // ⭐ added
     }));
 
     res.json(products);
