@@ -1016,4 +1016,43 @@ router.get("/vouchers/by-product/:product_id", (req, res) => {
 });
 
 
+router.get('/get-sales-products', async (req, res) => {
+  try {
+    const [rows] = await db.promise().query(`
+      SELECT 
+        p.id,
+        p.goods_name,
+        p.group_by,
+        p.price,
+        p.unit,
+        p.category_id,
+        c.category_name
+      FROM products p
+      LEFT JOIN categories c 
+        ON p.category_id = c.id
+      WHERE p.group_by = 'Salescatalog'
+      ORDER BY p.created_at DESC
+    `);
+
+    const products = rows.map(item => ({
+      id: item.id,
+      name: item.goods_name,
+      supplier: item.group_by,
+      price: item.price,
+      unit: item.unit,
+      category_id: item.category_id,
+      category_name: item.category_name   // ⭐ added
+    }));
+
+    res.json(products);
+
+  } catch (err) {
+    console.error('Error fetching products with category:', err);
+    res.status(500).json({ message: 'Failed to fetch products' });
+  }
+});
+
+
+
+
 module.exports = router;

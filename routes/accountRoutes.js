@@ -159,7 +159,10 @@ router.post("/accounts/login", async (req, res) => {
         name: user.name,
         email: user.email,
         role: user.role,
-        phone_number: user.phone_number
+        mobile_number:user.mobile_number,
+        entity_type:user.entity_type,
+        business_name:user.business_name
+
         // Add other fields you need
       }
     });
