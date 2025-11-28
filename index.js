@@ -31,6 +31,7 @@ const voucher = require('./routes/voucher');
 const orderRoutes = require('./routes/orders');
 const categoriesRoutes = require('./routes/categories');
 const offersRoutes = require('./routes/Inventory/OffersRoutes');
+const cartRoutes = require("./routes/Retailer/CartRoutes");
 
 
 const port = 5000;
@@ -76,6 +77,9 @@ app.use("/api/reports", salesReportRoutes);
 
 
 app.use('/', pdfRoutes);
+
+app.use("/cart", cartRoutes);
+
 
 // Start server
 app.listen(port, () => {
