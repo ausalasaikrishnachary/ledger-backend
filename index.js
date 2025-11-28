@@ -34,6 +34,11 @@ const offersRoutes = require('./routes/Inventory/OffersRoutes');
 const cartRoutes = require("./routes/Retailer/CartRoutes");
 
 
+// Add this line with your other route imports
+const creditPeriodFixRoutes = require('./routes/CreditPeriod/CreditPeriodRoutes');
+
+
+
 const port = 5000;
 
 // ✅ Use CORS Middleware (allows requests from any origin)
@@ -74,6 +79,9 @@ app.use('/api', categoriesRoutes);
 app.use("/api/reports", retailerReportRoutes);
 app.use("/api/reports", expenseReportRoutes);
 app.use("/api/reports", salesReportRoutes);
+
+// Add this line with your other route uses
+app.use('/api/credit-period-fix', creditPeriodFixRoutes);
 
 
 app.use('/', pdfRoutes);
