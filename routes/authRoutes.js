@@ -1,10 +1,10 @@
 // routes/authRoutes.js
 const express = require('express');
 const router = express.Router();
-const db = require('../db'); // Adjust path as needed
+const db = require('../db');
 const nodemailer = require('nodemailer');
 
-// Configure nodemailer (you'll need to set up email credentials)
+// Configure nodemailer
 const transporter = nodemailer.createTransport({
   service: 'gmail',
   auth: {
@@ -51,59 +51,50 @@ router.post("/forgot-password", (req, res) => {
     const otp = generateOTP();
     const expiresAt = new Date(Date.now() + 10 * 60 * 1000); // OTP expires in 10 minutes
 
-    // Delete any existing OTP for this email
-    const deleteSql = "DELETE FROM password_resets WHERE email = ?";
+    // Update accounts table with OTP
+    const updateSql = "UPDATE accounts SET otp = ?, otp_expires_at = ?, otp_used = 0 WHERE email = ?";
     
-    db.query(deleteSql, [email], (deleteErr) => {
-      if (deleteErr) {
-        console.error("Delete OTP error:", deleteErr);
+    db.query(updateSql, [otp, expiresAt, email], (updateErr) => {
+      if (updateErr) {
+        console.error("Update OTP error:", updateErr);
+        return res.status(500).send({
+          success: false,
+          error: "Failed to generate OTP"
+        });
       }
 
-      // Insert new OTP
-      const insertSql = "INSERT INTO password_resets (email, otp, expires_at) VALUES (?, ?, ?)";
-      
-      db.query(insertSql, [email, otp, expiresAt], (insertErr) => {
-        if (insertErr) {
-          console.error("Insert OTP error:", insertErr);
-          return res.status(500).send({
-            success: false,
-            error: "Failed to generate OTP"
+      // Send OTP via email
+      const mailOptions = {
+        from: 'tharunkumarreddy1212@gmail.com',
+        to: email,
+        subject: 'Password Reset OTP',
+        html: `
+          <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
+            <h2 style="color: #333;">Password Reset Request</h2>
+            <p>You requested to reset your password. Use the OTP below to proceed:</p>
+            <div style="background: #f4f4f4; padding: 15px; text-align: center; margin: 20px 0;">
+              <h1 style="margin: 0; color: #007bff; letter-spacing: 5px;">${otp}</h1>
+            </div>
+            <p>This OTP will expire in 10 minutes.</p>
+            <p>If you didn't request this, please ignore this email.</p>
+          </div>
+        `
+      };
+
+      transporter.sendMail(mailOptions, (mailErr) => {
+        if (mailErr) {
+          console.error("Email error:", mailErr);
+          // Still return success as OTP is generated and stored
+          return res.status(200).send({
+            success: true,
+            message: "OTP generated successfully. Check your email for the OTP.",
+            otp: otp // For development/testing
           });
         }
 
-        // Send OTP via email
-        const mailOptions = {
-          from: 'tharunkumarreddy1212@gmail.com',
-          to: email,
-          subject: 'Password Reset OTP',
-          html: `
-            <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
-              <h2 style="color: #333;">Password Reset Request</h2>
-              <p>You requested to reset your password. Use the OTP below to proceed:</p>
-              <div style="background: #f4f4f4; padding: 15px; text-align: center; margin: 20px 0;">
-                <h1 style="margin: 0; color: #007bff; letter-spacing: 5px;">${otp}</h1>
-              </div>
-              <p>This OTP will expire in 10 minutes.</p>
-              <p>If you didn't request this, please ignore this email.</p>
-            </div>
-          `
-        };
-
-        transporter.sendMail(mailOptions, (mailErr) => {
-          if (mailErr) {
-            console.error("Email error:", mailErr);
-            // Still return success as OTP is generated and stored
-            return res.status(200).send({
-              success: true,
-              message: "OTP generated successfully. Check your email for the OTP.",
-              otp: otp // For development/testing
-            });
-          }
-
-          res.status(200).send({
-            success: true,
-            message: "OTP sent to your email address"
-          });
+        res.status(200).send({
+          success: true,
+          message: "OTP sent to your email address"
         });
       });
     });
@@ -121,8 +112,8 @@ router.post("/reset-password", (req, res) => {
     });
   }
 
-  // Verify OTP
-  const verifySql = "SELECT * FROM password_resets WHERE email = ? AND otp = ? AND used = 0 AND expires_at > NOW()";
+  // Verify OTP from accounts table
+  const verifySql = "SELECT * FROM accounts WHERE email = ? AND otp = ? AND otp_used = 0 AND otp_expires_at > NOW()";
   
   db.query(verifySql, [email, otp], (err, results) => {
     if (err) {
@@ -140,8 +131,8 @@ router.post("/reset-password", (req, res) => {
       });
     }
 
-    // Update password in accounts table
-    const updateSql = "UPDATE accounts SET password = ? WHERE email = ?";
+    // Update password and mark OTP as used in accounts table
+    const updateSql = "UPDATE accounts SET password = ?, otp_used = 1, otp = NULL, otp_expires_at = NULL WHERE email = ?";
     
     db.query(updateSql, [newPassword, email], (updateErr, updateResults) => {
       if (updateErr) {
@@ -159,10 +150,6 @@ router.post("/reset-password", (req, res) => {
         });
       }
 
-      // Mark OTP as used
-      const markUsedSql = "UPDATE password_resets SET used = 1 WHERE email = ? AND otp = ?";
-      db.query(markUsedSql, [email, otp]);
-
       res.status(200).send({
         success: true,
         message: "Password reset successfully"
@@ -171,5 +158,4 @@ router.post("/reset-password", (req, res) => {
   });
 });
 
-// Make sure to export the router at the end
 module.exports = router;
