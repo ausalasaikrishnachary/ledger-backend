@@ -161,7 +161,9 @@ router.post("/accounts/login", async (req, res) => {
         role: user.role,
         mobile_number:user.mobile_number,
         entity_type:user.entity_type,
-        business_name:user.business_name
+        business_name:user.business_name,
+        discount:user.discount
+
 
         // Add other fields you need
       }
