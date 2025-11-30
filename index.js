@@ -32,6 +32,7 @@ const orderRoutes = require('./routes/orders');
 const categoriesRoutes = require('./routes/categories');
 const offersRoutes = require('./routes/Inventory/OffersRoutes');
 const cartRoutes = require("./routes/Retailer/CartRoutes");
+const RetailerOrderRoutes = require("./routes/Retailer/OrderRoutes");
 
 
 // Add this line with your other route imports
@@ -87,6 +88,7 @@ app.use('/api/credit-period-fix', creditPeriodFixRoutes);
 app.use('/', pdfRoutes);
 
 app.use("/cart", cartRoutes);
+app.use("/orders", RetailerOrderRoutes);
 
 
 // Start server

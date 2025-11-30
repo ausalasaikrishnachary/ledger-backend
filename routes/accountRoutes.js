@@ -162,7 +162,13 @@ router.post("/accounts/login", async (req, res) => {
         mobile_number:user.mobile_number,
         entity_type:user.entity_type,
         business_name:user.business_name,
-        discount:user.discount
+        discount:user.discount,
+        shipping_address_line1: user.shipping_address_line1,
+        shipping_address_line2:user.shipping_address_line2,
+        shipping_city:user.shipping_city,
+        shipping_pin_code:user.shipping_pin_code,
+        shipping_state:user.shipping_state,
+        shipping_country:user.shipping_country
 
 
         // Add other fields you need
