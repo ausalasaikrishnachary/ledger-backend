@@ -655,7 +655,7 @@ router.get("/credit-notes-table", (req, res) => {
       v.pdf_created_at
     FROM voucher v
     LEFT JOIN accounts a ON v.PartyID = a.id
-    WHERE v.TransactionType = 'creditnote'
+    WHERE v.TransactionType = 'CreditNote'
     ORDER BY v.VoucherID DESC
   `;
 
