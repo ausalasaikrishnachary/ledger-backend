@@ -408,8 +408,8 @@ router.post('/create-complete-order', (req, res) => {
             order_number, customer_id, customer_name, order_total, discount_amount,
             taxable_amount, tax_amount, net_payable, credit_period,
             estimated_delivery_date, order_placed_by, order_mode,
-            invoice_number, invoice_date, created_at
-          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW())
+             created_at
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,  NOW())
         `;
 
         const orderValues = [
@@ -425,8 +425,7 @@ router.post('/create-complete-order', (req, res) => {
           order.estimated_delivery_date,
           order.order_placed_by, // This should be the account ID, not name
           order.order_mode,
-          order.invoice_number,
-          order.invoice_date
+        
         ];
 
         console.log('🚀 Inserting order with values:', orderValues);
