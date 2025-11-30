@@ -1579,6 +1579,11 @@ router.put("/transactions/:id", async (req, res) => {
   const voucherId = req.params.id;
   const updateData = req.body;
 
+  console.log("👤 UPDATE - Staff Data Received:", {
+    staffid: updateData.selectedStaffId,
+    assigned_staff: updateData.assigned_staff
+  });
+
   db.getConnection((err, connection) => {
     if (err) return res.status(500).send({ error: "Database connection failed" });
 
@@ -1729,7 +1734,7 @@ router.put("/transactions/:id", async (req, res) => {
         );
 
         // -------------------------------------------------------------------
-        // 3️⃣ UPDATE voucher main table
+        // 3️⃣ UPDATE voucher main table (INCLUDING STAFF FIELDS)
         // -------------------------------------------------------------------
         let newBatchDetails = [];
         if (updateData.batchDetails) {
@@ -1742,11 +1747,13 @@ router.put("/transactions/:id", async (req, res) => {
         let invoiceNumber =
           updateData.invoiceNumber || originalVoucher[0].InvoiceNumber;
 
+        // 🔥 UPDATED: Include staff fields in the UPDATE query
         await queryPromise(
           connection,
           `UPDATE voucher 
            SET VchNo = ?, InvoiceNumber = ?, Date = ?, PartyName = ?, 
-               BasicAmount = ?, TaxAmount = ?, TotalAmount = ?
+               BasicAmount = ?, TaxAmount = ?, TotalAmount = ?,
+               staffid = ?, assigned_staff = ?  -- 🔥 NEW STAFF FIELDS
            WHERE VoucherID = ?`,
           [
             vchNo,
@@ -1759,9 +1766,17 @@ router.put("/transactions/:id", async (req, res) => {
             parseFloat(originalVoucher[0].TaxAmount),
             parseFloat(updateData.grandTotal) ||
             parseFloat(originalVoucher[0].TotalAmount),
+            // 🔥 NEW: Staff data
+            updateData.selectedStaffId || updateData.staffid || originalVoucher[0].staffid,
+            updateData.assigned_staff || originalVoucher[0].assigned_staff,
             voucherId,
           ]
         );
+
+        console.log("✅ Staff data updated in voucher:", {
+          staffid: updateData.selectedStaffId || updateData.staffid,
+          assigned_staff: updateData.assigned_staff
+        });
 
         // -------------------------------------------------------------------
         // INSERT NEW voucherDetails
@@ -1872,6 +1887,8 @@ router.put("/transactions/:id", async (req, res) => {
             success: true,
             message: "Transaction updated successfully",
             voucherId,
+            staffid: updateData.selectedStaffId || updateData.staffid,
+            assigned_staff: updateData.assigned_staff
           });
         });
       } catch (err) {
@@ -1885,7 +1902,6 @@ router.put("/transactions/:id", async (req, res) => {
     });
   });
 });
-
 
 router.get("/ledger", (req, res) => {
   // Fetch all vouchers ordered by AccountID and Date
@@ -2123,6 +2139,13 @@ const processTransaction = async (transactionData, transactionType, connection) 
       "PINV001";
   }
 
+  if (transactionType === "stock transfer") {
+    vchNo =
+      transactionData.InvoiceNumber ||
+      transactionData.invoiceNumber ||
+      "ST001";
+  }
+
   // STEP 5: TOTALS
   const taxableAmount =
     parseFloat(transactionData.BasicAmount) ||
@@ -2166,60 +2189,66 @@ const processTransaction = async (transactionData, transactionType, connection) 
     transactionData.AccountName ||
     "";
 
-  // STEP 7: INSERT VOUCHER (STORE BATCH NUMBER INSTEAD OF BATCH_ID)
-  const voucherData = {
-    VoucherID: nextVoucherId,
-    TransactionType: transactionType,
-    VchNo: vchNo,
-    InvoiceNumber: invoiceNumber,
-    Date: transactionData.Date || new Date().toISOString().split("T")[0],
 
-    PaymentTerms: transactionData.PaymentTerms || "Immediate",
-    Freight: parseFloat(transactionData.Freight) || 0,
-    TotalPacks: items.length,
+const voucherData = {
+  VoucherID: nextVoucherId,
+  TransactionType: transactionType,
+  VchNo: vchNo,
+  InvoiceNumber: invoiceNumber,
+  Date: transactionData.Date || new Date().toISOString().split("T")[0],
 
-    TaxAmount: totalGST,
-    Subtotal: taxableAmount,
-    BillSundryAmount: parseFloat(transactionData.BillSundryAmount) || 0,
-    TotalAmount: grandTotal,
-    paid_amount: parseFloat(transactionData.paid_amount) || grandTotal,
+  PaymentTerms: transactionData.PaymentTerms || "Immediate",
+  Freight: parseFloat(transactionData.Freight) || 0,
+  TotalPacks: items.length,
 
-    AccountID: accountID,
-    AccountName: accountName,
-    PartyID: partyID,
-    PartyName: partyName,
+  TaxAmount: totalGST,
+  Subtotal: taxableAmount,
+  BillSundryAmount: parseFloat(transactionData.BillSundryAmount) || 0,
+  TotalAmount: grandTotal,
+  paid_amount: parseFloat(transactionData.paid_amount) || grandTotal,
 
-    BasicAmount: taxableAmount,
-    ValueOfGoods: taxableAmount,
-    EntryDate: new Date(),
+  AccountID: accountID,
+  AccountName: accountName,
+  PartyID: partyID,
+  PartyName: partyName,
 
-    SGSTPercentage: parseFloat(transactionData.SGSTPercentage) || 0,
-    CGSTPercentage: parseFloat(transactionData.CGSTPercentage) || 0,
-    IGSTPercentage: parseFloat(transactionData.IGSTPercentage) || (items[0]?.igst || 0),
+  BasicAmount: taxableAmount,
+  ValueOfGoods: taxableAmount,
+  EntryDate: new Date(),
 
-    SGSTAmount: parseFloat(transactionData.SGSTAmount) || 0,
-    CGSTAmount: parseFloat(transactionData.CGSTAmount) || 0,
-    IGSTAmount: parseFloat(transactionData.IGSTAmount) || 0,
+  SGSTPercentage: parseFloat(transactionData.SGSTPercentage) || 0,
+  CGSTPercentage: parseFloat(transactionData.CGSTPercentage) || 0,
+  IGSTPercentage: parseFloat(transactionData.IGSTPercentage) || (items[0]?.igst || 0),
 
-    TaxSystem: transactionData.TaxSystem || "GST",
+  SGSTAmount: parseFloat(transactionData.SGSTAmount) || 0,
+  CGSTAmount: parseFloat(transactionData.CGSTAmount) || 0,
+  IGSTAmount: parseFloat(transactionData.IGSTAmount) || 0,
 
-    product_id: items[0]?.product_id || null,
-    batch_id: voucherBatchNumber, // 🔥 FIXED: Now storing batch number (like "sam001") instead of numeric batch_id
-    DC: transactionType === "CreditNote" ? "C" : "D",
+  TaxSystem: transactionData.TaxSystem || "GST",
 
-    ChequeNo: transactionData.ChequeNo || "",
-    ChequeDate: transactionData.ChequeDate || null,
-    BankName: transactionData.BankName || "",
+  product_id: items[0]?.product_id || null,
+  batch_id: voucherBatchNumber,
+  DC: transactionType === "CreditNote" ? "C" : "D",
 
-    created_at: new Date(),
-    balance_amount: parseFloat(transactionData.balance_amount) || 0,
-    status: transactionData.status || "active",
-    paid_date: transactionData.paid_date || null,
+  ChequeNo: transactionData.ChequeNo || "",
+  ChequeDate: transactionData.ChequeDate || null,
+  BankName: transactionData.BankName || "",
 
-    pdf_data: transactionData.pdf_data || null,
-    pdf_file_name: transactionData.pdf_file_name || null,
-    pdf_created_at: transactionData.pdf_created_at || null
-  };
+ // 🔥 NEW: ADD STAFF FIELDS
+staffid: transactionData.selectedStaffId || transactionData.staffid || null,
+assigned_staff: transactionData.assigned_staff || null, // Remove accounts.find() - it's not available in backend
+
+  created_at: new Date(),
+  balance_amount: parseFloat(transactionData.balance_amount) || 0,
+  status: transactionData.status || "active",
+  paid_date: transactionData.paid_date || null,
+
+  pdf_data: transactionData.pdf_data || null,
+  pdf_file_name: transactionData.pdf_file_name || null,
+  pdf_created_at: transactionData.pdf_created_at || null
+};
+
+console.log("👤 STAFF DATA - staffid:", voucherData.staffid, "assigned_staff:", voucherData.assigned_staff);
 
   console.log("📦 Voucher Data being inserted - batch_id (batch number):", voucherBatchNumber);
   console.log("📦 Complete voucher data:", voucherData);
@@ -2259,9 +2288,9 @@ const processTransaction = async (transactionData, transactionType, connection) 
     ]);
   }
 
-  // STEP 9: STOCK UPDATES
+  // STEP 9: STOCK UPDATES - FIXED FOR STOCK TRANSFER
   for (const i of items) {
-    if (transactionType === "Sales" || transactionType === "DebitNote") {
+    if (transactionType === "Sales" || transactionType === "DebitNote" || transactionType === "stock transfer") {
       await queryPromise(
         connection,
         `
@@ -2294,7 +2323,6 @@ const processTransaction = async (transactionData, transactionType, connection) 
     grandTotal
   };
 };
-
 
 
 router.get("/voucherdetails", async (req, res) => {
