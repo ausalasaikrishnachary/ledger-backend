@@ -86,7 +86,7 @@ app.use('/api/credit-period-fix', creditPeriodFixRoutes);
 
 app.use('/', pdfRoutes);
 
-app.use("/cart", cartRoutes);
+app.use("/api/cart", cartRoutes);
 
 
 // Start server

@@ -5,11 +5,15 @@ const db = require('./../../db');
 // ============================
 // Add to Cart
 // ============================
+// Add to Cart
 router.post("/add-to-cart", (req, res) => {
   const { customer_id, product_id, quantity, credit_period, credit_percentage } = req.body;
 
   if (!customer_id || !product_id) {
-    return res.status(400).json({ error: "customer_id & product_id are required" });
+    return res.status(400).json({ 
+      success: false,
+      error: "customer_id & product_id are required" 
+    });
   }
 
   const sql = `
@@ -21,11 +25,21 @@ router.post("/add-to-cart", (req, res) => {
     sql,
     [customer_id, product_id, quantity || 1, credit_period || 0, credit_percentage || 0],
     (err, result) => {
-      if (err) return res.status(500).json({ error: err });
-      res.json({ message: "Item added to cart", item_id: result.insertId });
+      if (err) {
+        return res.status(500).json({ 
+          success: false,
+          error: err.message 
+        });
+      }
+      
+      res.json({ 
+        success: true,
+        message: "Item added to cart", 
+        item_id: result.insertId 
+      });
     }
   );
-});
+})
 
 // ============================
 // Remove From Cart
@@ -85,12 +99,19 @@ router.put("/update-cart-credit/:id", (req, res) => {
 // ============================
 // Get Cart Items for Customer
 // ============================
+// Get Cart Items for Customer
 router.get("/customer-cart/:customer_id", (req, res) => {
   const { customer_id } = req.params;
 
   const sql = "SELECT * FROM cart_items WHERE customer_id = ?";
   db.query(sql, [customer_id], (err, rows) => {
-    if (err) return res.status(500).json({ error: err });
+    if (err) {
+      return res.status(500).json({ 
+        success: false,
+        error: err.message 
+      });
+    }
+    
     res.json(rows);
   });
 });
