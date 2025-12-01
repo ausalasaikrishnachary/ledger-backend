@@ -692,21 +692,6 @@ router.post('/create-complete-order', (req, res) => {
         `;
 
         const orderValues = [
-<<<<<<< HEAD
-          orderData.order_number,
-          orderData.customer_id,
-          orderData.customer_name,
-          orderData.order_total,
-          orderData.discount_amount || 0,
-          orderData.taxable_amount,
-          orderData.tax_amount || 0,
-          orderData.net_payable,
-          orderData.credit_period || '0',
-          orderData.estimated_delivery_date,
-          staffId, // order_placed_by - staff ID
-          staffId, // staff_id - same as order_placed_by
-          orderData.order_mode || 'KACHA'
-=======
           order.order_number,
           order.customer_id,
           order.customer_name,
@@ -720,7 +705,6 @@ router.post('/create-complete-order', (req, res) => {
           order.order_placed_by, 
           order.order_mode,
         
->>>>>>> 976b13bdcea3acc8f5d9a852844a6306eacf36c0
         ];
 
         console.log('🚀 Inserting order with values:', orderValues);
