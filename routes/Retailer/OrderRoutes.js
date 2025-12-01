@@ -144,7 +144,14 @@ router.post("/place-order", (req, res) => {
 router.get("/all-orders", (req, res) => {
   db.query("SELECT * FROM orders ORDER BY id DESC", (err, rows) => {
     if (err) return res.status(500).json({ error: err });
-    res.json(rows);
+    
+    // Add a flag to indicate if invoice can be generated
+    const ordersWithInvoiceFlag = rows.map(order => ({
+      ...order,
+      canGenerateInvoice: order.invoice_status === 0 || order.invoice_status === null
+    }));
+    
+    res.json(ordersWithInvoiceFlag);
   });
 });
 
@@ -374,8 +381,6 @@ router.post('/complete-order', async (req, res) => {
 });
 
 
-// Update the backend route
-// Update the backend route
 router.post('/create-complete-order', (req, res) => {
   console.log('📦 Creating complete order:', req.body);
 
@@ -423,7 +428,7 @@ router.post('/create-complete-order', (req, res) => {
           order.net_payable,
           order.credit_period,
           order.estimated_delivery_date,
-          order.order_placed_by, // This should be the account ID, not name
+          order.order_placed_by, 
           order.order_mode,
           order.invoice_number,
           order.invoice_date
