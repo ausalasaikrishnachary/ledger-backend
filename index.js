@@ -88,7 +88,7 @@ app.use('/api/credit-period-fix', creditPeriodFixRoutes);
 app.use('/', pdfRoutes);
 
 
-app.use("/api", RetailerOrderRoutes);
+app.use("/orders", RetailerOrderRoutes);
 app.use("/api/cart", cartRoutes);
 
 
