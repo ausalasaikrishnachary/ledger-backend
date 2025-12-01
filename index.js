@@ -40,7 +40,7 @@ const creditPeriodFixRoutes = require('./routes/CreditPeriod/CreditPeriodRoutes'
 
 
 
-const port = 5000;
+const port = 5001;
 
 // ✅ Use CORS Middleware (allows requests from any origin)
 app.use(cors());
