@@ -374,7 +374,7 @@ router.post('/complete-order', async (req, res) => {
 });
 
 
-// Update the backend route
+
 // Update the backend route
 router.post('/create-complete-order', (req, res) => {
   console.log('📦 Creating complete order:', req.body);
@@ -518,5 +518,19 @@ router.post('/create-complete-order', (req, res) => {
     });
   });
 });
+
+router.get("/orders-placed-by/:order_placed_by", (req, res) => {
+  const { order_placed_by } = req.params;
+
+  db.query(
+    "SELECT * FROM orders WHERE order_placed_by = ? ORDER BY id DESC",
+    [order_placed_by],
+    (err, rows) => {
+      if (err) return res.status(500).json({ error: err });
+      res.json(rows);
+    }
+  );
+});
+
 
 module.exports = router;
