@@ -227,4 +227,31 @@ router.delete("/accounts/:id", (req, res) => {
   });
 });
 
+
+router.get("/get-sales-retailers/:id", (req, res) => {
+  const staffId = req.params.id;
+
+  const query = `
+    SELECT *
+    FROM accounts
+    WHERE role = 'retailer' AND staffid = ?
+  `;
+
+  db.query(query, [staffId], (err, results) => {
+    if (err) {
+      console.error("DB Error:", err);
+      return res.json({
+        success: false,
+        error: "Database error"
+      });
+    }
+
+    return res.json({
+      success: true,
+      data: results
+    });
+  });
+});
+
+
 module.exports = router;
