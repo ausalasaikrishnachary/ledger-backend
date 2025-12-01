@@ -7,7 +7,7 @@ const db = require('./../../db');
 // ============================
 // Add to Cart
 router.post("/add-to-cart", (req, res) => {
-  const { customer_id, product_id, quantity, credit_period, credit_percentage } = req.body;
+  const { customer_id, product_id, staff_id, quantity, credit_period, credit_percentage } = req.body;
 
   if (!customer_id || !product_id) {
     return res.status(400).json({ 
@@ -17,13 +17,13 @@ router.post("/add-to-cart", (req, res) => {
   }
 
   const sql = `
-    INSERT INTO cart_items (customer_id, product_id, quantity, credit_period, credit_percentage)
-    VALUES (?, ?, ?, ?, ?)
+    INSERT INTO cart_items (customer_id, product_id, staff_id,quantity, credit_period, credit_percentage)
+    VALUES (?, ?, ?,?, ?, ?)
   `;
 
   db.query(
     sql,
-    [customer_id, product_id, quantity || 1, credit_period || 0, credit_percentage || 0],
+    [customer_id, product_id, staff_id, quantity || 1, credit_period || 0, credit_percentage || 0],
     (err, result) => {
       if (err) {
         return res.status(500).json({ 
@@ -115,5 +115,49 @@ router.get("/customer-cart/:customer_id", (req, res) => {
     res.json(rows);
   });
 });
+
+
+// In your backend cart routes file
+// ============================
+// Get Cart Items for Customer with Product Details
+// ============================
+// GET CART WITH FULL PRODUCT DETAILS (Name, Price, Unit, GST)
+// This is CORRECT — keep this one
+router.get("/customer-cart/:customer_id", (req, res) => {
+  const { customer_id } = req.params;
+
+  const sql = `
+    SELECT 
+      ci.id,
+      ci.customer_id,
+      ci.product_id,
+      ci.quantity,
+      ci.credit_period,
+      ci.credit_percentage,
+      ci.staff_id,
+      ci.created_at,
+      p.name AS product_name,
+      p.price AS product_price,
+      p.unit AS product_unit,
+      p.gst_rate AS product_gst,
+      p.balance_stock,
+      p.category,
+      p.supplier
+      -- Add more fields if needed: image, hsn_code, etc.
+    FROM cart_items ci
+    LEFT JOIN products p ON ci.product_id = p.id
+    WHERE ci.customer_id = ?
+    ORDER BY ci.created_at DESC
+  `;
+
+  db.query(sql, [customer_id], (err, rows) => {
+    if (err) {
+      console.error("DB Error:", err);
+      return res.status(500).json({ success: false, error: err.message });
+    }
+    res.json(rows);
+  });
+});
+
 
 module.exports = router;
