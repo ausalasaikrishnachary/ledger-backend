@@ -351,7 +351,14 @@ router.post("/place-order-by-staff", (req, res) => {
 router.get("/all-orders", (req, res) => {
   db.query("SELECT * FROM orders ORDER BY id DESC", (err, rows) => {
     if (err) return res.status(500).json({ error: err });
-    res.json(rows);
+    
+    // Add a flag to indicate if invoice can be generated
+    const ordersWithInvoiceFlag = rows.map(order => ({
+      ...order,
+      canGenerateInvoice: order.invoice_status === 0 || order.invoice_status === null
+    }));
+    
+    res.json(ordersWithInvoiceFlag);
   });
 });
 
@@ -581,8 +588,6 @@ router.post('/complete-order', async (req, res) => {
 });
 
 
-// Update the backend route
-// Update the backend route
 router.post('/create-complete-order', (req, res) => {
   console.log('📦 Creating complete order:', req.body);
 
@@ -687,6 +692,7 @@ router.post('/create-complete-order', (req, res) => {
         `;
 
         const orderValues = [
+<<<<<<< HEAD
           orderData.order_number,
           orderData.customer_id,
           orderData.customer_name,
@@ -700,6 +706,21 @@ router.post('/create-complete-order', (req, res) => {
           staffId, // order_placed_by - staff ID
           staffId, // staff_id - same as order_placed_by
           orderData.order_mode || 'KACHA'
+=======
+          order.order_number,
+          order.customer_id,
+          order.customer_name,
+          order.order_total,
+          order.discount_amount,
+          order.taxable_amount,
+          order.tax_amount,
+          order.net_payable,
+          order.credit_period,
+          order.estimated_delivery_date,
+          order.order_placed_by, 
+          order.order_mode,
+        
+>>>>>>> 976b13bdcea3acc8f5d9a852844a6306eacf36c0
         ];
 
         console.log('🚀 Inserting order with values:', orderValues);

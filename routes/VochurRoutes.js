@@ -160,35 +160,41 @@ router.get("/transactions/:id/download-pdf", (req, res) => {
 
     const pdfInfo = results[0];
     console.log('PDF found:', pdfInfo.pdf_file_name);
+try {
+  let base64Data = pdfInfo.pdf_data;
 
-    try {
-      // Extract base64 data (remove data URL prefix if present)
-      let base64Data = pdfInfo.pdf_data;
-      if (base64Data.startsWith('data:application/pdf;base64,')) {
-        base64Data = base64Data.replace('data:application/pdf;base64,', '');
-      }
+  // 🟢 FIX: Convert Buffer → String
+  if (Buffer.isBuffer(base64Data)) {
+    base64Data = base64Data.toString();
+  }
 
-      // Convert base64 to buffer
-      const pdfBuffer = Buffer.from(base64Data, 'base64');
-
-      // Set headers for file download
-      res.setHeader('Content-Type', 'application/pdf');
-      res.setHeader('Content-Disposition', `attachment; filename="${pdfInfo.pdf_file_name}"`);
-      res.setHeader('Content-Length', pdfBuffer.length);
-      res.setHeader('Cache-Control', 'no-cache');
-
-      console.log('Sending PDF buffer, size:', pdfBuffer.length);
-
-      // Send the PDF buffer
-      res.send(pdfBuffer);
-
-    } catch (error) {
-      console.error('Error processing PDF data:', error);
-      res.status(500).json({
-        success: false,
-        message: 'Error processing PDF data'
-      });
+  // 🟢 FIX: Ensure it's a string before checking .startsWith()
+  if (typeof base64Data === "string") {
+    if (base64Data.startsWith("data:application/pdf;base64,")) {
+      base64Data = base64Data.replace("data:application/pdf;base64,", "");
     }
+  } else {
+    return res.status(400).json({ error: "Invalid PDF data format" });
+  }
+
+  // Convert base64 to buffer
+  const pdfBuffer = Buffer.from(base64Data, "base64");
+
+  // Set headers
+  res.setHeader("Content-Type", "application/pdf");
+  res.setHeader("Content-Disposition", `attachment; filename="${pdfInfo.pdf_file_name}"`);
+  res.setHeader("Content-Length", pdfBuffer.length);
+  res.setHeader("Cache-Control", "no-cache");
+
+  console.log("Sending PDF buffer, size:", pdfBuffer.length);
+
+  res.send(pdfBuffer);
+
+} catch (err) {
+  console.error("Error processing PDF:", err);
+  res.status(500).json({ error: "PDF processing failed" });
+}
+
   });
 });
 
@@ -2067,7 +2073,6 @@ router.post("/transaction", (req, res) => {
 });
 
 const processTransaction = async (transactionData, transactionType, connection) => {
-
   // STEP 1: NEXT VOUCHER ID
   const maxIdResult = await queryPromise(
     connection,
@@ -2083,7 +2088,7 @@ const processTransaction = async (transactionData, transactionType, connection) 
   else if (Array.isArray(transactionData.batchDetails)) items = transactionData.batchDetails;
   else items = [];
 
-  // Normalize
+  // Normalize items
   items = items.map((i) => ({
     product: i.product || "",
     product_id: parseInt(i.product_id || i.productId) || null,
@@ -2097,18 +2102,45 @@ const processTransaction = async (transactionData, transactionType, connection) 
     igst: parseFloat(i.igst) || 0,
     cess: parseFloat(i.cess) || 0,
     total: parseFloat(i.total) || (parseFloat(i.quantity) * parseFloat(i.price)),
+    mfg_date: i.mfg_date || null  // Add mfg_date for batch selection
   }));
 
-  // STEP 3: GET BATCH NUMBER FOR VOUCHER TABLE
+  // Check if this is from an order (has order_number)
+  const orderNumber = transactionData.orderNumber || transactionData.order_number || null;
+  console.log("🛒 Order Number from request:", orderNumber);
+
+  // CONDITION 1: If order_number exists, update orders table
+  if (orderNumber) {
+    console.log("✅ This is an order conversion. Updating orders table...");
+    
+    // Get invoice number and date from transaction data
+    const invoiceNumber = transactionData.InvoiceNumber || transactionData.invoiceNumber || `INV${Date.now()}`;
+    const invoiceDate = transactionData.Date || new Date().toISOString().split('T')[0];
+    
+    // Update orders table
+    await queryPromise(
+      connection,
+      `
+      UPDATE orders SET 
+        invoice_number = ?, 
+        invoice_date = ?, 
+        invoice_status = 1, 
+        updated_at = NOW()
+      WHERE order_number = ?
+      `,
+      [invoiceNumber, invoiceDate, orderNumber]
+    );
+    
+    console.log(`✅ Updated order ${orderNumber} with invoice ${invoiceNumber}`);
+  }
+
   let voucherBatchNumber = null;
   
-  // Get batch number from the first item for voucher table
   if (items.length > 0 && items[0].batch) {
     voucherBatchNumber = items[0].batch;
     console.log(`✅ Using batch number for voucher table: ${voucherBatchNumber}`);
   }
 
-  // STEP 4: INVOICE / VCHNO
   let invoiceNumber =
     transactionData.InvoiceNumber ||
     transactionData.invoiceNumber ||
@@ -2189,69 +2221,65 @@ const processTransaction = async (transactionData, transactionType, connection) 
     transactionData.AccountName ||
     "";
 
+  const voucherData = {
+    VoucherID: nextVoucherId,
+    TransactionType: transactionType,
+    VchNo: vchNo,
+    InvoiceNumber: invoiceNumber,
+    order_number: orderNumber, 
+    Date: transactionData.Date || new Date().toISOString().split("T")[0],
 
-const voucherData = {
-  VoucherID: nextVoucherId,
-  TransactionType: transactionType,
-  VchNo: vchNo,
-  InvoiceNumber: invoiceNumber,
-  Date: transactionData.Date || new Date().toISOString().split("T")[0],
+    PaymentTerms: transactionData.PaymentTerms || "Immediate",
+    Freight: parseFloat(transactionData.Freight) || 0,
+    TotalPacks: items.length,
 
-  PaymentTerms: transactionData.PaymentTerms || "Immediate",
-  Freight: parseFloat(transactionData.Freight) || 0,
-  TotalPacks: items.length,
+    TaxAmount: totalGST,
+    Subtotal: taxableAmount,
+    BillSundryAmount: parseFloat(transactionData.BillSundryAmount) || 0,
+    TotalAmount: grandTotal,
+    paid_amount: parseFloat(transactionData.paid_amount) || grandTotal,
 
-  TaxAmount: totalGST,
-  Subtotal: taxableAmount,
-  BillSundryAmount: parseFloat(transactionData.BillSundryAmount) || 0,
-  TotalAmount: grandTotal,
-  paid_amount: parseFloat(transactionData.paid_amount) || grandTotal,
+    AccountID: accountID,
+    AccountName: accountName,
+    PartyID: partyID,
+    PartyName: partyName,
 
-  AccountID: accountID,
-  AccountName: accountName,
-  PartyID: partyID,
-  PartyName: partyName,
+    BasicAmount: taxableAmount,
+    ValueOfGoods: taxableAmount,
+    EntryDate: new Date(),
 
-  BasicAmount: taxableAmount,
-  ValueOfGoods: taxableAmount,
-  EntryDate: new Date(),
+    SGSTPercentage: parseFloat(transactionData.SGSTPercentage) || 0,
+    CGSTPercentage: parseFloat(transactionData.CGSTPercentage) || 0,
+    IGSTPercentage: parseFloat(transactionData.IGSTPercentage) || (items[0]?.igst || 0),
 
-  SGSTPercentage: parseFloat(transactionData.SGSTPercentage) || 0,
-  CGSTPercentage: parseFloat(transactionData.CGSTPercentage) || 0,
-  IGSTPercentage: parseFloat(transactionData.IGSTPercentage) || (items[0]?.igst || 0),
+    SGSTAmount: parseFloat(transactionData.SGSTAmount) || 0,
+    CGSTAmount: parseFloat(transactionData.CGSTAmount) || 0,
+    IGSTAmount: parseFloat(transactionData.IGSTAmount) || 0,
 
-  SGSTAmount: parseFloat(transactionData.SGSTAmount) || 0,
-  CGSTAmount: parseFloat(transactionData.CGSTAmount) || 0,
-  IGSTAmount: parseFloat(transactionData.IGSTAmount) || 0,
+    TaxSystem: transactionData.TaxSystem || "GST",
 
-  TaxSystem: transactionData.TaxSystem || "GST",
+    product_id: items[0]?.product_id || null,
+    batch_id: voucherBatchNumber,
+    DC: transactionType === "CreditNote" ? "C" : "D",
 
-  product_id: items[0]?.product_id || null,
-  batch_id: voucherBatchNumber,
-  DC: transactionType === "CreditNote" ? "C" : "D",
+    ChequeNo: transactionData.ChequeNo || "",
+    ChequeDate: transactionData.ChequeDate || null,
+    BankName: transactionData.BankName || "",
 
-  ChequeNo: transactionData.ChequeNo || "",
-  ChequeDate: transactionData.ChequeDate || null,
-  BankName: transactionData.BankName || "",
+    staffid: transactionData.selectedStaffId || transactionData.staffid || null,
+    assigned_staff: transactionData.assigned_staff || null, 
 
- // 🔥 NEW: ADD STAFF FIELDS
-staffid: transactionData.selectedStaffId || transactionData.staffid || null,
-assigned_staff: transactionData.assigned_staff || null, // Remove accounts.find() - it's not available in backend
+    created_at: new Date(),
+    balance_amount: parseFloat(transactionData.balance_amount) || 0,
+    status: transactionData.status || "active",
+    paid_date: transactionData.paid_date || null,
 
-  created_at: new Date(),
-  balance_amount: parseFloat(transactionData.balance_amount) || 0,
-  status: transactionData.status || "active",
-  paid_date: transactionData.paid_date || null,
+    pdf_data: transactionData.pdf_data || null,
+    pdf_file_name: transactionData.pdf_file_name || null,
+    pdf_created_at: transactionData.pdf_created_at || null
+  };
 
-  pdf_data: transactionData.pdf_data || null,
-  pdf_file_name: transactionData.pdf_file_name || null,
-  pdf_created_at: transactionData.pdf_created_at || null
-};
-
-console.log("👤 STAFF DATA - staffid:", voucherData.staffid, "assigned_staff:", voucherData.assigned_staff);
-
-  console.log("📦 Voucher Data being inserted - batch_id (batch number):", voucherBatchNumber);
-  console.log("📦 Complete voucher data:", voucherData);
+  console.log("📦 Voucher Data being inserted with order_number:", orderNumber);
 
   await queryPromise(
     connection,
@@ -2288,28 +2316,79 @@ console.log("👤 STAFF DATA - staffid:", voucherData.staffid, "assigned_staff:"
     ]);
   }
 
-  // STEP 9: STOCK UPDATES - FIXED FOR STOCK TRANSFER
+  // STEP 9: SMART STOCK UPDATES - FIXED FOR MFG_DATE BATCH SELECTION
   for (const i of items) {
     if (transactionType === "Sales" || transactionType === "DebitNote" || transactionType === "stock transfer") {
+      
+      let remainingQuantity = i.quantity;
+      
+      // CONDITION: Get batches for this product sorted by MFG date (oldest first)
+  const batches = await queryPromise(
+  connection,
+  `
+  SELECT batch_number, quantity, mfg_date 
+  FROM batches 
+  WHERE product_id = ? 
+    AND quantity > 0 
+  ORDER BY mfg_date ASC
+  `,
+  [i.product_id]
+);
+      
+      console.log(`📊 Found ${batches.length} batches for product ${i.product_id}`);
+      console.log(`📦 Need to deduct ${remainingQuantity} units`);
+      
+      if (batches.length === 0) {
+        throw new Error(`No stock available for product ID ${i.product_id}`);
+      }
+      
+      // Process batches in FIFO order (oldest MFG date first)
+      for (const batch of batches) {
+        if (remainingQuantity <= 0) break;
+        
+        const batchQtyAvailable = batch.quantity;
+        const batchNumber = batch.batch_number;
+        
+        // Calculate how much to deduct from this batch
+        const deductQty = Math.min(remainingQuantity, batchQtyAvailable);
+        
+        if (deductQty > 0) {
+          console.log(`➖ Deducting ${deductQty} from batch ${batchNumber} (MFG: ${batch.mfg_date})`);
+          
+          await queryPromise(
+            connection,
+            `
+            UPDATE batches 
+              SET quantity = quantity - ?, 
+                  stock_out = stock_out + ?, 
+                  updated_at = NOW()
+            WHERE product_id = ? 
+              AND batch_number = ? 
+              AND quantity >= ?
+            `,
+            [deductQty, deductQty, i.product_id, batchNumber, deductQty]
+          );
+          
+          remainingQuantity -= deductQty;
+          console.log(`📉 Remaining quantity to deduct: ${remainingQuantity}`);
+        }
+      }
+      
+      if (remainingQuantity > 0) {
+        throw new Error(`Insufficient stock for product ID ${i.product_id}. Shortage: ${remainingQuantity} units`);
+      }
+      
+    } else if (transactionType === "Purchase" || transactionType === "CreditNote") {
+      // For purchase/credit note, add to specific batch
       await queryPromise(
         connection,
         `
         UPDATE batches 
-          SET quantity = quantity - ?, stock_out = stock_out + ?, updated_at = NOW()
-        WHERE product_id = ? AND batch_number = ? AND quantity >= ?
-      `,
-        [i.quantity, i.quantity, i.product_id, i.batch, i.quantity]
-      );
-    }
-
-    if (transactionType === "Purchase" || transactionType === "CreditNote") {
-      await queryPromise(
-        connection,
-        `
-        UPDATE batches 
-          SET quantity = quantity + ?, stock_in = stock_in + ?, updated_at = NOW()
+          SET quantity = quantity + ?, 
+              stock_in = stock_in + ?, 
+              updated_at = NOW()
         WHERE product_id = ? AND batch_number = ?
-      `,
+        `,
         [i.quantity, i.quantity, i.product_id, i.batch]
       );
     }
@@ -2320,10 +2399,10 @@ console.log("👤 STAFF DATA - staffid:", voucherData.staffid, "assigned_staff:"
     invoiceNumber,
     vchNo,
     batchDetails: items,
-    grandTotal
+    grandTotal,
+    orderNumber: orderNumber  
   };
 };
-
 
 router.get("/voucherdetails", async (req, res) => {
   try {
