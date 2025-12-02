@@ -462,12 +462,7 @@ router.get("/orders-placed-by/:order_placed_by", (req, res) => {
   );
 });
 
-// ===================================================
-// 📌 CANCEL ORDER (Set invoice_status to 2 for cancelled)
-// ===================================================
-// ===================================================
-// 📌 CANCEL ORDER
-// ===================================================
+
 router.put("/cancel/:order_number", (req, res) => {
   const { order_number } = req.params;
 
@@ -515,37 +510,7 @@ router.put("/cancel/:order_number", (req, res) => {
 });
 
 
-// ===================================================
-// 📌 HELPER: Update order status when invoice is generated
-// ===================================================
-const updateOrderStatusOnInvoice = (order_number) => {
-  db.query(
-    "UPDATE orders SET order_status = 'Invoice', updated_at = NOW() WHERE order_number = ? AND invoice_status = 1",
-    [order_number],
-    (err, result) => {
-      if (err) {
-        console.error("Error updating order status:", err);
-      } else if (result.affectedRows > 0) {
-        console.log(`✅ Order ${order_number} status updated to 'Invoice'`);
-      }
-    }
-  );
-};
 
-// ===================================================
-// 📌 HELPER: Sync order status with invoice status
-// ===================================================
-const syncOrderStatus = (order) => {
-  // If invoice_status is 1, order_status should be 'Invoice'
-  if (order.invoice_status === 1 && order.order_status !== 'Invoice') {
-    return 'Invoice';
-  }
-  // If invoice_status is 0 and order is not cancelled, it should be 'Pending'
-  else if (order.invoice_status === 0 && order.order_status === 'Invoice') {
-    return 'Pending';
-  }
-  return order.order_status;
-};
 
 
 module.exports = router;
