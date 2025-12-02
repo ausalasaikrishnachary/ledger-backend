@@ -2,348 +2,6 @@ const express = require("express");
 const router = express.Router();
 const db = require('./../../db');
 
-// Utility: generate order number -> ORD0001
-function generateOrderNumber(id) {
-  return "ORD" + String(id).padStart(5, "0");
-}
-
-// ===================================================
-// 📌 PLACE ORDER
-// ===================================================
-// ===================================================
-// 📌 PLACE ORDER (Updated with staff_id)
-// ===================================================
-router.post("/place-order", (req, res) => {
-  const {
-    customer_id,
-    customer_name,
-    staff_id, // Add staff_id here
-    order_total,
-    discount_amount,
-    taxable_amount,
-    tax_amount,
-    net_payable,
-    credit_period,
-    estimated_delivery_date,
-    order_placed_by,
-    order_mode,
-    invoice_number,
-    invoice_date,
-    items,
-  } = req.body;
-
-  if (!customer_id || !items || items.length === 0) {
-    return res.status(400).json({ error: "Customer ID and items are required" });
-  }
-
-  // 1️⃣ Insert into orders (temporary placeholder order_number)
-  const insertOrderQuery = `
-    INSERT INTO orders (
-      order_number,
-      customer_id, 
-      customer_name,
-      staff_id, -- Add staff_id column
-      order_total, 
-      discount_amount, 
-      taxable_amount, 
-      tax_amount, 
-      net_payable,
-      credit_period,
-      estimated_delivery_date,
-      order_placed_by,
-      order_mode,
-      invoice_number, 
-      invoice_date,
-      created_at
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW())
-  `;
-
-  db.query(
-    insertOrderQuery,
-    [
-      "TEMP", // placeholder
-      customer_id,
-      customer_name,
-      staff_id || null, // Include staff_id
-      order_total,
-      discount_amount,
-      taxable_amount,
-      tax_amount,
-      net_payable,
-      credit_period,
-      estimated_delivery_date,
-      order_placed_by,
-      order_mode,
-      invoice_number,
-      invoice_date,
-    ],
-    (err, orderResult) => {
-      if (err) {
-        console.error("Order insert error:", err);
-        return res.status(500).json({ error: "Order insert failed", details: err.message });
-      }
-
-      const orderId = orderResult.insertId;
-      const generatedOrderNumber = generateOrderNumber(orderId);
-
-      // 2️⃣ Update the correct order_number now
-      db.query(
-        "UPDATE orders SET order_number = ? WHERE id = ?",
-        [generatedOrderNumber, orderId],
-        (updateErr) => {
-          if (updateErr) {
-            console.error("Update order number error:", updateErr);
-            return res.status(500).json({ error: "Failed to update order number" });
-          }
-
-          // 3️⃣ Insert Items
-          const insertItemQuery = `
-            INSERT INTO order_items (
-              order_number, 
-              item_name, 
-              product_id,
-              mrp, 
-              sale_price, 
-              price, 
-              quantity, 
-              total_amount,
-              discount_percentage, 
-              discount_amount,
-              taxable_amount,
-              tax_percentage, 
-              tax_amount,
-              item_total,
-              credit_period, 
-              credit_percentage,
-              sgst_percentage, 
-              sgst_amount,
-              cgst_percentage, 
-              cgst_amount,
-              discount_applied_scheme
-            ) VALUES ?
-          `;
-
-          const values = items.map(item => [
-            generatedOrderNumber,
-            item.item_name,
-            item.product_id,
-            item.mrp || 0,
-            item.sale_price || item.price,
-            item.price,
-            item.quantity,
-            item.total_amount,
-            item.discount_percentage || 0,
-            item.discount_amount || 0,
-            item.taxable_amount || 0,
-            item.tax_percentage || 0,
-            item.tax_amount || 0,
-            item.item_total,
-            item.credit_period || 0,
-            item.credit_percentage || 0,
-            item.sgst_percentage || 0,
-            item.sgst_amount || 0,
-            item.cgst_percentage || 0,
-            item.cgst_amount || 0,
-            item.discount_applied_scheme || 'none'
-          ]);
-
-          db.query(insertItemQuery, [values], (itemsErr) => {
-            if (itemsErr) {
-              console.error("Order items insert error:", itemsErr);
-              return res.status(500).json({ error: "Order items insert failed", details: itemsErr.message });
-            }
-
-            // 4️⃣ Delete cart items of customer
-            db.query(
-              "DELETE FROM cart_items WHERE customer_id = ?",
-              [customer_id],
-              (deleteErr) => {
-                if (deleteErr) {
-                  console.error("Cart cleanup error:", deleteErr);
-                  return res.status(500).json({ error: "Cart cleanup failed" });
-                }
-
-                return res.json({
-                  success: true,
-                  message: "Order placed successfully",
-                  order_number: generatedOrderNumber,
-                  order_id: orderId
-                });
-              }
-            );
-          });
-        }
-      );
-    }
-  );
-});
-
-// ===================================================
-// 📌 PLACE ORDER BY STAFF (Simplified version)
-// ===================================================
-// Add this route to your existing order routes file
-router.post("/place-order-by-staff", (req, res) => {
-  const {
-    customer_id,
-    customer_name,
-    order_total,
-    discount_amount,
-    taxable_amount,
-    tax_amount,
-    net_payable,
-    credit_period,
-    estimated_delivery_date,
-    order_placed_by, // This should be staff_id
-    order_mode,
-    items,
-    staff_id // Add this parameter
-  } = req.body;
-
-  if (!customer_id || !items || items.length === 0) {
-    return res.status(400).json({ 
-      error: "Customer ID and items are required" 
-    });
-  }
-
-  // Generate order number
-  const orderNumber = "ORD" + Date.now().toString().slice(-8);
-  
-  // Use staff_id if provided, otherwise use order_placed_by
-  const actualStaffId = staff_id || order_placed_by;
-  
-  if (!actualStaffId) {
-    return res.status(400).json({ 
-      error: "Staff ID is required" 
-    });
-  }
-
-  console.log("Staff ID being stored:", actualStaffId);
-  console.log("Order placed by (original):", order_placed_by);
-
-  // 1️⃣ Insert into orders - FIXED to include staff_id or use order_placed_by for staff
-  const insertOrderQuery = `
-    INSERT INTO orders (
-      order_number,
-      customer_id, 
-      customer_name,
-      order_total, 
-      discount_amount, 
-      taxable_amount, 
-      tax_amount, 
-      net_payable,
-      credit_period,
-      estimated_delivery_date,
-      order_placed_by,  -- This should store staff_id
-      staff_id,         -- If you have this column, otherwise remove
-      order_mode,
-      created_at
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW())
-  `;
-
-  const orderValues = [
-    orderNumber,
-    customer_id,
-    customer_name,
-    order_total,
-    discount_amount || 0,
-    taxable_amount,
-    tax_amount || 0,
-    net_payable,
-    credit_period || '0',
-    estimated_delivery_date,
-    actualStaffId,  // Staff ID goes in order_placed_by
-    actualStaffId,  // Also in staff_id if column exists
-    order_mode || 'POS',
-  ];
-
-  console.log("Order values:", orderValues);
-
-  db.query(
-    insertOrderQuery,
-    orderValues,
-    (err, orderResult) => {
-      if (err) {
-        console.error("Order insert error:", err);
-        return res.status(500).json({ 
-          error: "Order insert failed", 
-          details: err.message,
-          sql: err.sql
-        });
-      }
-
-      const orderId = orderResult.insertId;
-
-      // 2️⃣ Insert Items
-      const insertItemQuery = `
-        INSERT INTO order_items (
-          order_number, 
-          item_name, 
-          product_id,
-          price, 
-          quantity, 
-          total_amount,
-          discount_percentage, 
-          discount_amount,
-          taxable_amount,
-          tax_percentage, 
-          tax_amount,
-          item_total,
-          credit_period, 
-          credit_percentage
-        ) VALUES ?
-      `;
-
-      const values = items.map(item => [
-        orderNumber,
-        item.item_name,
-        item.product_id,
-        item.price,
-        item.quantity,
-        item.total_amount,
-        item.discount_percentage || 0,
-        item.discount_amount || 0,
-        item.taxable_amount || 0,
-        item.tax_percentage || 0,
-        item.tax_amount || 0,
-        item.item_total || 0,
-        item.credit_period || '0',
-        item.credit_percentage || 0
-      ]);
-
-      db.query(insertItemQuery, [values], (err) => {
-        if (err) {
-          console.error("Order items insert error:", err);
-          return res.status(500).json({ 
-            error: "Order items insert failed", 
-            details: err.message
-          });
-        }
-
-        // 3️⃣ Delete cart items of customer
-        db.query(
-          "DELETE FROM cart_items WHERE customer_id = ?",
-          [customer_id],
-          (err) => {
-            if (err) {
-              console.error("Cart cleanup error:", err);
-              // Don't fail the order if cart cleanup fails
-            }
-
-            return res.json({
-              success: true,
-              message: "Order placed successfully by staff",
-              order_number: orderNumber,
-              order_id: orderId,
-              net_payable: net_payable,
-              staff_id: actualStaffId
-            });
-          }
-        );
-      });
-    }
-  );
-});
-
 
 // ===================================================
 // 📌 GET ALL ORDERS
@@ -588,85 +246,16 @@ router.post('/complete-order', async (req, res) => {
 });
 
 
-
-// Update the backend route
 router.post('/create-complete-order', (req, res) => {
   console.log('📦 Creating complete order:', req.body);
 
-  // Accept both structures for backward compatibility
-  let orderData, orderItems;
-  
-  // Check if it's the new structure (from place-order-by-staff)
-  if (req.body.customer_id && req.body.items) {
-    // Transform staff-order data to complete-order format
-    orderData = {
-      order_number: req.body.order_number || "ORD" + Date.now().toString().slice(-8),
-      customer_id: req.body.customer_id,
-      customer_name: req.body.customer_name,
-      order_total: req.body.order_total,
-      discount_amount: req.body.discount_amount,
-      taxable_amount: req.body.taxable_amount,
-      tax_amount: req.body.tax_amount,
-      net_payable: req.body.net_payable,
-      credit_period: req.body.credit_period,
-      estimated_delivery_date: req.body.estimated_delivery_date,
-      order_placed_by: req.body.order_placed_by, // staff_id
-      staff_id: req.body.staff_id || req.body.order_placed_by, // Use staff_id if provided
-      order_mode: req.body.order_mode || 'KACHA'
-    };
-    
-    orderItems = req.body.items.map(item => ({
-      item_name: item.item_name,
-      product_id: item.product_id,
-      price: item.price,
-      quantity: item.quantity,
-      total_amount: item.total_amount,
-      discount_percentage: item.discount_percentage,
-      discount_amount: item.discount_amount,
-      taxable_amount: item.taxable_amount,
-      tax_percentage: item.tax_percentage,
-      tax_amount: item.tax_amount,
-      item_total: item.item_total,
-      credit_period: item.credit_period,
-      credit_percentage: item.credit_percentage,
-      // Set defaults for other fields if not provided
-      mrp: item.mrp || item.price,
-      sale_price: item.sale_price || item.price,
-      sgst_percentage: item.sgst_percentage || 0,
-      sgst_amount: item.sgst_amount || 0,
-      cgst_percentage: item.cgst_percentage || 0,
-      cgst_amount: item.cgst_amount || 0,
-      discount_applied_scheme: item.discount_applied_scheme || null
-    }));
-  } 
-  // Original structure
-  else if (req.body.order && req.body.orderItems) {
-    orderData = req.body.order;
-    orderItems = req.body.orderItems;
-  } 
-  else {
+  const { order, orderItems } = req.body;
+
+  if (!order || !orderItems) {
     return res.status(400).json({
-      error: 'Invalid request format. Provide either customer_id+items OR order+orderItems'
+      error: 'Missing order or orderItems data'
     });
   }
-
-  // Validate required fields
-  if (!orderData.customer_id || !orderItems || orderItems.length === 0) {
-    return res.status(400).json({
-      error: 'Customer ID and items are required'
-    });
-  }
-
-  // Validate staff ID
-  const staffId = orderData.staff_id || orderData.order_placed_by;
-  if (!staffId) {
-    return res.status(400).json({
-      error: 'Staff ID is required'
-    });
-  }
-
-  console.log('👤 Staff ID:', staffId);
-  console.log('🛒 Order data:', orderData);
 
   db.getConnection((err, connection) => {
     if (err) {
@@ -683,14 +272,14 @@ router.post('/create-complete-order', (req, res) => {
       }
 
       try {
-        // Step 1: Insert into orders table - UPDATED to include staff_id
+        // Step 1: Insert into orders table
         const orderQuery = `
           INSERT INTO orders (
             order_number, customer_id, customer_name, order_total, discount_amount,
             taxable_amount, tax_amount, net_payable, credit_period,
-            estimated_delivery_date, order_placed_by, staff_id, order_mode,
-            created_at
-          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW())
+            estimated_delivery_date, order_placed_by, order_mode,
+             created_at
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,  NOW())
         `;
 
         const orderValues = [
@@ -704,7 +293,7 @@ router.post('/create-complete-order', (req, res) => {
           order.net_payable,
           order.credit_period,
           order.estimated_delivery_date,
-          order.order_placed_by, 
+          order.order_placed_by, // This should be the account ID, not name
           order.order_mode,
         
         ];
@@ -731,61 +320,41 @@ router.post('/create-complete-order', (req, res) => {
         `;
 
         const orderItemValues = orderItems.map(item => [
-          orderData.order_number,
+          order.order_number,
           item.item_name,
           item.product_id,
-          item.mrp || item.price,
-          item.sale_price || item.price,
+          item.mrp,
+          item.sale_price,
           item.price,
           item.quantity,
           item.total_amount,
-          item.discount_percentage || 0,
-          item.discount_amount || 0,
-          item.taxable_amount || 0,
-          item.tax_percentage || 0,
-          item.tax_amount || 0,
-          item.item_total || item.total_amount || 0,
-          item.credit_period || '0',
-          item.credit_percentage || 0,
-          item.sgst_percentage || 0,
-          item.sgst_amount || 0,
-          item.cgst_percentage || 0,
-          item.cgst_amount || 0,
-          item.discount_applied_scheme || null
+          item.discount_percentage,
+          item.discount_amount,
+          item.taxable_amount,
+          item.tax_percentage,
+          item.tax_amount,
+          item.item_total,
+          item.credit_period,
+          item.credit_percentage,
+          item.sgst_percentage,
+          item.sgst_amount,
+          item.cgst_percentage,
+          item.cgst_amount,
+          item.discount_applied_scheme
         ]);
 
         console.log('🚀 Inserting order items:', orderItemValues.length);
 
-        await new Promise((resolve, reject) => {
+        const orderItemsResult = await new Promise((resolve, reject) => {
           connection.query(orderItemQuery, [orderItemValues], (err, result) => {
             if (err) reject(err);
             else resolve(result);
           });
         });
 
-        console.log('✅ Order items inserted');
+        console.log('✅ Order items inserted:', orderItemsResult.affectedRows);
 
-        // Step 3: Clear cart items for this customer (optional)
-        if (orderData.customer_id && req.body.clear_cart !== false) {
-          await new Promise((resolve, reject) => {
-            connection.query(
-              "DELETE FROM cart_items WHERE customer_id = ?",
-              [orderData.customer_id],
-              (err, result) => {
-                if (err) {
-                  console.warn("⚠️ Cart cleanup failed:", err);
-                  // Don't reject, just log warning
-                  resolve();
-                } else {
-                  console.log('✅ Cart cleared for customer');
-                  resolve();
-                }
-              }
-            );
-          });
-        }
-
-        // Step 4: Commit transaction
+        // Commit transaction
         await new Promise((resolve, reject) => {
           connection.commit((err) => {
             if (err) reject(err);
@@ -799,11 +368,9 @@ router.post('/create-complete-order', (req, res) => {
 
         res.status(201).json({
           success: true,
-          order_number: orderData.order_number,
+          order_number: order.order_number,
           order_id: orderResult.insertId,
-          net_payable: orderData.net_payable,
-          staff_id: staffId,
-          message: 'Order created successfully by staff'
+          message: 'Order created successfully'
         });
 
       } catch (error) {
@@ -821,6 +388,7 @@ router.post('/create-complete-order', (req, res) => {
     });
   });
 });
+
 
 router.get("/orders-placed-by/:order_placed_by", (req, res) => {
   const { order_placed_by } = req.params;
