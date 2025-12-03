@@ -2,141 +2,6 @@ const express = require("express");
 const router = express.Router();
 const db = require('./../../db');
 
-// Utility: generate order number -> ORD0001
-function generateOrderNumber(id) {
-  return "ORD" + String(id).padStart(5, "0");
-}
-
-// ===================================================
-// 📌 PLACE ORDER
-// ===================================================
-router.post("/place-order", (req, res) => {
-  const {
-    customer_id,
-    customer_name,
-    order_total,
-    discount_amount,
-    taxable_amount,
-    tax_amount,
-    net_payable,
-    credit_period,
-    estimated_delivery_date,
-    order_placed_by,
-    order_mode,
-    invoice_number,
-    invoice_date,
-    items,
-  } = req.body;
-
-  if (!customer_id || !items || items.length === 0) {
-    return res.status(400).json({ error: "Customer ID and items are required" });
-  }
-
-  // 1️⃣ Insert into orders (temporary placeholder order_number)
-  const insertOrderQuery = `
-    INSERT INTO orders (
-      order_number,
-      customer_id, customer_name,
-      order_total, discount_amount, taxable_amount, tax_amount, net_payable,
-      credit_period,
-      estimated_delivery_date,
-      order_placed_by,
-      order_mode,
-      invoice_number, invoice_date
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-  `;
-
-  db.query(
-    insertOrderQuery,
-    [
-      "TEMP", // placeholder
-      customer_id,
-      customer_name,
-      order_total,
-      discount_amount,
-      taxable_amount,
-      tax_amount,
-      net_payable,
-      credit_period,
-      estimated_delivery_date,
-      order_placed_by,
-      order_mode,
-      invoice_number,
-      invoice_date,
-    ],
-    (err, orderResult) => {
-      if (err) return res.status(500).json({ error: "Order insert failed", details: err });
-
-      const orderId = orderResult.insertId;
-      const generatedOrderNumber = generateOrderNumber(orderId);
-
-      // 2️⃣ Update the correct order_number now
-      db.query(
-        "UPDATE orders SET order_number = ? WHERE id = ?",
-        [generatedOrderNumber, orderId]
-      );
-
-      // 3️⃣ Insert Items
-      const insertItemQuery = `
-        INSERT INTO order_items (
-          order_number, item_name, product_id,
-          mrp, sale_price, price, quantity, total_amount,
-          discount_percentage, discount_amount,
-          taxable_amount,
-          tax_percentage, tax_amount,
-          item_total,
-          credit_period, credit_percentage,
-          sgst_percentage, sgst_amount,
-          cgst_percentage, cgst_amount,
-          discount_applied_scheme
-        ) VALUES ?
-      `;
-
-      const values = items.map(item => [
-        generatedOrderNumber,
-        item.item_name,
-        item.product_id,
-        item.mrp,
-        item.sale_price,
-        item.price,
-        item.quantity,
-        item.total_amount,
-        item.discount_percentage,
-        item.discount_amount,
-        item.taxable_amount,
-        item.tax_percentage,
-        item.tax_amount,
-        item.item_total,
-        item.credit_period,
-        item.credit_percentage,
-        item.sgst_percentage,
-        item.sgst_amount,
-        item.cgst_percentage,
-        item.cgst_amount,
-        item.discount_applied_scheme
-      ]);
-
-      db.query(insertItemQuery, [values], (err) => {
-        if (err) return res.status(500).json({ error: "Order items insert failed", details: err });
-
-        // 4️⃣ Delete cart items of customer
-        db.query(
-          "DELETE FROM cart_items WHERE customer_id = ?",
-          [customer_id],
-          (err) => {
-            if (err) return res.status(500).json({ error: "Cart cleanup failed", details: err });
-
-            return res.json({
-              message: "Order placed successfully",
-              order_number: generatedOrderNumber,
-              order_id: orderId
-            });
-          }
-        );
-      });
-    }
-  );
-});
 
 // ===================================================
 // 📌 GET ALL ORDERS
@@ -145,13 +10,24 @@ router.get("/all-orders", (req, res) => {
   db.query("SELECT * FROM orders ORDER BY id DESC", (err, rows) => {
     if (err) return res.status(500).json({ error: err });
     
-    // Add a flag to indicate if invoice can be generated
-    const ordersWithInvoiceFlag = rows.map(order => ({
-      ...order,
-      canGenerateInvoice: order.invoice_status === 0 || order.invoice_status === null
-    }));
+    // Sync order status with invoice status
+    const syncedOrders = rows.map(order => {
+      let correctedStatus = order.order_status;
+      
+      if (order.invoice_status === 1 && order.order_status !== 'Cancelled') {
+        correctedStatus = 'Invoice';
+      } else if (order.invoice_status === 0 && order.order_status === 'Invoice') {
+        correctedStatus = 'Pending';
+      }
+      
+      return {
+        ...order,
+        order_status: correctedStatus,
+        canGenerateInvoice: order.invoice_status === 0 || order.invoice_status === null
+      };
+    });
     
-    res.json(ordersWithInvoiceFlag);
+    res.json(syncedOrders);
   });
 });
 
@@ -412,9 +288,8 @@ router.post('/create-complete-order', (req, res) => {
           INSERT INTO orders (
             order_number, customer_id, customer_name, order_total, discount_amount,
             taxable_amount, tax_amount, net_payable, credit_period,
-            estimated_delivery_date, order_placed_by, order_mode,
-             created_at
-          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,  NOW())
+            estimated_delivery_date, order_placed_by, order_mode, created_at
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW())
         `;
 
         const orderValues = [
@@ -428,9 +303,8 @@ router.post('/create-complete-order', (req, res) => {
           order.net_payable,
           order.credit_period,
           order.estimated_delivery_date,
-          order.order_placed_by, 
+          order.order_placed_by, // This should be the account ID, not name
           order.order_mode,
-        
         ];
 
         console.log('🚀 Inserting order with values:', orderValues);
@@ -489,6 +363,30 @@ router.post('/create-complete-order', (req, res) => {
 
         console.log('✅ Order items inserted:', orderItemsResult.affectedRows);
 
+        // Step 3: Clear cart items for this customer and staff
+        // Assuming the cart table is named 'cart_items' based on your data structure
+        const clearCartQuery = `
+          DELETE FROM cart_items 
+          WHERE customer_id = ? AND staff_id = ?
+        `;
+
+        const clearCartValues = [
+          order.customer_id,
+          order.order_placed_by // staff_id is stored here
+        ];
+
+        console.log('🛒 Clearing cart for customer:', order.customer_id, 'and staff:', order.order_placed_by);
+
+        const clearCartResult = await new Promise((resolve, reject) => {
+          connection.query(clearCartQuery, clearCartValues, (err, result) => {
+            if (err) reject(err);
+            else {
+              console.log('✅ Cart cleared, affected rows:', result.affectedRows);
+              resolve(result);
+            }
+          });
+        });
+
         // Commit transaction
         await new Promise((resolve, reject) => {
           connection.commit((err) => {
@@ -505,7 +403,8 @@ router.post('/create-complete-order', (req, res) => {
           success: true,
           order_number: order.order_number,
           order_id: orderResult.insertId,
-          message: 'Order created successfully'
+          cart_cleared: clearCartResult.affectedRows,
+          message: 'Order created successfully and cart cleared'
         });
 
       } catch (error) {
@@ -523,5 +422,95 @@ router.post('/create-complete-order', (req, res) => {
     });
   });
 });
+
+
+router.get("/orders-placed-by/:order_placed_by", (req, res) => {
+  const { order_placed_by } = req.params;
+
+  db.query(
+    "SELECT * FROM orders WHERE order_placed_by = ? ORDER BY id DESC",
+    [order_placed_by],
+    (err, rows) => {
+      if (err) return res.status(500).json({ error: err });
+      
+      // Sync order status with invoice status
+      const syncedOrders = rows.map(order => {
+        // Auto-correct status based on invoice_status
+        let correctedStatus = order.order_status;
+        
+        if (order.invoice_status === 1 && order.order_status !== 'Cancelled') {
+          correctedStatus = 'Invoice';
+          // Auto-update in database if needed
+          if (order.order_status !== 'Invoice') {
+            db.query(
+              "UPDATE orders SET order_status = 'Invoice' WHERE order_number = ?",
+              [order.order_number]
+            );
+          }
+        } else if (order.invoice_status === 0 && order.order_status === 'Invoice') {
+          correctedStatus = 'Pending';
+        }
+        
+        return {
+          ...order,
+          order_status: correctedStatus
+        };
+      });
+      
+      res.json(syncedOrders);
+    }
+  );
+});
+
+
+router.put("/cancel/:order_number", (req, res) => {
+  const { order_number } = req.params;
+
+  // First, check if order exists and invoice_status is 0
+  db.query(
+    "SELECT invoice_status FROM orders WHERE order_number = ?",
+    [order_number],
+    (err, rows) => {
+      if (err) return res.status(500).json({ error: err });
+
+      if (rows.length === 0) {
+        return res.status(404).json({ error: "Order not found" });
+      }
+
+      const order = rows[0];
+
+      // Check if invoice_status is 0 (invoice not generated)
+      if (order.invoice_status !== 0) {
+        return res.status(400).json({ 
+          error: "Cannot cancel order. Invoice has already been generated." 
+        });
+      }
+
+      // Update order_status to 'Cancelled'
+      db.query(
+        "UPDATE orders SET order_status = 'Cancelled', updated_at = NOW() WHERE order_number = ?",
+        [order_number],
+        (err, result) => {
+          if (err) return res.status(500).json({ error: err });
+
+          if (result.affectedRows === 0) {
+            return res.status(404).json({ error: "Order not found" });
+          }
+
+          res.json({
+            success: true,
+            message: "Order cancelled successfully",
+            order_number: order_number,
+            order_status: "Cancelled"
+          });
+        }
+      );
+    }
+  );
+});
+
+
+
+
 
 module.exports = router;
