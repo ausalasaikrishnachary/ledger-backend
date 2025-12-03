@@ -1450,6 +1450,7 @@ router.get('/invoices/:invoiceNumber', async (req, res) => {
         v.TotalPacks,
         v.TaxAmount,
         v.Subtotal,
+        v.assigned_staff,
         v.BillSundryAmount,
         v.TotalAmount,
         v.ChequeNo,
