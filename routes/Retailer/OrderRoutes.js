@@ -9,24 +9,24 @@ const db = require('./../../db');
 router.get("/all-orders", (req, res) => {
   db.query("SELECT * FROM orders ORDER BY id DESC", (err, rows) => {
     if (err) return res.status(500).json({ error: err });
-    
+
     // Sync order status with invoice status
     const syncedOrders = rows.map(order => {
       let correctedStatus = order.order_status;
-      
+
       if (order.invoice_status === 1 && order.order_status !== 'Cancelled') {
         correctedStatus = 'Invoice';
       } else if (order.invoice_status === 0 && order.order_status === 'Invoice') {
         correctedStatus = 'Pending';
       }
-      
+
       return {
         ...order,
         order_status: correctedStatus,
         canGenerateInvoice: order.invoice_status === 0 || order.invoice_status === null
       };
     });
-    
+
     res.json(syncedOrders);
   });
 });
@@ -80,183 +80,6 @@ router.get("/details/:order_number", (req, res) => {
 });
 
 
-// POST /api/orders/complete-order - Create complete order with order_items
-router.post('/complete-order', async (req, res) => {
-  console.log('📦 Received complete order request:', req.body);
-
-  const {
-    order_number,
-    customer_id,
-    customer_name,
-    order_total,
-    discount_amount,
-    taxable_amount,
-    tax_amount,
-    net_payable,
-    credit_period,
-    estimated_delivery_date,
-    order_placed_by,
-    order_mode,
-    invoice_number,
-    invoice_date,
-    order_items
-  } = req.body;
-
-  // Validate required fields
-  if (!order_number || !customer_id || !customer_name || !order_items || !order_items.length) {
-    console.log('❌ Missing required fields');
-    return res.status(400).json({
-      error: 'Missing required fields: order_number, customer_id, customer_name, order_items'
-    });
-  }
-
-  let connection;
-  try {
-    connection = await db.getConnection();
-    await connection.beginTransaction();
-
-    console.log('✅ Starting order creation transaction');
-
-    // Step 1: Insert into orders table
-    const orderQuery = `
-      INSERT INTO orders (
-        order_number, customer_id, customer_name, order_total, discount_amount,
-        taxable_amount, tax_amount, net_payable, credit_period, estimated_delivery_date,
-        order_placed_by, order_mode, invoice_number, invoice_date, created_at, updated_at
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW(), NOW())
-    `;
-
-    const orderValues = [
-      order_number,
-      customer_id,
-      customer_name,
-      order_total,
-      discount_amount || 0,
-      taxable_amount,
-      tax_amount || 0,
-      net_payable,
-      credit_period || '0',
-      estimated_delivery_date,
-      order_placed_by,
-      order_mode,
-      invoice_number,
-      invoice_date
-    ];
-
-    console.log('🚀 Inserting order with values:', orderValues);
-    const [orderResult] = await connection.execute(orderQuery, orderValues);
-    console.log('✅ Order inserted with ID:', orderResult.insertId);
-
-    // Step 2: Insert order items
-    const orderItemQuery = `
-      INSERT INTO order_items (
-        order_number, item_name, product_id, mrp, sale_price, price, quantity,
-        total_amount, discount_percentage, discount_amount, taxable_amount,
-        tax_percentage, tax_amount, item_total, credit_period, credit_percentage,
-        sgst_percentage, sgst_amount, cgst_percentage, cgst_amount, discount_applied_scheme
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-    `;
-
-    for (const item of order_items) {
-      const itemValues = [
-        order_number,
-        item.item_name,
-        item.product_id,
-        item.mrp || 0,
-        item.sale_price || item.price,
-        item.price,
-        item.quantity,
-        item.total_amount,
-        item.discount_percentage || 0,
-        item.discount_amount || 0,
-        item.taxable_amount,
-        item.tax_percentage || 0,
-        item.tax_amount || 0,
-        item.item_total,
-        item.credit_period || '0',
-        item.credit_percentage || 0,
-        item.sgst_percentage || 0,
-        item.sgst_amount || 0,
-        item.cgst_percentage || 0,
-        item.cgst_amount || 0,
-        item.discount_applied_scheme || 'none'
-      ];
-
-      console.log('📦 Inserting order item:', itemValues);
-      await connection.execute(orderItemQuery, itemValues);
-    }
-
-    console.log(`✅ ${order_items.length} order items inserted`);
-
-    // Step 3: Update stock for each product
-    for (const item of order_items) {
-      const stockQuery = `
-        INSERT INTO stock (product_id, price_per_unit, opening_stock, stock_out, balance_stock, date)
-        SELECT 
-          ? as product_id,
-          ? as price_per_unit,
-          opening_stock,
-          ? as stock_out,
-          (opening_stock - ?) as balance_stock,
-          CURDATE() as date
-        FROM products 
-        WHERE id = ?
-      `;
-
-      const stockValues = [
-        item.product_id,
-        item.price,
-        item.quantity,
-        item.quantity,
-        item.product_id
-      ];
-
-      console.log('📊 Updating stock for product:', item.product_id);
-      await connection.execute(stockQuery, stockValues);
-
-      // Update products table balance_stock
-      const updateProductQuery = `
-        UPDATE products 
-        SET balance_stock = balance_stock - ?, updated_at = NOW()
-        WHERE id = ?
-      `;
-
-      await connection.execute(updateProductQuery, [item.quantity, item.product_id]);
-    }
-
-    console.log('✅ Stock updated for all products');
-
-    // Commit transaction
-    await connection.commit();
-    console.log('✅ Transaction committed successfully');
-
-    res.status(201).json({
-      success: true,
-      orderId: order_number,
-      message: 'Order created successfully',
-      orderNumber: order_number
-    });
-
-  } catch (error) {
-    // Rollback transaction on error
-    if (connection) {
-      await connection.rollback();
-    }
-    console.error('❌ Order creation failed:', error);
-    res.status(500).json({
-      error: 'Failed to create order',
-      details: error.message,
-      sqlMessage: error.sqlMessage
-    });
-  } finally {
-    if (connection) {
-      connection.release();
-      console.log('✅ Database connection released');
-    }
-  }
-});
-
-
 router.post('/create-complete-order', (req, res) => {
   console.log('📦 Creating complete order:', req.body);
 
@@ -288,8 +111,8 @@ router.post('/create-complete-order', (req, res) => {
           INSERT INTO orders (
             order_number, customer_id, customer_name, order_total, discount_amount,
             taxable_amount, tax_amount, net_payable, credit_period,
-            estimated_delivery_date, order_placed_by, order_mode, created_at
-          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW())
+            estimated_delivery_date, order_placed_by, ordered_by, staff_id , assigned_staff, order_mode, created_at
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,?,?,?, NOW())
         `;
 
         const orderValues = [
@@ -304,6 +127,9 @@ router.post('/create-complete-order', (req, res) => {
           order.credit_period,
           order.estimated_delivery_date,
           order.order_placed_by, // This should be the account ID, not name
+          order.ordered_by,
+          order.staffid,
+          order.assigned_staff,
           order.order_mode,
         ];
 
@@ -432,12 +258,12 @@ router.get("/orders-placed-by/:order_placed_by", (req, res) => {
     [order_placed_by],
     (err, rows) => {
       if (err) return res.status(500).json({ error: err });
-      
+
       // Sync order status with invoice status
       const syncedOrders = rows.map(order => {
         // Auto-correct status based on invoice_status
         let correctedStatus = order.order_status;
-        
+
         if (order.invoice_status === 1 && order.order_status !== 'Cancelled') {
           correctedStatus = 'Invoice';
           // Auto-update in database if needed
@@ -450,13 +276,13 @@ router.get("/orders-placed-by/:order_placed_by", (req, res) => {
         } else if (order.invoice_status === 0 && order.order_status === 'Invoice') {
           correctedStatus = 'Pending';
         }
-        
+
         return {
           ...order,
           order_status: correctedStatus
         };
       });
-      
+
       res.json(syncedOrders);
     }
   );
@@ -481,8 +307,8 @@ router.put("/cancel/:order_number", (req, res) => {
 
       // Check if invoice_status is 0 (invoice not generated)
       if (order.invoice_status !== 0) {
-        return res.status(400).json({ 
-          error: "Cannot cancel order. Invoice has already been generated." 
+        return res.status(400).json({
+          error: "Cannot cancel order. Invoice has already been generated."
         });
       }
 

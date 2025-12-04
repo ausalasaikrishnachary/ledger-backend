@@ -168,7 +168,9 @@ router.post("/accounts/login", async (req, res) => {
         shipping_city:user.shipping_city,
         shipping_pin_code:user.shipping_pin_code,
         shipping_state:user.shipping_state,
-        shipping_country:user.shipping_country
+        shipping_country:user.shipping_country,
+        staffid:user.staffid,
+        assigned_staff:user.assigned_staff
 
 
         // Add other fields you need
