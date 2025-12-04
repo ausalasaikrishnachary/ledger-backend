@@ -2116,92 +2116,87 @@ const processTransaction = async (transactionData, transactionType, connection) 
   
   console.log("📋 Has item selection:", hasItemSelection ? `Yes (${selectedItemIds.length} items)` : "No");
 
-  // **FIXED: Update ALL items when no specific selection is provided**
-  if (orderNumber) {
-    console.log("✅ This is an order conversion. Updating order items...");
-    
-    const invoiceNumber = transactionData.InvoiceNumber || transactionData.invoiceNumber || `INV${Date.now()}`;
-    const invoiceDate = transactionData.Date || new Date().toISOString().split('T')[0];
-    
-    try {
-      if (hasItemSelection && selectedItemIds.length > 0) {
-        // **UPDATE ONLY SELECTED ITEMS** - When specific selection provided
-        console.log(`🔄 Updating ${selectedItemIds.length} selected items in order ${orderNumber}`);
-        
-        // Create placeholders for IN clause
-        const placeholders = selectedItemIds.map(() => '?').join(',');
-        const updateParams = [invoiceNumber, invoiceDate, orderNumber, ...selectedItemIds];
-        
-        await queryPromise(
-          connection,
-          `
-          UPDATE order_items SET 
-            invoice_number = ?, 
-            invoice_date = ?, 
-            invoice_status = 1, 
-            updated_at = NOW()
-          WHERE order_number = ? 
-            AND id IN (${placeholders})
-          `,
-          updateParams
-        );
-        
-        console.log(`✅ Updated ${selectedItemIds.length} selected items in order ${orderNumber} with invoice ${invoiceNumber}`);
-        
-      } else {
-        // **UPDATE ALL ITEMS** - When no specific selection provided
-        console.log("📦 No item selection specified, updating ALL items in the order");
-        
-        await queryPromise(
-          connection,
-          `
-          UPDATE order_items SET 
-            invoice_number = ?, 
-            invoice_date = ?, 
-            invoice_status = 1, 
-            updated_at = NOW()
-          WHERE order_number = ?
-          `,
-          [invoiceNumber, invoiceDate, orderNumber]
-        );
-        
-        // Get count of updated items
-        const countResult = await queryPromise(
-          connection,
-          "SELECT COUNT(*) as count FROM order_items WHERE order_number = ?",
-          [orderNumber]
-        );
-        
-        console.log(`✅ Updated ALL ${countResult[0].count} items in order ${orderNumber} with invoice ${invoiceNumber}`);
-      }
+ if (orderNumber) {
+  console.log("✅ This is an order conversion. Updating order items and order status...");
+  
+  const invoiceNumber = transactionData.InvoiceNumber || transactionData.invoiceNumber || `INV${Date.now()}`;
+  const invoiceDate = transactionData.Date || new Date().toISOString().split('T')[0];
+  
+  try {
+    // Step 1: Update order_items table
+    if (hasItemSelection && selectedItemIds.length > 0) {
+      // **UPDATE ONLY SELECTED ITEMS**
+      console.log(`🔄 Updating ${selectedItemIds.length} selected items in order ${orderNumber}`);
       
-      // 🔥 ADDED: UPDATE ORDER STATUS IN orders TABLE 🔥
-      try {
-        console.log(`🔄 Updating order status in orders table for: ${orderNumber}`);
-        
-        await queryPromise(
-          connection,
-          `
-          UPDATE orders SET 
-            order_status = 'Invoice',
-            invoice_number = ?,
-            invoice_date = ?,
-            updated_at = NOW()
-          WHERE order_number = ?
-          `,
-          [invoiceNumber, invoiceDate, orderNumber]
-        );
-        
-        console.log(`✅ Order ${orderNumber} status updated to 'Invoiced' in orders table`);
-      } catch (orderUpdateError) {
-        console.error(`❌ Error updating order status for ${orderNumber}:`, orderUpdateError.message);
-        // Log error but don't throw - continue with transaction
-        console.log("⚠️ Continuing with transaction despite order status update error");
-      }
+      const placeholders = selectedItemIds.map(() => '?').join(',');
+      const updateParams = [invoiceNumber, invoiceDate, orderNumber, ...selectedItemIds];
       
-    } catch (error) {
-      // Handle column errors
-      if (error.code === 'ER_BAD_FIELD_ERROR' && error.message.includes('updated_at')) {
+      await queryPromise(
+        connection,
+        `
+        UPDATE order_items SET 
+          invoice_number = ?, 
+          invoice_date = ?, 
+          invoice_status = 1, 
+          updated_at = NOW()
+        WHERE order_number = ? 
+          AND id IN (${placeholders})
+        `,
+        updateParams
+      );
+      
+      console.log(`✅ Updated ${selectedItemIds.length} selected items in order ${orderNumber} with invoice ${invoiceNumber}`);
+      
+    } else {
+      // **UPDATE ALL ITEMS**
+      console.log("📦 No item selection specified, updating ALL items in the order");
+      
+      await queryPromise(
+        connection,
+        `
+        UPDATE order_items SET 
+          invoice_number = ?, 
+          invoice_date = ?, 
+          invoice_status = 1, 
+          updated_at = NOW()
+        WHERE order_number = ?
+        `,
+        [invoiceNumber, invoiceDate, orderNumber]
+      );
+      
+      // Get count of updated items
+      const countResult = await queryPromise(
+        connection,
+        "SELECT COUNT(*) as count FROM order_items WHERE order_number = ?",
+        [orderNumber]
+      );
+      
+      console.log(`✅ Updated ALL ${countResult[0].count} items in order ${orderNumber} with invoice ${invoiceNumber}`);
+    }
+    
+    // Step 2: CRITICAL FIX - Update orders table too!
+    console.log(`🔄 Updating order status in orders table for: ${orderNumber}`);
+    
+    await queryPromise(
+      connection,
+      `
+      UPDATE orders SET 
+        order_status = 'Invoice',
+        invoice_number = ?,
+        invoice_date = ?,
+        invoice_status = 1,
+        updated_at = NOW()
+      WHERE order_number = ?
+      `,
+      [invoiceNumber, invoiceDate, orderNumber]
+    );
+    
+    console.log(`✅ Order ${orderNumber} status updated to 'Invoiced' in orders table with invoice ${invoiceNumber}`);
+    
+  } catch (error) {
+    // Handle column errors
+    if (error.code === 'ER_BAD_FIELD_ERROR') {
+      if (error.message.includes('updated_at')) {
         console.log("ℹ️ 'updated_at' column not found, updating without it...");
         
         if (hasItemSelection && selectedItemIds.length > 0) {
@@ -2234,31 +2229,46 @@ const processTransaction = async (transactionData, transactionType, connection) 
           );
         }
         
-        // 🔥 ALSO UPDATE ORDER STATUS WITHOUT updated_at 🔥
-        try {
-          await queryPromise(
-            connection,
-            `
-            UPDATE orders SET 
-              order_status = 'Invoice',
-              invoice_number = ?,
-              invoice_date = ?
-            WHERE order_number = ?
-            `,
-            [invoiceNumber, invoiceDate, orderNumber]
-          );
-          
-          console.log(`✅ Order ${orderNumber} status updated to 'Invoiced' (without updated_at)`);
-        } catch (orderStatusError) {
-          console.error(`❌ Error updating order status:`, orderStatusError.message);
-        }
+        // Also update orders table without updated_at
+        await queryPromise(
+          connection,
+          `
+          UPDATE orders SET 
+            order_status = 'Invoice',
+            invoice_number = ?,
+            invoice_date = ?,
+            invoice_status = 1
+          WHERE order_number = ?
+          `,
+          [invoiceNumber, invoiceDate, orderNumber]
+        );
         
-      } else {
-        console.error(`❌ Error updating order ${orderNumber}:`, error.message);
-        throw error;
+        console.log(`✅ Order ${orderNumber} status updated to 'Invoiced' (without updated_at)`);
+        
+      } else if (error.message.includes('invoice_status')) {
+        // If invoice_status column doesn't exist in orders table
+        console.log("ℹ️ 'invoice_status' column not found in orders table, updating without it...");
+        
+        await queryPromise(
+          connection,
+          `
+          UPDATE orders SET 
+            order_status = 'Invoiced',
+            invoice_number = ?,
+            invoice_date = ?
+          WHERE order_number = ?
+          `,
+          [invoiceNumber, invoiceDate, orderNumber]
+        );
+        
+        console.log(`✅ Order ${orderNumber} status updated to 'Invoiced' (without invoice_status)`);
       }
+    } else {
+      console.error(`❌ Error updating order ${orderNumber}:`, error.message);
+      throw error;
     }
   }
+}
 
   let voucherBatchNumber = null;
   
