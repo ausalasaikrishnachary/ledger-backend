@@ -2174,6 +2174,31 @@ const processTransaction = async (transactionData, transactionType, connection) 
         
         console.log(`✅ Updated ALL ${countResult[0].count} items in order ${orderNumber} with invoice ${invoiceNumber}`);
       }
+      
+      // 🔥 ADDED: UPDATE ORDER STATUS IN orders TABLE 🔥
+      try {
+        console.log(`🔄 Updating order status in orders table for: ${orderNumber}`);
+        
+        await queryPromise(
+          connection,
+          `
+          UPDATE orders SET 
+            order_status = 'Invoice',
+            invoice_number = ?,
+            invoice_date = ?,
+            updated_at = NOW()
+          WHERE order_number = ?
+          `,
+          [invoiceNumber, invoiceDate, orderNumber]
+        );
+        
+        console.log(`✅ Order ${orderNumber} status updated to 'Invoiced' in orders table`);
+      } catch (orderUpdateError) {
+        console.error(`❌ Error updating order status for ${orderNumber}:`, orderUpdateError.message);
+        // Log error but don't throw - continue with transaction
+        console.log("⚠️ Continuing with transaction despite order status update error");
+      }
+      
     } catch (error) {
       // Handle column errors
       if (error.code === 'ER_BAD_FIELD_ERROR' && error.message.includes('updated_at')) {
@@ -2208,6 +2233,26 @@ const processTransaction = async (transactionData, transactionType, connection) 
             [invoiceNumber, invoiceDate, orderNumber]
           );
         }
+        
+        // 🔥 ALSO UPDATE ORDER STATUS WITHOUT updated_at 🔥
+        try {
+          await queryPromise(
+            connection,
+            `
+            UPDATE orders SET 
+              order_status = 'Invoice',
+              invoice_number = ?,
+              invoice_date = ?
+            WHERE order_number = ?
+            `,
+            [invoiceNumber, invoiceDate, orderNumber]
+          );
+          
+          console.log(`✅ Order ${orderNumber} status updated to 'Invoiced' (without updated_at)`);
+        } catch (orderStatusError) {
+          console.error(`❌ Error updating order status:`, orderStatusError.message);
+        }
+        
       } else {
         console.error(`❌ Error updating order ${orderNumber}:`, error.message);
         throw error;
@@ -2484,7 +2529,8 @@ const processTransaction = async (transactionData, transactionType, connection) 
     batchDetails: items,
     grandTotal,
     orderNumber: orderNumber,
-    updatedItemCount: hasItemSelection ? selectedItemIds.length : 'all'
+    updatedItemCount: hasItemSelection ? selectedItemIds.length : 'all',
+    orderStatusUpdated: orderNumber ? true : false
   };
 };
 
