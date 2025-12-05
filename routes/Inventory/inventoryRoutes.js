@@ -931,7 +931,6 @@ router.get('/products/category/:category_id', async (req, res) => {
 });
 
 
-
 // Get product batches
 router.get('/products/:id/batches', async (req, res) => {
   try {
