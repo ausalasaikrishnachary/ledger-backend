@@ -4,14 +4,30 @@ const db = require('../db');
 const nodemailer = require('nodemailer');
 
 // Create Staff Account
-
-
 router.post("/staff", (req, res) => {
   const {
     fullName,
     mobileNumber,
+    alternateNumber,
     email,
+    dateOfBirth,
+    gender,
+    address,
     role,
+    designation,
+    department,
+    joiningDate,
+    incentivePercent,
+    salary,
+    bankAccountNumber,
+    ifscCode,
+    bankName,
+    branchName,
+    upiId,
+    aadhaarNumber,
+    panNumber,
+    bloodGroup,
+    emergencyContact,
     status = "Active"
   } = req.body;
 
@@ -62,7 +78,7 @@ router.post("/staff", (req, res) => {
       // Generate password
       const password = `${fullName.replace(/\s+/g, "")}@123`;
 
-      // Prepare staff data
+      // Prepare staff data with all new fields
       const staffData = {
         account_group_id: null,
         'group': "staff", 
@@ -72,23 +88,27 @@ router.post("/staff", (req, res) => {
         role: role,
         opening_balance: null,
         mobile_number: mobileNumber,
+        alternate_number: alternateNumber || null,
         email: email,
-        password: password, 
-        gstin: null,
-        gst_registered_name: null,
-        business_name: null,
-        additional_business_name: null,
-        display_name: fullName,
-        phone_number: null,
-        fax: null,
-        account_number: null,
-        account_name: null,
-        bank_name: null,
+        date_of_birth: dateOfBirth || null,
+        gender: gender || null,
+        address: address || null,
+        designation: designation || null,
+        department: department || null,
+        joining_date: joiningDate || null,
+        incentive_percent: incentivePercent || null,
+        salary: salary || null,
+        bank_account_number: bankAccountNumber || null,
+        ifsc_code: ifscCode || null,
+        bank_name: bankName || null,
         account_type: null,
-        branch_name: null,
-        ifsc_code: null,
-        pan: null,
+        branch_name: branchName || null,
+        upi_id: upiId || null,
+        aadhaar_number: aadhaarNumber || null,
+        pan: panNumber || null,
         tan: null,
+        blood_group: bloodGroup || null,
+        emergency_contact: emergencyContact || null,
         tds_slab_rate: null,
         currency: null,
         terms_of_payment: null,
@@ -110,6 +130,16 @@ router.post("/staff", (req, res) => {
         billing_country: null,
         billing_branch_name: null,
         billing_gstin: null,
+        password: password,
+        gstin: null,
+        gst_registered_name: null,
+        business_name: null,
+        additional_business_name: null,
+        display_name: fullName,
+        phone_number: null,
+        fax: null,
+        account_number: null,
+        account_name: null,
         status: status
       };
 
@@ -125,7 +155,7 @@ router.post("/staff", (req, res) => {
           service: "gmail",
           auth: {
               user: "bharathsiripuram98@gmail.com",
-        pass: "alsishqgybtzonoj",
+              pass: "alsishqgybtzonoj",
           },
           tls: { rejectUnauthorized: false },
         });
@@ -168,9 +198,37 @@ Please keep this information secure.
   });
 });
 
-// Get All Staff Members - FIXED: Added backticks around `group`
+// Get All Staff Members - UPDATED: Added all new fields
 router.get("/staff", (req, res) => {
-  const sql = "SELECT id, name as full_name, mobile_number, email, role, status FROM accounts WHERE `group` = 'staff'";
+  const sql = `
+    SELECT 
+      id, 
+      name as full_name, 
+      mobile_number, 
+      alternate_number,
+      email, 
+      date_of_birth,
+      gender,
+      address,
+      role, 
+      designation,
+      department,
+      joining_date,
+      incentive_percent,
+      salary,
+      bank_account_number,
+      ifsc_code,
+      bank_name,
+      branch_name,
+      upi_id,
+      aadhaar_number,
+      pan as pan_number,
+      blood_group,
+      emergency_contact,
+      status 
+    FROM accounts 
+    WHERE \`group\` = 'staff'
+  `;
   db.query(sql, (err, results) => {
     if (err) {
       console.error("Database error:", err);
@@ -180,9 +238,37 @@ router.get("/staff", (req, res) => {
   });
 });
 
-// Get Single Staff Member - FIXED: Added backticks around `group`
+// Get Single Staff Member - UPDATED: Added all new fields
 router.get("/staff/:id", (req, res) => {
-  const sql = "SELECT id, name as full_name, mobile_number, email, role, status FROM accounts WHERE id = ? AND `group` = 'staff'";
+  const sql = `
+    SELECT 
+      id, 
+      name as full_name, 
+      mobile_number, 
+      alternate_number,
+      email, 
+      date_of_birth,
+      gender,
+      address,
+      role, 
+      designation,
+      department,
+      joining_date,
+      incentive_percent,
+      salary,
+      bank_account_number,
+      ifsc_code,
+      bank_name,
+      branch_name,
+      upi_id,
+      aadhaar_number,
+      pan as pan_number,
+      blood_group,
+      emergency_contact,
+      status 
+    FROM accounts 
+    WHERE id = ? AND \`group\` = 'staff'
+  `;
   db.query(sql, [req.params.id], (err, results) => {
     if (err) {
       console.error("Database error:", err);
@@ -197,10 +283,32 @@ router.get("/staff/:id", (req, res) => {
   });
 });
 
-
-
+// Update Staff Member - UPDATED: Added all new fields
 router.put("/staff/:id", (req, res) => {
-  const { fullName, email, role, status } = req.body;
+  const {
+    fullName,
+    alternateNumber,
+    email,
+    dateOfBirth,
+    gender,
+    address,
+    role,
+    designation,
+    department,
+    joiningDate,
+    incentivePercent,
+    salary,
+    bankAccountNumber,
+    ifscCode,
+    bankName,
+    branchName,
+    upiId,
+    aadhaarNumber,
+    panNumber,
+    bloodGroup,
+    emergencyContact,
+    status
+  } = req.body;
 
   // Validate required fields
   if (!fullName || !email || !role) {
@@ -225,10 +333,29 @@ router.put("/staff/:id", (req, res) => {
     // Generate password from fullName
     const password = `${fullName.replace(/\s+/g, "")}@123`;
 
+    // Update data with all new fields
     const updateData = {
       name: fullName,
+      alternate_number: alternateNumber || null,
       email: email,
+      date_of_birth: dateOfBirth || null,
+      gender: gender || null,
+      address: address || null,
       role: role,
+      designation: designation || null,
+      department: department || null,
+      joining_date: joiningDate || null,
+      incentive_percent: incentivePercent || null,
+      salary: salary || null,
+      bank_account_number: bankAccountNumber || null,
+      ifsc_code: ifscCode || null,
+      bank_name: bankName || null,
+      branch_name: branchName || null,
+      upi_id: upiId || null,
+      aadhaar_number: aadhaarNumber || null,
+      pan: panNumber || null,
+      blood_group: bloodGroup || null,
+      emergency_contact: emergencyContact || null,
       status: status,
       password: password,
       display_name: fullName
@@ -245,7 +372,6 @@ router.put("/staff/:id", (req, res) => {
         return res.status(404).send({ error: "Staff member not found" });
       }
 
-      // No email is sent
       res.send({
         message: "Staff account updated successfully",
         id: req.params.id,
@@ -255,8 +381,7 @@ router.put("/staff/:id", (req, res) => {
   });
 });
 
-
-// Delete Staff Member - FIXED: Added backticks around `group`
+// Delete Staff Member
 router.delete("/staff/:id", (req, res) => {
   const sql = "DELETE FROM accounts WHERE id = ? AND `group` = 'staff'";
   db.query(sql, [req.params.id], (err, result) => {
@@ -273,7 +398,7 @@ router.delete("/staff/:id", (req, res) => {
   });
 });
 
-
+// Get Staff for Assignment
 router.get("/account", (req, res) => {
   const sql = `
     SELECT 
@@ -292,6 +417,5 @@ router.get("/account", (req, res) => {
     res.json({ success: true, staff: results });
   });
 });
-
 
 module.exports = router;

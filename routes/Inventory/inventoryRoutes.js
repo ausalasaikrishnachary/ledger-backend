@@ -2,9 +2,155 @@ const express = require('express');
 const router = express.Router();
 const db = require('./../../db');
 
+const multer = require('multer');
+const path = require('path');
+const fs = require('fs');
+
+// Configure multer for image upload
+const storage = multer.diskStorage({
+  destination: function (req, file, cb) {
+    const uploadDir = 'uploads/products/';
+    // Create directory if it doesn't exist
+    if (!fs.existsSync(uploadDir)) {
+      fs.mkdirSync(uploadDir, { recursive: true });
+    }
+    cb(null, uploadDir);
+  },
+  filename: function (req, file, cb) {
+    const uniqueSuffix = Date.now() + '-' + Math.round(Math.random() * 1E9);
+    cb(null, 'product-' + uniqueSuffix + path.extname(file.originalname));
+  }
+});
+
+const upload = multer({
+  storage: storage,
+  limits: { fileSize: 5 * 1024 * 1024 }, // 5MB limit
+  fileFilter: function (req, file, cb) {
+    const allowedTypes = /jpeg|jpg|png|gif|webp/;
+    const extname = allowedTypes.test(path.extname(file.originalname).toLowerCase());
+    const mimetype = allowedTypes.test(file.mimetype);
+
+    if (mimetype && extname) {
+      return cb(null, true);
+    } else {
+      cb(new Error('Only image files are allowed!'));
+    }
+  }
+});
+
+
+// Upload images route
+router.post('/products/:id/upload-images', upload.array('images', 10), async (req, res) => {
+  try {
+    const productId = req.params.id;
+
+    if (!req.files || req.files.length === 0) {
+      return res.status(400).json({
+        success: false,
+        message: 'No images uploaded'
+      });
+    }
+
+    // Get existing images
+    const [existingProduct] = await db.promise().query(
+      'SELECT images FROM products WHERE id = ?',
+      [productId]
+    );
+
+    let existingImages = [];
+    if (existingProduct[0]?.images) {
+      try {
+        existingImages = JSON.parse(existingProduct[0].images);
+      } catch (e) {
+        existingImages = [];
+      }
+    }
+
+    // Add new images
+    const newImages = req.files.map(file => `/uploads/products/${file.filename}`);
+    const allImages = [...existingImages, ...newImages];
+
+    // Update product with new images array
+    await db.promise().query(
+      'UPDATE products SET images = ?, updated_at = ? WHERE id = ?',
+      [JSON.stringify(allImages), new Date(), productId]
+    );
+
+    res.json({
+      success: true,
+      message: 'Images uploaded successfully',
+      images: allImages
+    });
+
+  } catch (err) {
+    console.error('Error uploading images:', err);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to upload images',
+      error: err.message
+    });
+  }
+});
+
+// Delete image route
+router.delete('/products/:id/image', async (req, res) => {
+  try {
+    const productId = req.params.id;
+    const { imagePath } = req.body;
+
+    // Get current images
+    const [product] = await db.promise().query(
+      'SELECT images FROM products WHERE id = ?',
+      [productId]
+    );
+
+    if (!product[0]) {
+      return res.status(404).json({ success: false, message: 'Product not found' });
+    }
+
+    let images = [];
+    try {
+      images = JSON.parse(product[0].images || '[]');
+    } catch (e) {
+      images = [];
+    }
+
+    // Remove image from array
+    const updatedImages = images.filter(img => img !== imagePath);
+
+    // Update database
+    await db.promise().query(
+      'UPDATE products SET images = ?, updated_at = ? WHERE id = ?',
+      [JSON.stringify(updatedImages), new Date(), productId]
+    );
+
+    // Delete physical file
+    if (imagePath.startsWith('/uploads/')) {
+      const filePath = imagePath.substring(1); // Remove leading slash
+      if (fs.existsSync(filePath)) {
+        fs.unlinkSync(filePath);
+      }
+    }
+
+    res.json({
+      success: true,
+      message: 'Image deleted successfully',
+      images: updatedImages
+    });
+
+  } catch (err) {
+    console.error('Error deleting image:', err);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to delete image',
+      error: err.message
+    });
+  }
+});
+
 router.get('/batches/check-batch-number', async (req, res) => {
   const { batch_number, group_by, product_id } = req.query;
-  
+
   try {
     let query = `
       SELECT COUNT(*) as count FROM batches 
@@ -19,7 +165,7 @@ router.get('/batches/check-batch-number', async (req, res) => {
     }
 
     const [result] = await db.promise().query(query, params);
-    
+
     res.json({
       exists: result[0].count > 0
     });
@@ -351,6 +497,12 @@ router.post('/products', async (req, res) => {
   const data = req.body;
   console.log("📦 Incoming Product Data:", data);
 
+  // Handle images if provided
+  let imagesArray = [];
+  if (data.images && Array.isArray(data.images)) {
+    imagesArray = data.images;
+  }
+
   try {
     console.log('\n========== CREATE PRODUCT REQUEST ==========');
     console.log('Maintain Batch:', data.maintain_batch);
@@ -373,6 +525,7 @@ router.post('/products', async (req, res) => {
 
     const productData = {
       ...cleanProduct,
+      images: JSON.stringify(imagesArray),
       created_at: now,
       updated_at: now,
     };
@@ -618,6 +771,10 @@ router.put('/products/:id', async (req, res) => {
         );
       }
 
+      if (data.images !== undefined) {
+        filteredProductData.images = JSON.stringify(data.images);
+      }
+
     } else {
       // ✅ Maintain batch = false → ensure DEFAULT batch exists
       console.log('\n⚙️ Maintain batch = FALSE → Using default batch');
@@ -739,7 +896,7 @@ router.delete('/products/:id', async (req, res) => {
     // await db.promise().query('DELETE FROM stock WHERE product_id = ?', [productId]);
     await db.promise().query('DELETE FROM batches WHERE product_id = ?', [productId]);
     await db.promise().query('DELETE FROM products WHERE id = ?', [productId]);
-    
+
     res.json({ success: true, message: 'Product deleted successfully' });
   } catch (err) {
     console.error('Error deleting product:', err);
@@ -750,25 +907,25 @@ router.delete('/products/:id', async (req, res) => {
 // Get products by category ID
 router.get('/products/category/:category_id', async (req, res) => {
   const categoryId = req.params.category_id;
-  
+
   console.log('🔍 Fetching products for category ID:', categoryId);
-  
+
   try {
     const [results] = await db.promise().query(
       'SELECT * FROM products WHERE category_id = ? ORDER BY goods_name ASC',
       [categoryId]
     );
-    
+
     console.log('✅ Products found:', results.length);
     console.log('📦 Products data:', results);
-    
+
     res.json(results);
   } catch (err) {
     console.error('❌ Error fetching products by category:', err);
-    res.status(500).json({ 
-      success: false, 
-      message: 'Failed to fetch products by category', 
-      error: err.message 
+    res.status(500).json({
+      success: false,
+      message: 'Failed to fetch products by category',
+      error: err.message
     });
   }
 });
@@ -1042,7 +1199,7 @@ router.get('/get-sales-products', async (req, res) => {
       price: item.price,
       unit: item.unit,
       category_id: item.category_id,
-      category: item.category_name ,
+      category: item.category_name,
       gst_rate: item.gst_rate,
       inclusive_gst: item.inclusive_gst   // ⭐ added
     }));
