@@ -92,7 +92,6 @@ router.post("/transactions/:id/pdf", async (req, res) => {
 
 
 
-// Get PDF data for invoice
 router.get("/transactions/:id/pdf", (req, res) => {
   const voucherId = req.params.id;
 
@@ -129,7 +128,6 @@ router.get("/transactions/:id/pdf", (req, res) => {
   });
 });
 
-// Download PDF endpoint
 router.get("/transactions/:id/download-pdf", (req, res) => {
   const voucherId = req.params.id;
 
@@ -198,7 +196,6 @@ try {
   });
 });
 
-// Helper function to wrap connection.query in a promise
 function queryPromise(connection, sql, params = []) {
   return new Promise((resolve, reject) => {
     connection.query(sql, params, (err, results) => {
@@ -1994,6 +1991,11 @@ router.post("/transaction", (req, res) => {
   const transactionData = req.body;
   console.log("📦 COMPLETE REQUEST BODY:", JSON.stringify(transactionData, null, 2));
   console.log("Received transaction:", transactionData);
+    console.log("- transactionData.description_preview:", transactionData.description_preview);
+  console.log("- transactionData.description:", transactionData.description);
+  console.log("- transactionData.note_preview:", transactionData.note_preview);
+  console.log("- transactionData.note:", transactionData.note);
+  
 
   const transactionType =
     transactionData.TransactionType ||
@@ -2081,7 +2083,14 @@ const processTransaction = async (transactionData, transactionType, connection) 
   );
   const nextVoucherId = maxIdResult[0].nextId;
 
-  // STEP 2: EXTRACT ITEMS
+  // STEP 2: Get order_mode from transactionData - CRITICAL FIX
+  const orderMode = (transactionData.order_mode || transactionData.orderMode || "Pakka").toUpperCase();
+  const isKacha = orderMode === "KACHA";
+  
+  console.log(`📊 Order Mode from request: ${orderMode}, Is Kacha: ${isKacha}`);
+  console.log("🔍 Checking transactionData for order_mode:", transactionData.order_mode);
+
+  // STEP 3: EXTRACT ITEMS
   let items = [];
 
   if (Array.isArray(transactionData.items)) items = transactionData.items;
@@ -2089,22 +2098,43 @@ const processTransaction = async (transactionData, transactionType, connection) 
   else if (Array.isArray(transactionData.batchDetails)) items = transactionData.batchDetails;
   else items = [];
 
-  // Normalize items - SIMPLIFIED, NO originalItemId
-  items = items.map((i) => ({
-    product: i.product || "",
-    product_id: parseInt(i.product_id || i.productId) || null,
-    batch: i.batch || i.batch_number || "DEFAULT",
-    quantity: parseFloat(i.quantity) || 0,
-    price: parseFloat(i.price) || 0,
-    discount: parseFloat(i.discount) || 0,
-    gst: parseFloat(i.gst) || 0,
-    cgst: parseFloat(i.cgst) || 0,
-    sgst: parseFloat(i.sgst) || 0,
-    igst: parseFloat(i.igst) || 0,
-    cess: parseFloat(i.cess) || 0,
-    total: parseFloat(i.total) || (parseFloat(i.quantity) * parseFloat(i.price)),
-    mfg_date: i.mfg_date || null
-  }));
+  items = items.map((i) => {
+    if (isKacha) {
+      console.log(`🔄 Converting item ${i.product} to KACHA mode - removing GST`);
+      return {
+        product: i.product || "",
+        product_id: parseInt(i.product_id || i.productId) || null,
+        batch: i.batch || i.batch_number || "DEFAULT",
+        quantity: parseFloat(i.quantity) || 0,
+        price: parseFloat(i.price) || 0,
+        discount: parseFloat(i.discount) || 0,
+        gst: 0, // Set GST to 0 for KACHA
+        cgst: 0, // Set CGST to 0
+        sgst: 0, // Set SGST to 0
+        igst: 0, // Set IGST to 0
+        cess: 0, // Set CESS to 0
+        total: parseFloat(i.total) || (parseFloat(i.quantity) * parseFloat(i.price)),
+        mfg_date: i.mfg_date || null
+      };
+    } else {
+      // For PAKKA mode, use original GST values
+      return {
+        product: i.product || "",
+        product_id: parseInt(i.product_id || i.productId) || null,
+        batch: i.batch || i.batch_number || "DEFAULT",
+        quantity: parseFloat(i.quantity) || 0,
+        price: parseFloat(i.price) || 0,
+        discount: parseFloat(i.discount) || 0,
+        gst: parseFloat(i.gst) || 0,
+        cgst: parseFloat(i.cgst) || 0,
+        sgst: parseFloat(i.sgst) || 0,
+        igst: parseFloat(i.igst) || 0,
+        cess: parseFloat(i.cess) || 0,
+        total: parseFloat(i.total) || (parseFloat(i.quantity) * parseFloat(i.price)),
+        mfg_date: i.mfg_date || null
+      };
+    }
+  });
 
   // Check if this is from an order (has order_number)
   const orderNumber = transactionData.orderNumber || transactionData.order_number || null;
@@ -2116,159 +2146,159 @@ const processTransaction = async (transactionData, transactionType, connection) 
   
   console.log("📋 Has item selection:", hasItemSelection ? `Yes (${selectedItemIds.length} items)` : "No");
 
- if (orderNumber) {
-  console.log("✅ This is an order conversion. Updating order items and order status...");
-  
-  const invoiceNumber = transactionData.InvoiceNumber || transactionData.invoiceNumber || `INV${Date.now()}`;
-  const invoiceDate = transactionData.Date || new Date().toISOString().split('T')[0];
-  
-  try {
-    // Step 1: Update order_items table
-    if (hasItemSelection && selectedItemIds.length > 0) {
-      // **UPDATE ONLY SELECTED ITEMS**
-      console.log(`🔄 Updating ${selectedItemIds.length} selected items in order ${orderNumber}`);
+  if (orderNumber) {
+    console.log("✅ This is an order conversion. Updating order items and order status...");
+    
+    const invoiceNumber = transactionData.InvoiceNumber || transactionData.invoiceNumber || `INV${Date.now()}`;
+    const invoiceDate = transactionData.Date || new Date().toISOString().split('T')[0];
+    
+    try {
+      // Step 1: Update order_items table
+      if (hasItemSelection && selectedItemIds.length > 0) {
+        // **UPDATE ONLY SELECTED ITEMS**
+        console.log(`🔄 Updating ${selectedItemIds.length} selected items in order ${orderNumber}`);
+        
+        const placeholders = selectedItemIds.map(() => '?').join(',');
+        const updateParams = [invoiceNumber, invoiceDate, orderNumber, ...selectedItemIds];
+        
+        await queryPromise(
+          connection,
+          `
+          UPDATE order_items SET 
+            invoice_number = ?, 
+            invoice_date = ?, 
+            invoice_status = 1, 
+            updated_at = NOW()
+          WHERE order_number = ? 
+            AND id IN (${placeholders})
+          `,
+          updateParams
+        );
+        
+        console.log(`✅ Updated ${selectedItemIds.length} selected items in order ${orderNumber} with invoice ${invoiceNumber}`);
+        
+      } else {
+        // **UPDATE ALL ITEMS**
+        console.log("📦 No item selection specified, updating ALL items in the order");
+        
+        await queryPromise(
+          connection,
+          `
+          UPDATE order_items SET 
+            invoice_number = ?, 
+            invoice_date = ?, 
+            invoice_status = 1, 
+            updated_at = NOW()
+          WHERE order_number = ?
+          `,
+          [invoiceNumber, invoiceDate, orderNumber]
+        );
+        
+        // Get count of updated items
+        const countResult = await queryPromise(
+          connection,
+          "SELECT COUNT(*) as count FROM order_items WHERE order_number = ?",
+          [orderNumber]
+        );
+        
+        console.log(`✅ Updated ALL ${countResult[0].count} items in order ${orderNumber} with invoice ${invoiceNumber}`);
+      }
       
-      const placeholders = selectedItemIds.map(() => '?').join(',');
-      const updateParams = [invoiceNumber, invoiceDate, orderNumber, ...selectedItemIds];
+      // Step 2: CRITICAL FIX - Update orders table too!
+      console.log(`🔄 Updating order status in orders table for: ${orderNumber}`);
       
       await queryPromise(
         connection,
         `
-        UPDATE order_items SET 
-          invoice_number = ?, 
-          invoice_date = ?, 
-          invoice_status = 1, 
-          updated_at = NOW()
-        WHERE order_number = ? 
-          AND id IN (${placeholders})
-        `,
-        updateParams
-      );
-      
-      console.log(`✅ Updated ${selectedItemIds.length} selected items in order ${orderNumber} with invoice ${invoiceNumber}`);
-      
-    } else {
-      // **UPDATE ALL ITEMS**
-      console.log("📦 No item selection specified, updating ALL items in the order");
-      
-      await queryPromise(
-        connection,
-        `
-        UPDATE order_items SET 
-          invoice_number = ?, 
-          invoice_date = ?, 
-          invoice_status = 1, 
+        UPDATE orders SET 
+          order_status = 'Invoice',
+          invoice_number = ?,
+          invoice_date = ?,
+          invoice_status = 1,
           updated_at = NOW()
         WHERE order_number = ?
         `,
         [invoiceNumber, invoiceDate, orderNumber]
       );
       
-      // Get count of updated items
-      const countResult = await queryPromise(
-        connection,
-        "SELECT COUNT(*) as count FROM order_items WHERE order_number = ?",
-        [orderNumber]
-      );
+      console.log(`✅ Order ${orderNumber} status updated to 'Invoiced' in orders table with invoice ${invoiceNumber}`);
       
-      console.log(`✅ Updated ALL ${countResult[0].count} items in order ${orderNumber} with invoice ${invoiceNumber}`);
-    }
-    
-    // Step 2: CRITICAL FIX - Update orders table too!
-    console.log(`🔄 Updating order status in orders table for: ${orderNumber}`);
-    
-    await queryPromise(
-      connection,
-      `
-      UPDATE orders SET 
-        order_status = 'Invoice',
-        invoice_number = ?,
-        invoice_date = ?,
-        invoice_status = 1,
-        updated_at = NOW()
-      WHERE order_number = ?
-      `,
-      [invoiceNumber, invoiceDate, orderNumber]
-    );
-    
-    console.log(`✅ Order ${orderNumber} status updated to 'Invoiced' in orders table with invoice ${invoiceNumber}`);
-    
-  } catch (error) {
-    // Handle column errors
-    if (error.code === 'ER_BAD_FIELD_ERROR') {
-      if (error.message.includes('updated_at')) {
-        console.log("ℹ️ 'updated_at' column not found, updating without it...");
-        
-        if (hasItemSelection && selectedItemIds.length > 0) {
-          const placeholders = selectedItemIds.map(() => '?').join(',');
-          const updateParams = [invoiceNumber, invoiceDate, orderNumber, ...selectedItemIds];
+    } catch (error) {
+      // Handle column errors
+      if (error.code === 'ER_BAD_FIELD_ERROR') {
+        if (error.message.includes('updated_at')) {
+          console.log("ℹ️ 'updated_at' column not found, updating without it...");
           
+          if (hasItemSelection && selectedItemIds.length > 0) {
+            const placeholders = selectedItemIds.map(() => '?').join(',');
+            const updateParams = [invoiceNumber, invoiceDate, orderNumber, ...selectedItemIds];
+            
+            await queryPromise(
+              connection,
+              `
+              UPDATE order_items SET 
+                invoice_number = ?, 
+                invoice_date = ?, 
+                invoice_status = 1
+              WHERE order_number = ? 
+                AND id IN (${placeholders})
+              `,
+              updateParams
+            );
+          } else {
+            await queryPromise(
+              connection,
+              `
+              UPDATE order_items SET 
+                invoice_number = ?, 
+                invoice_date = ?, 
+                invoice_status = 1
+              WHERE order_number = ?
+              `,
+              [invoiceNumber, invoiceDate, orderNumber]
+            );
+          }
+          
+          // Also update orders table without updated_at
           await queryPromise(
             connection,
             `
-            UPDATE order_items SET 
-              invoice_number = ?, 
-              invoice_date = ?, 
-              invoice_status = 1
-            WHERE order_number = ? 
-              AND id IN (${placeholders})
-            `,
-            updateParams
-          );
-        } else {
-          await queryPromise(
-            connection,
-            `
-            UPDATE order_items SET 
-              invoice_number = ?, 
-              invoice_date = ?, 
+            UPDATE orders SET 
+              order_status = 'Invoice',
+              invoice_number = ?,
+              invoice_date = ?,
               invoice_status = 1
             WHERE order_number = ?
             `,
             [invoiceNumber, invoiceDate, orderNumber]
           );
+          
+          console.log(`✅ Order ${orderNumber} status updated to 'Invoiced' (without updated_at)`);
+          
+        } else if (error.message.includes('invoice_status')) {
+          // If invoice_status column doesn't exist in orders table
+          console.log("ℹ️ 'invoice_status' column not found in orders table, updating without it...");
+          
+          await queryPromise(
+            connection,
+            `
+            UPDATE orders SET 
+              order_status = 'Invoice',
+              invoice_number = ?,
+              invoice_date = ?
+            WHERE order_number = ?
+            `,
+            [invoiceNumber, invoiceDate, orderNumber]
+          );
+          
+          console.log(`✅ Order ${orderNumber} status updated to 'Invoiced' (without invoice_status)`);
         }
-        
-        // Also update orders table without updated_at
-        await queryPromise(
-          connection,
-          `
-          UPDATE orders SET 
-            order_status = 'Invoice',
-            invoice_number = ?,
-            invoice_date = ?,
-            invoice_status = 1
-          WHERE order_number = ?
-          `,
-          [invoiceNumber, invoiceDate, orderNumber]
-        );
-        
-        console.log(`✅ Order ${orderNumber} status updated to 'Invoiced' (without updated_at)`);
-        
-      } else if (error.message.includes('invoice_status')) {
-        // If invoice_status column doesn't exist in orders table
-        console.log("ℹ️ 'invoice_status' column not found in orders table, updating without it...");
-        
-        await queryPromise(
-          connection,
-          `
-          UPDATE orders SET 
-            order_status = 'Invoiced',
-            invoice_number = ?,
-            invoice_date = ?
-          WHERE order_number = ?
-          `,
-          [invoiceNumber, invoiceDate, orderNumber]
-        );
-        
-        console.log(`✅ Order ${orderNumber} status updated to 'Invoiced' (without invoice_status)`);
+      } else {
+        console.error(`❌ Error updating order ${orderNumber}:`, error.message);
+        throw error;
       }
-    } else {
-      console.error(`❌ Error updating order ${orderNumber}:`, error.message);
-      throw error;
     }
   }
-}
 
   let voucherBatchNumber = null;
   
@@ -2314,18 +2344,43 @@ const processTransaction = async (transactionData, transactionType, connection) 
       "ST001";
   }
 
-  // STEP 5: TOTALS
-  const taxableAmount =
-    parseFloat(transactionData.BasicAmount) ||
-    items.reduce((sum, i) => sum + i.quantity * i.price, 0);
+  // STEP 5: TOTALS - Handle KACHA mode properly
+  let taxableAmount, totalGST, grandTotal;
+  
+  if (isKacha) {
+    console.log("🔴 KACHA Order Mode Detected - Calculating totals without GST");
+    
+    // For KACHA, taxable amount is the sum of item totals (which should already exclude GST)
+    taxableAmount = parseFloat(transactionData.BasicAmount) ||
+                   parseFloat(transactionData.taxableAmount) ||
+                   parseFloat(transactionData.Subtotal) ||
+                   items.reduce((sum, i) => sum + i.total, 0);
+    
+    totalGST = 0;
+    grandTotal = taxableAmount;
+    
+  } else {
+    // For PAKKA mode, calculate normally
+    taxableAmount = parseFloat(transactionData.BasicAmount) ||
+                    parseFloat(transactionData.taxableAmount) ||
+                    parseFloat(transactionData.Subtotal) ||
+                    items.reduce((sum, i) => sum + (i.quantity * i.price), 0);
+    
+    totalGST = parseFloat(transactionData.TaxAmount) ||
+               parseFloat(transactionData.totalGST) ||
+               items.reduce((sum, i) => {
+                 const itemTotal = i.quantity * i.price;
+                 const discountAmount = itemTotal * (i.discount / 100);
+                 const amountAfterDiscount = itemTotal - discountAmount;
+                 return sum + (amountAfterDiscount * (i.gst / 100));
+               }, 0);
+    
+    grandTotal = parseFloat(transactionData.TotalAmount) ||
+                 parseFloat(transactionData.grandTotal) ||
+                 taxableAmount + totalGST;
+  }
 
-  const totalGST =
-    parseFloat(transactionData.TaxAmount) ||
-    items.reduce((sum, i) => sum + (i.quantity * i.price * (i.gst / 100)), 0);
-
-  const grandTotal =
-    parseFloat(transactionData.TotalAmount) ||
-    taxableAmount + totalGST;
+  console.log(`💰 Totals - Taxable: ${taxableAmount}, GST: ${totalGST}, Grand Total: ${grandTotal}`);
 
   // STEP 6: ACCOUNT / PARTY
   const supplier = transactionData.supplierInfo || {};
@@ -2357,23 +2412,23 @@ const processTransaction = async (transactionData, transactionType, connection) 
     transactionData.AccountName ||
     "";
 
-  // **SIMPLIFIED Voucher Data - NO selected_item_ids**
   const voucherData = {
     VoucherID: nextVoucherId,
     TransactionType: transactionType,
     VchNo: vchNo,
     InvoiceNumber: invoiceNumber,
     order_number: orderNumber, 
+    order_mode: orderMode, // Store the order mode
     Date: transactionData.Date || new Date().toISOString().split("T")[0],
 
     PaymentTerms: transactionData.PaymentTerms || "Immediate",
     Freight: parseFloat(transactionData.Freight) || 0,
     TotalPacks: items.length,
 
-    TaxAmount: totalGST,
+    TaxAmount: totalGST, // This will be 0 for KACHA
     Subtotal: taxableAmount,
     BillSundryAmount: parseFloat(transactionData.BillSundryAmount) || 0,
-    TotalAmount: grandTotal,
+    TotalAmount: grandTotal, // This will equal taxableAmount for KACHA
     paid_amount: parseFloat(transactionData.paid_amount) || grandTotal,
 
     AccountID: accountID,
@@ -2385,15 +2440,24 @@ const processTransaction = async (transactionData, transactionType, connection) 
     ValueOfGoods: taxableAmount,
     EntryDate: new Date(),
 
-    SGSTPercentage: parseFloat(transactionData.SGSTPercentage) || 0,
-    CGSTPercentage: parseFloat(transactionData.CGSTPercentage) || 0,
-    IGSTPercentage: parseFloat(transactionData.IGSTPercentage) || (items[0]?.igst || 0),
+    // **Set GST percentages to 0 for KACHA orders**
+    SGSTPercentage: isKacha ? 0 : (parseFloat(transactionData.SGSTPercentage) || 0),
+    CGSTPercentage: isKacha ? 0 : (parseFloat(transactionData.CGSTPercentage) || 0),
+    IGSTPercentage: isKacha ? 0 : (parseFloat(transactionData.IGSTPercentage) || (items[0]?.igst || 0)),
 
-    SGSTAmount: parseFloat(transactionData.SGSTAmount) || 0,
-    CGSTAmount: parseFloat(transactionData.CGSTAmount) || 0,
-    IGSTAmount: parseFloat(transactionData.IGSTAmount) || 0,
-
-    TaxSystem: transactionData.TaxSystem || "GST",
+    // **Set GST amounts to 0 for KACHA orders**
+    SGSTAmount: isKacha ? 0 : (parseFloat(transactionData.SGSTAmount) || 0),
+    CGSTAmount: isKacha ? 0 : (parseFloat(transactionData.CGSTAmount) || 0),
+    IGSTAmount: isKacha ? 0 : (parseFloat(transactionData.IGSTAmount) || 0),
+    
+    description_preview: transactionData.description_preview || 
+                        (transactionData.description ? 
+                         transactionData.description.substring(0, 200) : ''),
+    
+    note_preview: transactionData.note_preview || 
+                 (transactionData.note ? transactionData.note.substring(0, 200) : ''),
+    
+    TaxSystem: isKacha ? "KACHA_NO_GST" : (transactionData.TaxSystem || "GST"),
 
     product_id: items[0]?.product_id || null,
     batch_id: voucherBatchNumber,
@@ -2403,8 +2467,9 @@ const processTransaction = async (transactionData, transactionType, connection) 
     ChequeDate: transactionData.ChequeDate || null,
     BankName: transactionData.BankName || "",
 
-    staffid: transactionData.selectedStaffId || transactionData.staffid || null,
-    assigned_staff: transactionData.assigned_staff || null, 
+    // FIXED: Match database column names exactly (all lowercase for staffid)
+    staffid: transactionData.staffid || null,
+    assigned_staff: transactionData.assigned_staff || null,
 
     created_at: new Date(),
     balance_amount: parseFloat(transactionData.balance_amount) || 0,
@@ -2414,10 +2479,12 @@ const processTransaction = async (transactionData, transactionType, connection) 
     pdf_data: transactionData.pdf_data || null,
     pdf_file_name: transactionData.pdf_file_name || null,
     pdf_created_at: transactionData.pdf_created_at || null
-    // **REMOVED: selected_item_ids, is_partial_invoice, source**
   };
 
-  console.log("📦 Voucher Data being inserted with order_number:", orderNumber);
+  console.log("🔍 DEBUG - Order Mode in voucher:", voucherData.order_mode);
+  console.log("🔍 DEBUG - TaxAmount in voucher:", voucherData.TaxAmount);
+  console.log("🔍 DEBUG - TotalAmount in voucher:", voucherData.TotalAmount);
+  console.log("🔍 DEBUG - Is Kacha Order:", isKacha);
 
   await queryPromise(
     connection,
@@ -2425,17 +2492,23 @@ const processTransaction = async (transactionData, transactionType, connection) 
     [voucherData]
   );
 
-  // STEP 8: INSERT ITEMS INTO voucherdetails - NO original_item_id
+  // STEP 8: INSERT ITEMS INTO voucherdetails - Set GST to 0 for KACHA
   const insertDetailQuery = `
     INSERT INTO voucherdetails (
       voucher_id, product, product_id, transaction_type, InvoiceNumber,
       batch, quantity, price, discount,
       gst, cgst, sgst, igst, cess, total, created_at
-      -- REMOVED: original_item_id
     ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW())
   `;
 
   for (const i of items) {
+    // For KACHA orders, ensure all GST values are 0
+    const itemGST = isKacha ? 0 : i.gst;
+    const itemCGST = isKacha ? 0 : i.cgst;
+    const itemSGST = isKacha ? 0 : i.sgst;
+    const itemIGST = isKacha ? 0 : i.igst;
+    const itemCess = isKacha ? 0 : i.cess;
+    
     await queryPromise(connection, insertDetailQuery, [
       nextVoucherId,
       i.product,
@@ -2446,13 +2519,12 @@ const processTransaction = async (transactionData, transactionType, connection) 
       i.quantity,
       i.price,
       i.discount,
-      i.gst,
-      i.cgst,
-      i.sgst,
-      i.igst,
-      i.cess,
+      itemGST, // GST percentage
+      itemCGST, // CGST percentage
+      itemSGST, // SGST percentage
+      itemIGST, // IGST percentage
+      itemCess, // CESS percentage
       i.total
-      // REMOVED: i.originalItemId
     ]);
   }
 
@@ -2537,8 +2609,12 @@ const processTransaction = async (transactionData, transactionType, connection) 
     invoiceNumber,
     vchNo,
     batchDetails: items,
+    taxableAmount,
+    totalGST,
     grandTotal,
     orderNumber: orderNumber,
+    orderMode: orderMode,
+    isKacha: isKacha,
     updatedItemCount: hasItemSelection ? selectedItemIds.length : 'all',
     orderStatusUpdated: orderNumber ? true : false
   };
@@ -2595,6 +2671,66 @@ router.get("/voucherdetails", async (req, res) => {
       message: "Internal server error"
     });
   }
+});
+
+
+router.get('/order/:order_number', async (req, res) => {
+    try {
+        const orderNumber = req.params.order_number;
+
+        if (!orderNumber) {
+            return res.status(400).json({
+                success: false,
+                message: 'Order number is required'
+            });
+        }
+
+        const query = `
+            SELECT 
+                VoucherID, TransactionType, VchNo, product_id, batch_id, 
+                batch_number, InvoiceNumber, order_number, Date, PaymentTerms, 
+                Freight, TotalPacks, TaxAmount, Subtotal, BillSundryAmount, 
+                TotalAmount, ChequeNo, ChequeDate, BankName, AccountID, 
+                AccountName, PartyID, PartyName, BasicAmount, ValueOfGoods, 
+                EntryDate, SGSTPercentage, CGSTPercentage, IGSTPercentage, 
+                SGSTAmount, CGSTAmount, IGSTAmount, TaxSystem, paid_amount, 
+                created_at, balance_amount, status, paid_date, pdf_data, 
+                DC, staffid, assigned_staff, pdf_file_name, pdf_created_at, 
+                note_preview, description_preview, order_mode
+            FROM voucher
+            WHERE order_number = ?
+            ORDER BY created_at DESC
+        `;
+
+        const results = await new Promise((resolve, reject) => {
+            db.query(query, [orderNumber], (err, rows) => {
+                if (err) return reject(err);
+                resolve(rows);
+            });
+        });
+
+        if (!results || results.length === 0) {
+            return res.status(404).json({
+                success: false,
+                message: 'No vouchers found for the given order number'
+            });
+        }
+
+        res.status(200).json({
+            success: true,
+            count: results.length,
+            data: results
+        });
+
+    } catch (error) {
+        console.error('Error fetching vouchers:', error.message);
+
+        res.status(500).json({
+            success: false,
+            message: 'Server error while fetching vouchers',
+            error: error.message
+        });
+    }
 });
 
 
