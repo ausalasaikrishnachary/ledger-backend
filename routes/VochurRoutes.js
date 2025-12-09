@@ -1989,12 +1989,6 @@ function recalculateRunningBalances(transactions) {
 
 router.post("/transaction", (req, res) => {
   const transactionData = req.body;
-  console.log("📦 COMPLETE REQUEST BODY:", JSON.stringify(transactionData, null, 2));
-  console.log("Received transaction:", transactionData);
-    console.log("- transactionData.description_preview:", transactionData.description_preview);
-  console.log("- transactionData.description:", transactionData.description);
-  console.log("- transactionData.note_preview:", transactionData.note_preview);
-  console.log("- transactionData.note:", transactionData.note);
   
 
   const transactionType =
@@ -2057,6 +2051,7 @@ router.post("/transaction", (req, res) => {
             invoiceNumber,
             vchNo,
             items: batchDetails,
+
           });
         });
       } catch (error) {
@@ -2083,14 +2078,20 @@ const processTransaction = async (transactionData, transactionType, connection) 
   );
   const nextVoucherId = maxIdResult[0].nextId;
 
-  // STEP 2: Get order_mode from transactionData - CRITICAL FIX
+  // STEP 2: Get order_mode from transactionData
   const orderMode = (transactionData.order_mode || transactionData.orderMode || "Pakka").toUpperCase();
   const isKacha = orderMode === "KACHA";
   
   console.log(`📊 Order Mode from request: ${orderMode}, Is Kacha: ${isKacha}`);
-  console.log("🔍 Checking transactionData for order_mode:", transactionData.order_mode);
 
-  // STEP 3: EXTRACT ITEMS
+  // STEP 3: GET STAFF INCENTIVE FROM TRANSACTION DATA
+  const staffIncentive = parseFloat(transactionData.staff_incentive) || 
+                        parseFloat(transactionData.originalOrder?.staff_incentive) || 
+                        0;
+  
+  console.log(`💰 Staff Incentive from request: ${staffIncentive}`);
+
+  // STEP 4: EXTRACT ITEMS
   let items = [];
 
   if (Array.isArray(transactionData.items)) items = transactionData.items;
@@ -2099,6 +2100,8 @@ const processTransaction = async (transactionData, transactionType, connection) 
   else items = [];
 
   items = items.map((i) => {
+    const itemStaffIncentive = parseFloat(i.staff_incentive) || 0;
+    
     if (isKacha) {
       console.log(`🔄 Converting item ${i.product} to KACHA mode - removing GST`);
       return {
@@ -2108,16 +2111,16 @@ const processTransaction = async (transactionData, transactionType, connection) 
         quantity: parseFloat(i.quantity) || 0,
         price: parseFloat(i.price) || 0,
         discount: parseFloat(i.discount) || 0,
-        gst: 0, // Set GST to 0 for KACHA
-        cgst: 0, // Set CGST to 0
-        sgst: 0, // Set SGST to 0
-        igst: 0, // Set IGST to 0
-        cess: 0, // Set CESS to 0
+        gst: 0,
+        cgst: 0,
+        sgst: 0,
+        igst: 0,
+        cess: 0,
         total: parseFloat(i.total) || (parseFloat(i.quantity) * parseFloat(i.price)),
-        mfg_date: i.mfg_date || null
+        mfg_date: i.mfg_date || null,
+        staff_incentive: itemStaffIncentive
       };
     } else {
-      // For PAKKA mode, use original GST values
       return {
         product: i.product || "",
         product_id: parseInt(i.product_id || i.productId) || null,
@@ -2131,7 +2134,8 @@ const processTransaction = async (transactionData, transactionType, connection) 
         igst: parseFloat(i.igst) || 0,
         cess: parseFloat(i.cess) || 0,
         total: parseFloat(i.total) || (parseFloat(i.quantity) * parseFloat(i.price)),
-        mfg_date: i.mfg_date || null
+        mfg_date: i.mfg_date || null,
+        staff_incentive: itemStaffIncentive
       };
     }
   });
@@ -2155,9 +2159,6 @@ const processTransaction = async (transactionData, transactionType, connection) 
     try {
       // Step 1: Update order_items table
       if (hasItemSelection && selectedItemIds.length > 0) {
-        // **UPDATE ONLY SELECTED ITEMS**
-        console.log(`🔄 Updating ${selectedItemIds.length} selected items in order ${orderNumber}`);
-        
         const placeholders = selectedItemIds.map(() => '?').join(',');
         const updateParams = [invoiceNumber, invoiceDate, orderNumber, ...selectedItemIds];
         
@@ -2178,9 +2179,6 @@ const processTransaction = async (transactionData, transactionType, connection) 
         console.log(`✅ Updated ${selectedItemIds.length} selected items in order ${orderNumber} with invoice ${invoiceNumber}`);
         
       } else {
-        // **UPDATE ALL ITEMS**
-        console.log("📦 No item selection specified, updating ALL items in the order");
-        
         await queryPromise(
           connection,
           `
@@ -2194,7 +2192,6 @@ const processTransaction = async (transactionData, transactionType, connection) 
           [invoiceNumber, invoiceDate, orderNumber]
         );
         
-        // Get count of updated items
         const countResult = await queryPromise(
           connection,
           "SELECT COUNT(*) as count FROM order_items WHERE order_number = ?",
@@ -2204,7 +2201,7 @@ const processTransaction = async (transactionData, transactionType, connection) 
         console.log(`✅ Updated ALL ${countResult[0].count} items in order ${orderNumber} with invoice ${invoiceNumber}`);
       }
       
-      // Step 2: CRITICAL FIX - Update orders table too!
+      // Step 2: Update orders table
       console.log(`🔄 Updating order status in orders table for: ${orderNumber}`);
       
       await queryPromise(
@@ -2224,7 +2221,6 @@ const processTransaction = async (transactionData, transactionType, connection) 
       console.log(`✅ Order ${orderNumber} status updated to 'Invoiced' in orders table with invoice ${invoiceNumber}`);
       
     } catch (error) {
-      // Handle column errors
       if (error.code === 'ER_BAD_FIELD_ERROR') {
         if (error.message.includes('updated_at')) {
           console.log("ℹ️ 'updated_at' column not found, updating without it...");
@@ -2259,7 +2255,6 @@ const processTransaction = async (transactionData, transactionType, connection) 
             );
           }
           
-          // Also update orders table without updated_at
           await queryPromise(
             connection,
             `
@@ -2273,10 +2268,7 @@ const processTransaction = async (transactionData, transactionType, connection) 
             [invoiceNumber, invoiceDate, orderNumber]
           );
           
-          console.log(`✅ Order ${orderNumber} status updated to 'Invoiced' (without updated_at)`);
-          
         } else if (error.message.includes('invoice_status')) {
-          // If invoice_status column doesn't exist in orders table
           console.log("ℹ️ 'invoice_status' column not found in orders table, updating without it...");
           
           await queryPromise(
@@ -2290,8 +2282,6 @@ const processTransaction = async (transactionData, transactionType, connection) 
             `,
             [invoiceNumber, invoiceDate, orderNumber]
           );
-          
-          console.log(`✅ Order ${orderNumber} status updated to 'Invoiced' (without invoice_status)`);
         }
       } else {
         console.error(`❌ Error updating order ${orderNumber}:`, error.message);
@@ -2344,13 +2334,12 @@ const processTransaction = async (transactionData, transactionType, connection) 
       "ST001";
   }
 
-  // STEP 5: TOTALS - Handle KACHA mode properly
+  // STEP 5: TOTALS
   let taxableAmount, totalGST, grandTotal;
   
   if (isKacha) {
     console.log("🔴 KACHA Order Mode Detected - Calculating totals without GST");
     
-    // For KACHA, taxable amount is the sum of item totals (which should already exclude GST)
     taxableAmount = parseFloat(transactionData.BasicAmount) ||
                    parseFloat(transactionData.taxableAmount) ||
                    parseFloat(transactionData.Subtotal) ||
@@ -2360,7 +2349,6 @@ const processTransaction = async (transactionData, transactionType, connection) 
     grandTotal = taxableAmount;
     
   } else {
-    // For PAKKA mode, calculate normally
     taxableAmount = parseFloat(transactionData.BasicAmount) ||
                     parseFloat(transactionData.taxableAmount) ||
                     parseFloat(transactionData.Subtotal) ||
@@ -2381,6 +2369,7 @@ const processTransaction = async (transactionData, transactionType, connection) 
   }
 
   console.log(`💰 Totals - Taxable: ${taxableAmount}, GST: ${totalGST}, Grand Total: ${grandTotal}`);
+  console.log(`💰 Staff Incentive: ${staffIncentive}`);
 
   // STEP 6: ACCOUNT / PARTY
   const supplier = transactionData.supplierInfo || {};
@@ -2412,23 +2401,24 @@ const processTransaction = async (transactionData, transactionType, connection) 
     transactionData.AccountName ||
     "";
 
+  // STEP 7: VOUCHER DATA WITH STAFF INCENTIVE
   const voucherData = {
     VoucherID: nextVoucherId,
     TransactionType: transactionType,
     VchNo: vchNo,
     InvoiceNumber: invoiceNumber,
     order_number: orderNumber, 
-    order_mode: orderMode, // Store the order mode
+    order_mode: orderMode,
     Date: transactionData.Date || new Date().toISOString().split("T")[0],
 
     PaymentTerms: transactionData.PaymentTerms || "Immediate",
     Freight: parseFloat(transactionData.Freight) || 0,
     TotalPacks: items.length,
 
-    TaxAmount: totalGST, // This will be 0 for KACHA
+    TaxAmount: totalGST,
     Subtotal: taxableAmount,
     BillSundryAmount: parseFloat(transactionData.BillSundryAmount) || 0,
-    TotalAmount: grandTotal, // This will equal taxableAmount for KACHA
+    TotalAmount: grandTotal,
     paid_amount: parseFloat(transactionData.paid_amount) || grandTotal,
 
     AccountID: accountID,
@@ -2440,12 +2430,10 @@ const processTransaction = async (transactionData, transactionType, connection) 
     ValueOfGoods: taxableAmount,
     EntryDate: new Date(),
 
-    // **Set GST percentages to 0 for KACHA orders**
     SGSTPercentage: isKacha ? 0 : (parseFloat(transactionData.SGSTPercentage) || 0),
     CGSTPercentage: isKacha ? 0 : (parseFloat(transactionData.CGSTPercentage) || 0),
     IGSTPercentage: isKacha ? 0 : (parseFloat(transactionData.IGSTPercentage) || (items[0]?.igst || 0)),
 
-    // **Set GST amounts to 0 for KACHA orders**
     SGSTAmount: isKacha ? 0 : (parseFloat(transactionData.SGSTAmount) || 0),
     CGSTAmount: isKacha ? 0 : (parseFloat(transactionData.CGSTAmount) || 0),
     IGSTAmount: isKacha ? 0 : (parseFloat(transactionData.IGSTAmount) || 0),
@@ -2467,9 +2455,9 @@ const processTransaction = async (transactionData, transactionType, connection) 
     ChequeDate: transactionData.ChequeDate || null,
     BankName: transactionData.BankName || "",
 
-    // FIXED: Match database column names exactly (all lowercase for staffid)
     staffid: transactionData.staffid || null,
     assigned_staff: transactionData.assigned_staff || null,
+    staff_incentive: staffIncentive, // Now properly defined
 
     created_at: new Date(),
     balance_amount: parseFloat(transactionData.balance_amount) || 0,
@@ -2481,10 +2469,7 @@ const processTransaction = async (transactionData, transactionType, connection) 
     pdf_created_at: transactionData.pdf_created_at || null
   };
 
-  console.log("🔍 DEBUG - Order Mode in voucher:", voucherData.order_mode);
-  console.log("🔍 DEBUG - TaxAmount in voucher:", voucherData.TaxAmount);
-  console.log("🔍 DEBUG - TotalAmount in voucher:", voucherData.TotalAmount);
-  console.log("🔍 DEBUG - Is Kacha Order:", isKacha);
+  console.log("🔍 DEBUG - Staff Incentive in voucher:", voucherData.staff_incentive);
 
   await queryPromise(
     connection,
@@ -2492,17 +2477,16 @@ const processTransaction = async (transactionData, transactionType, connection) 
     [voucherData]
   );
 
-  // STEP 8: INSERT ITEMS INTO voucherdetails - Set GST to 0 for KACHA
+  // STEP 8: INSERT ITEMS INTO voucherdetails - Fix the SQL query
   const insertDetailQuery = `
     INSERT INTO voucherdetails (
       voucher_id, product, product_id, transaction_type, InvoiceNumber,
       batch, quantity, price, discount,
-      gst, cgst, sgst, igst, cess, total, created_at
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW())
+      gst, cgst, sgst, igst, cess, total,  created_at
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,  ?, ?, ?, NOW())
   `;
 
   for (const i of items) {
-    // For KACHA orders, ensure all GST values are 0
     const itemGST = isKacha ? 0 : i.gst;
     const itemCGST = isKacha ? 0 : i.cgst;
     const itemSGST = isKacha ? 0 : i.sgst;
@@ -2519,12 +2503,12 @@ const processTransaction = async (transactionData, transactionType, connection) 
       i.quantity,
       i.price,
       i.discount,
-      itemGST, // GST percentage
-      itemCGST, // CGST percentage
-      itemSGST, // SGST percentage
-      itemIGST, // IGST percentage
-      itemCess, // CESS percentage
-      i.total
+      itemGST,
+      itemCGST,
+      itemSGST,
+      itemIGST,
+      itemCess,
+      i.total,
     ]);
   }
 
@@ -2553,7 +2537,6 @@ const processTransaction = async (transactionData, transactionType, connection) 
         throw new Error(`No stock available for product ID ${i.product_id}`);
       }
       
-      // Process batches in FIFO order (oldest MFG date first)
       for (const batch of batches) {
         if (remainingQuantity <= 0) break;
         
@@ -2580,7 +2563,6 @@ const processTransaction = async (transactionData, transactionType, connection) 
           );
           
           remainingQuantity -= deductQty;
-          console.log(`📉 Remaining quantity to deduct: ${remainingQuantity}`);
         }
       }
       
@@ -2589,7 +2571,6 @@ const processTransaction = async (transactionData, transactionType, connection) 
       }
       
     } else if (transactionType === "Purchase" || transactionType === "CreditNote") {
-      // For purchase/credit note, add to specific batch
       await queryPromise(
         connection,
         `
@@ -2612,6 +2593,7 @@ const processTransaction = async (transactionData, transactionType, connection) 
     taxableAmount,
     totalGST,
     grandTotal,
+    staffIncentive: staffIncentive, // Return staff incentive
     orderNumber: orderNumber,
     orderMode: orderMode,
     isKacha: isKacha,
