@@ -37,6 +37,7 @@ const RetailerOrderRoutes = require("./routes/Retailer/OrderRoutes");
 
 // Add this line with your other route imports
 const creditPeriodFixRoutes = require('./routes/CreditPeriod/CreditPeriodRoutes');
+const inventory = require('./routes/Retailer/InventoryRoutes');
 
 
 
@@ -90,6 +91,7 @@ app.use('/', pdfRoutes);
 
 app.use("/orders", RetailerOrderRoutes);
 app.use("/api/cart", cartRoutes);
+app.use("/api", inventory);
 
 
 // Start server
