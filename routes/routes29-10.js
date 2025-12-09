@@ -634,6 +634,249 @@ router.delete('/receipts/:id', async (req, res) => {
 
 
 
+router.post('/receipts', upload.single('transaction_proof'), async (req, res) => {
+  let connection;
+
+  try {
+    connection = await new Promise((resolve, reject) => {
+      db.getConnection((err, conn) => {
+        if (err) reject(err);
+        else resolve(conn);
+      });
+    });
+
+    await connection.promise().beginTransaction();
+
+    const {
+      retailer_id,
+      retailer_name,
+      amount,
+      bank_name,
+      invoice_number,
+      product_id,
+      batch_id, // This should be the batch_id
+      batch,    // This should be the batch_number
+      quantity,
+      price,
+      discount,
+      gst,
+      cgst,
+      sgst,
+      igst,
+      cess,
+      total,
+      TransactionType
+    } = req.body;
+
+    // 🔥 CONDITIONAL TRANSACTION TYPE
+    let safeTransactionType =
+      TransactionType === "purchase voucher"
+        ? "purchase voucher"
+        : "Receipt";
+
+    const receiptAmount = parseFloat(amount || 0);
+    const currentDate = new Date();
+    const safeInvoiceNumber = invoice_number || null;
+
+    // FILE UPLOAD
+    let transaction_proof_filename = null;
+    if (req.file) transaction_proof_filename = req.file.filename;
+
+    // Debug logging
+    console.log("🔍 Receipt Form Data:", {
+      batch_id: batch_id,
+      batch: batch,
+      product_id: product_id,
+      retailer_name: retailer_name
+    });
+
+    // -------------------------------------------
+    // 1️⃣ Generate NEXT receipt number using VchNo
+    // -------------------------------------------
+    let queryCondition =
+      safeTransactionType === "purchase voucher"
+        ? "TransactionType = 'purchase voucher'"
+        : "TransactionType = 'Receipt'";
+
+    const [recRows] = await connection.promise().query(
+      `SELECT VchNo 
+       FROM voucher 
+       WHERE ${queryCondition}
+       ORDER BY VoucherID DESC
+       LIMIT 1`
+    );
+
+    let nextReceipt = "REC001";
+
+    if (recRows.length > 0) {
+      const match = recRows[0].VchNo?.match(/REC(\d+)/);
+      if (match) {
+        const nextNum = parseInt(match[1], 10) + 1;
+        nextReceipt = "REC" + nextNum.toString().padStart(3, "0");
+      }
+    }
+
+    console.log("Generated Receipt No:", nextReceipt);
+    console.log("Transaction Type:", safeTransactionType);
+
+    // -------------------------------------------
+    // 2️⃣ INSERT RECEIPT INTO VOUCHER TABLE (with batch_id)
+    // -------------------------------------------
+    const [receiptInsert] = await connection.promise().execute(
+      `INSERT INTO voucher (
+        TransactionType, VchNo, product_id, batch_id, InvoiceNumber, Date,
+        PaymentTerms, Freight, TotalPacks, TaxAmount, Subtotal, BillSundryAmount,
+        TotalAmount, ChequeNo, ChequeDate, BankName, AccountID, AccountName, 
+        PartyID, PartyName, BasicAmount, ValueOfGoods, EntryDate, SGSTPercentage, 
+        CGSTPercentage, IGSTPercentage, SGSTAmount, CGSTAmount, IGSTAmount, 
+        TaxSystem, paid_amount, created_at, balance_amount, status, paid_date, 
+        pdf_data, DC, pdf_file_name, pdf_created_at
+      )
+      VALUES (?, ?, ?, ?, ?, ?, 'Immediate', 0, 0, 0, ?, 0, ?, NULL, NULL, ?, ?, ?, ?, ?, ?, ?, ?, 0, 0, 0, 0, 0, 0,
+              'GST', ?, ?, 0, 'Paid', ?, ?, 'C', ?, ?)`,
+      [
+        safeTransactionType,
+        nextReceipt,
+        product_id || null,
+        batch_id || null, // ✅ Store batch_id in voucher table
+        safeInvoiceNumber,
+        currentDate,
+
+        receiptAmount, // Subtotal
+        receiptAmount, // TotalAmount
+        bank_name || null,
+        retailer_id || null,
+        retailer_name || "",
+        retailer_id || null,
+        retailer_name || "",
+        receiptAmount, // BasicAmount
+        receiptAmount, // ValueOfGoods
+
+        currentDate,
+        receiptAmount, // paid_amount
+        currentDate,   // created_at
+        currentDate,   // paid_date
+        null,          // pdf_data
+        transaction_proof_filename,
+        currentDate    // pdf_created_at
+      ]
+    );
+
+    const receiptVoucherId = receiptInsert.insertId;
+
+    console.log("✅ Voucher Inserted - VoucherID:", receiptVoucherId, "batch_id:", batch_id);
+
+    // ---------------------------------------------------
+    // 3️⃣ INSERT INTO VOUCHERDETAILS TABLE (with batch number)
+    // ---------------------------------------------------
+    // FIXED: Remove JavaScript comments from SQL query
+    await connection.promise().execute(
+      `INSERT INTO voucherdetails (
+        voucher_id,
+        product,
+        product_id,
+        InvoiceNumber,
+        batch,           -- This stores batch number (batch_number)
+        quantity,
+        price,
+        discount,
+        gst,
+        cgst,
+        sgst,
+        igst,
+        cess,
+        total,
+        created_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      [
+        receiptVoucherId,
+        retailer_name || "",
+        product_id || null,
+        safeInvoiceNumber,
+        batch || null,   // ✅ Store batch number here (not batch_id)
+        quantity || 0,
+        price || 0,
+        discount || 0,
+        gst || 0,
+        cgst || 0,
+        sgst || 0,
+        igst || 0,
+        cess || 0,
+        total || receiptAmount,
+        currentDate
+      ]
+    );
+
+    console.log("✅ VoucherDetails Inserted - batch:", batch);
+
+    // ---------------------------------------------------
+    // 4️⃣ APPLY PAYMENT TO SALES VOUCHERS (ONLY RECEIPT)
+    // ---------------------------------------------------
+    if (retailer_id && safeTransactionType === "Receipt") {
+      const [sales] = await connection.promise().query(
+        `SELECT * FROM voucher 
+         WHERE PartyID = ? AND TransactionType = 'Sales' 
+         ORDER BY VoucherID ASC`,
+        [retailer_id]
+      );
+
+      let remaining = receiptAmount;
+
+      for (const s of sales) {
+        if (remaining <= 0) break;
+
+        const total = parseFloat(s.TotalAmount || 0);
+        const paid = parseFloat(s.paid_amount || 0);
+        const balance = total - paid;
+
+        if (balance <= 0) continue;
+
+        const apply = Math.min(remaining, balance);
+
+        const newPaid = paid + apply;
+        const newBalance = total - newPaid;
+        const status = newBalance <= 0 ? "Paid" : "Partial";
+
+        await connection.promise().execute(
+          `UPDATE voucher 
+           SET paid_amount = ?, balance_amount = ?, status = ?, paid_date = ? 
+           WHERE VoucherID = ?`,
+          [newPaid, newBalance, status, currentDate, s.VoucherID]
+        );
+
+        remaining -= apply;
+      }
+    }
+
+    // -------------------------------------------
+    // 5️⃣ COMMIT
+    // -------------------------------------------
+    await connection.promise().commit();
+
+    res.json({
+      success: true,
+      message: `${safeTransactionType} created successfully`,
+      receipt_no: nextReceipt,
+      voucherId: receiptVoucherId,
+      transaction_proof: transaction_proof_filename,
+      transactionType: safeTransactionType,
+      stored_batch_id: batch_id,    // For debugging
+      stored_batch_number: batch    // For debugging
+    });
+
+  } catch (error) {
+    if (connection) await connection.promise().rollback();
+    console.error("Error creating receipt:", error);
+
+    res.status(500).json({
+      success: false,
+      error: error.message
+    });
+  } finally {
+    if (connection) connection.release();
+  }
+});
+
 
 
 router.get('/invoices/:invoiceNumber', async (req, res) => {
