@@ -1427,7 +1427,6 @@ router.delete('/voucher/:id', async (req, res) => {
 // ------------------------------
 router.get('/receipts/:id/download-proof', async (req, res) => {
   try {
-    // First get the receipt to check if it has a transaction proof file
     db.execute(
       'SELECT transaction_proof_filename FROM receipts WHERE id = ?',
       [req.params.id],
@@ -1447,37 +1446,33 @@ router.get('/receipts/:id/download-proof', async (req, res) => {
           return res.status(404).json({ error: 'No transaction proof file found for this receipt' });
         }
 
-        const filePath = path.join(__dirname, '../uploads/receipts', receipt.transaction_proof_filename);
+        // FIXED: Correct the file path
+        const filePath = path.join(__dirname, '../../uploads/receipts', receipt.transaction_proof_filename);
         
         // Check if file exists
         if (!fs.existsSync(filePath)) {
+          console.error('File not found at path:', filePath);
           return res.status(404).json({ error: 'Transaction proof file not found on server' });
         }
 
-        // Get file stats for content type and size
+        // Get file stats
         const stats = fs.statSync(filePath);
         const fileSize = stats.size;
         const fileExt = path.extname(receipt.transaction_proof_filename).toLowerCase();
 
-        // Determine content type based on file extension
+        // Determine content type
         let contentType = 'application/octet-stream';
-        switch (fileExt) {
-          case '.pdf':
-            contentType = 'application/pdf';
-            break;
-          case '.jpg':
-          case '.jpeg':
-            contentType = 'image/jpeg';
-            break;
-          case '.png':
-            contentType = 'image/png';
-            break;
-          case '.doc':
-            contentType = 'application/msword';
-            break;
-          case '.docx':
-            contentType = 'application/vnd.openxmlformats-officedocument.wordprocessingml.document';
-            break;
+        const contentTypes = {
+          '.pdf': 'application/pdf',
+          '.jpg': 'image/jpeg',
+          '.jpeg': 'image/jpeg',
+          '.png': 'image/png',
+          '.doc': 'application/msword',
+          '.docx': 'application/vnd.openxmlformats-officedocument.wordprocessingml.document'
+        };
+        
+        if (contentTypes[fileExt]) {
+          contentType = contentTypes[fileExt];
         }
 
         // Set headers for file download
@@ -1491,16 +1486,19 @@ router.get('/receipts/:id/download-proof', async (req, res) => {
         
         fileStream.on('error', (error) => {
           console.error('File stream error:', error);
-          res.status(500).json({ error: 'Error reading file' });
+          if (!res.headersSent) {
+            res.status(500).json({ error: 'Error reading file' });
+          }
         });
 
         fileStream.pipe(res);
-
       }
     );
   } catch (error) {
     console.error('Error in download proof route:', error);
-    res.status(500).json({ error: 'Failed to download file' });
+    if (!res.headersSent) {
+      res.status(500).json({ error: 'Failed to download file' });
+    }
   }
 });
 
@@ -1528,9 +1526,11 @@ router.get('/receipts/:id/view-proof', async (req, res) => {
           return res.status(404).json({ error: 'No transaction proof file found for this receipt' });
         }
 
-        const filePath = path.join(__dirname, '../uploads/receipts', receipt.transaction_proof_filename);
+        // FIXED: Correct the file path
+        const filePath = path.join(__dirname, '../../uploads/receipts', receipt.transaction_proof_filename);
         
         if (!fs.existsSync(filePath)) {
+          console.error('File not found at path:', filePath);
           return res.status(404).json({ error: 'Transaction proof file not found on server' });
         }
 
@@ -1540,48 +1540,50 @@ router.get('/receipts/:id/view-proof', async (req, res) => {
 
         // Determine content type for inline viewing
         let contentType = 'application/octet-stream';
-        switch (fileExt) {
-          case '.pdf':
-            contentType = 'application/pdf';
-            break;
-          case '.jpg':
-          case '.jpeg':
-            contentType = 'image/jpeg';
-            break;
-          case '.png':
-            contentType = 'image/png';
-            break;
-          case '.doc':
-            contentType = 'application/msword';
-            break;
-          case '.docx':
-            contentType = 'application/vnd.openxmlformats-officedocument.wordprocessingml.document';
-            break;
+        const contentTypes = {
+          '.pdf': 'application/pdf',
+          '.jpg': 'image/jpeg',
+          '.jpeg': 'image/jpeg',
+          '.png': 'image/png',
+          '.doc': 'application/msword',
+          '.docx': 'application/vnd.openxmlformats-officedocument.wordprocessingml.document'
+        };
+        
+        if (contentTypes[fileExt]) {
+          contentType = contentTypes[fileExt];
         }
 
-        // Set headers for inline viewing (not download)
+        // For images and PDFs, set inline disposition
+        if (fileExt.match(/\.(jpg|jpeg|png|pdf)$/i)) {
+          res.setHeader('Content-Disposition', `inline; filename="${receipt.transaction_proof_filename}"`);
+        } else {
+          // For other files, force download
+          res.setHeader('Content-Disposition', `attachment; filename="${receipt.transaction_proof_filename}"`);
+        }
+        
         res.setHeader('Content-Type', contentType);
         res.setHeader('Content-Length', fileSize);
-        res.setHeader('Content-Disposition', `inline; filename="${receipt.transaction_proof_filename}"`);
         res.setHeader('Cache-Control', 'no-cache');
 
         const fileStream = fs.createReadStream(filePath);
         
         fileStream.on('error', (error) => {
           console.error('File stream error:', error);
-          res.status(500).json({ error: 'Error reading file' });
+          if (!res.headersSent) {
+            res.status(500).json({ error: 'Error reading file' });
+          }
         });
 
         fileStream.pipe(res);
-
       }
     );
   } catch (error) {
     console.error('Error in view proof route:', error);
-    res.status(500).json({ error: 'Failed to view file' });
+    if (!res.headersSent) {
+      res.status(500).json({ error: 'Failed to view file' });
+    }
   }
 });
-
 
 
 

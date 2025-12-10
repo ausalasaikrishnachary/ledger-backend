@@ -525,6 +525,8 @@ router.post('/products', async (req, res) => {
 
     const productData = {
       ...cleanProduct,
+            purchase_price: data.purchase_price || 0, // ADD THIS: Ensure purchase_price is included
+
       images: JSON.stringify(imagesArray),
       created_at: now,
       updated_at: now,
@@ -631,6 +633,7 @@ router.post('/products', async (req, res) => {
       success: true,
       message: "Product created successfully",
       product_id: productId,
+       purchase_price: data.purchase_price || 0, // ADD THIS to response
     });
   } catch (err) {
     console.error("❌ Error creating product:", err);
@@ -660,13 +663,19 @@ router.put('/products/:id', async (req, res) => {
       'price', 'inclusive_gst', 'gst_rate', 'non_taxable', 'net_price',
       'hsn_code', 'unit', 'cess_rate', 'cess_amount', 'sku',
       'min_stock_alert', 'max_stock_alert', 'description',
-      'maintain_batch', 'can_be_sold'
+      'maintain_batch', 'can_be_sold',
+            'purchase_price' // ADDED
+
     ];
+
+    const productPurchasePrice = parseFloat(data.purchase_price || 0); // THIS LINE IS MISSING
 
     const filteredProductData = {};
     for (const key of allowedProductFields) {
       if (productData[key] !== undefined) filteredProductData[key] = productData[key];
     }
+
+
 
     if (Object.keys(filteredProductData).length > 0) {
       filteredProductData.updated_at = new Date();
@@ -698,6 +707,7 @@ router.put('/products/:id', async (req, res) => {
           const timestamp = Date.now();
           barcode = `B${timestamp}${index}${Math.random().toString(36).substr(2, 5)}`;
         }
+        const productPurchasePrice = parseFloat(data.purchase_price || 0);
 
         const batchData = {
           batch_number: batch.batch_number,
@@ -706,6 +716,7 @@ router.put('/products/:id', async (req, res) => {
           exp_date: batch.exp_date || batch.expDate || null,
           quantity: parseFloat(batch.quantity || 0),
           opening_stock: parseFloat(batch.opening_stock || batch.quantity || 0),
+              purchase_price: productPurchasePrice, // USE product purchase_price
           stock_in: parseFloat(batch.stock_in || 0),
           stock_out: parseFloat(batch.stock_out || 0),
           cost_price: parseFloat(batch.cost_price || 0),
@@ -844,6 +855,7 @@ router.put('/products/:id', async (req, res) => {
 
     console.log('\n✅ UPDATE COMPLETED SUCCESSFULLY\n');
     res.json({ success: true, message: 'Product updated successfully', id: productId });
+      purchase_price: data.purchase_price || 0 // ADD TO RESPONSE
 
   } catch (err) {
     console.error('❌ Error updating product:', err);
