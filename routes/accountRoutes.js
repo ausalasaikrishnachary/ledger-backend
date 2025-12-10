@@ -256,4 +256,52 @@ router.get("/get-sales-retailers/:id", (req, res) => {
 });
 
 
+// --------------------- GET STAFF DETAILS BY STAFFID ---------------------
+// --------------------- GET STAFF DETAILS BY ID ---------------------
+router.get("/accounts/get-staff/:id", (req, res) => {
+  const { id } = req.params;
+
+  if (!id || id === "null" || id === "undefined") {
+    return res.status(400).json({
+      success: false,
+      error: "Staff ID is required"
+    });
+  }
+
+  const query = `
+    SELECT id, name, email, mobile_number
+    FROM accounts 
+    WHERE id = ?
+  `;
+
+  db.query(query, [id], (err, results) => {
+    if (err) {
+      console.error("DB Error:", err);
+      return res.status(500).json({
+        success: false,
+        error: "Database error"
+      });
+    }
+
+    if (results.length === 0) {
+      return res.status(404).json({
+        success: false,
+        error: "User not found"
+      });
+    }
+
+    const user = results[0];
+    return res.json({
+      success: true,
+      staff: {
+        id: user.id,
+        name: user.name,
+        email: user.email,
+        phone_number: user.mobile_number,
+        // mobile: user.mobile_number // Alias for frontend
+      }
+    });
+  });
+});
+
 module.exports = router;
