@@ -111,8 +111,8 @@ router.post('/create-complete-order', (req, res) => {
           INSERT INTO orders (
             order_number, customer_id, customer_name, order_total, discount_amount,
             taxable_amount, tax_amount, net_payable, credit_period,
-            estimated_delivery_date, order_placed_by, ordered_by, staff_id , assigned_staff, order_mode,approval_status, created_at
-          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,?,?,?,?, NOW())
+            estimated_delivery_date, order_placed_by, ordered_by, staff_id , assigned_staff, staff_incentive , order_mode,approval_status, created_at
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,?,?,?,?,?, NOW())
         `;
 
         const orderValues = [
@@ -130,6 +130,7 @@ router.post('/create-complete-order', (req, res) => {
           order.ordered_by,
           order.staffid,
           order.assigned_staff,
+          order.staff_incentive,
           order.order_mode,
           order.approval_status,
         ];
