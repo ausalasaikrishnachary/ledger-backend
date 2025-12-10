@@ -25,10 +25,7 @@ Error: Unknown error
 Error: GSTIN details not found
 Error: GSTIN details not found
 Error: Unknown error
-<<<<<<< HEAD
-=======
 Error: Unknown error
->>>>>>> 0654bb6b07cc37fd903405e4ee25951d32e66e3e
 Error: Unknown error
 Error: Unknown error
 Error: Unknown error
