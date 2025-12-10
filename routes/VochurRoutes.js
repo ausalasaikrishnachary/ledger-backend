@@ -196,6 +196,70 @@ try {
   });
 });
 
+router.get("/transactions/download-pdf", (req, res) => {
+  const { order_number } = req.query;
+
+  if (!order_number) {
+    return res.status(400).json({
+      success: false,
+      message: 'Order number is required'
+    });
+  }
+
+  console.log('Downloading PDF(s) for order:', order_number);
+
+  const query = `
+    SELECT pdf_data, pdf_file_name 
+    FROM voucher 
+    WHERE order_number = ? AND pdf_data IS NOT NULL
+    ORDER BY created_at ASC
+  `;
+
+  db.query(query, [order_number], (err, results) => {
+    if (err) {
+      console.error('Error fetching PDFs:', err);
+      return res.status(500).json({
+        success: false,
+        message: 'Failed to fetch PDFs'
+      });
+    }
+
+    if (results.length === 0) {
+      return res.status(404).json({
+        success: false,
+        message: 'PDFs not found for this order'
+      });
+    }
+
+    // Return all PDFs as an array in response
+    const pdfs = results.map((pdfInfo, index) => {
+      let base64Data = pdfInfo.pdf_data;
+      
+      if (Buffer.isBuffer(base64Data)) {
+        base64Data = base64Data.toString();
+      }
+
+      if (typeof base64Data === "string") {
+        if (base64Data.startsWith("data:application/pdf;base64,")) {
+          base64Data = base64Data.replace("data:application/pdf;base64,", "");
+        }
+      }
+
+      return {
+        fileName: pdfInfo.pdf_file_name || `invoice_${index + 1}.pdf`,
+        data: base64Data
+      };
+    });
+
+    res.json({
+      success: true,
+      count: pdfs.length,
+      orderNumber: order_number,
+      pdfs: pdfs
+    });
+  });
+});
+
 function queryPromise(connection, sql, params = []) {
   return new Promise((resolve, reject) => {
     connection.query(sql, params, (err, results) => {
