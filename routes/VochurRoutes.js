@@ -2576,11 +2576,81 @@ const processTransaction = async (transactionData, transactionType, connection) 
     ]);
   }
 
-  // STEP 9: SMART STOCK UPDATES
-  for (const i of items) {
-    if (transactionType === "Sales" || transactionType === "DebitNote" || transactionType === "stock transfer") {
+for (const i of items) {
+  if (transactionType === "Sales" || transactionType === "DebitNote" || transactionType === "stock transfer") {
+    
+    let remainingQuantity = i.quantity;
+    
+    // Get the batch identifier from item (could be batch, batch_number, or batchNumber)
+    const specificBatch = i.batch || i.batch_number || i.batchNumber;
+    const shouldUseSpecificBatch = specificBatch && specificBatch !== "DEFAULT";
+    const isFromOrder = orderNumber;
+    
+    console.log(`🔄 Stock Deduction - Order: ${isFromOrder ? 'Yes' : 'No'}, Batch: ${specificBatch || 'None'}, Qty: ${remainingQuantity}`);
+    
+    if (shouldUseSpecificBatch) {
+      // Case 1: Specific batch provided in the transaction
+      console.log(`🔍 Deducting from specific batch: ${specificBatch} for product ${i.product_id}`);
       
-      let remainingQuantity = i.quantity;
+      try {
+        // First check if the batch exists and has enough stock
+        const batchCheck = await queryPromise(
+          connection,
+          `
+          SELECT batch_number, quantity 
+          FROM batches 
+          WHERE product_id = ? 
+            AND batch_number = ? 
+            AND quantity >= ?
+          `,
+          [i.product_id, specificBatch, remainingQuantity]
+        );
+        
+        if (batchCheck.length === 0) {
+          // Check if batch exists but doesn't have enough stock
+          const batchExists = await queryPromise(
+            connection,
+            `
+            SELECT batch_number, quantity 
+            FROM batches 
+            WHERE product_id = ? 
+              AND batch_number = ?
+            `,
+            [i.product_id, specificBatch]
+          );
+          
+          if (batchExists.length === 0) {
+            throw new Error(`Batch ${specificBatch} not found for product ID ${i.product_id}`);
+          } else {
+            throw new Error(`Insufficient stock in batch ${specificBatch} for product ID ${i.product_id}. Available: ${batchExists[0].quantity}, Required: ${remainingQuantity}`);
+          }
+        }
+        
+        // Deduct from the specific batch
+        await queryPromise(
+          connection,
+          `
+          UPDATE batches 
+            SET quantity = quantity - ?, 
+                stock_out = stock_out + ?, 
+                updated_at = NOW()
+          WHERE product_id = ? 
+            AND batch_number = ?
+          `,
+          [remainingQuantity, remainingQuantity, i.product_id, specificBatch]
+        );
+        
+        console.log(`✅ Successfully deducted ${remainingQuantity} from batch ${specificBatch}`);
+        remainingQuantity = 0;
+        
+      } catch (error) {
+        console.error(`❌ Error with specific batch ${specificBatch}:`, error.message);
+        throw error;
+      }
+      
+    } else if (isFromOrder) {
+      // Case 2: Coming from an order - use FIFO with mfg_date
+      console.log(`📦 Order-based sale - Using FIFO with MFG date for product ${i.product_id}`);
       
       const batches = await queryPromise(
         connection,
@@ -2595,7 +2665,6 @@ const processTransaction = async (transactionData, transactionType, connection) 
       );
       
       console.log(`📊 Found ${batches.length} batches for product ${i.product_id}`);
-      console.log(`📦 Need to deduct ${remainingQuantity} units`);
       
       if (batches.length === 0) {
         throw new Error(`No stock available for product ID ${i.product_id}`);
@@ -2630,11 +2699,83 @@ const processTransaction = async (transactionData, transactionType, connection) 
         }
       }
       
-      if (remainingQuantity > 0) {
-        throw new Error(`Insufficient stock for product ID ${i.product_id}. Shortage: ${remainingQuantity} units`);
+    } else {
+      // Case 3: Regular sale (not from order) - use any available batch without mfg_date constraint
+      console.log(`🛍️ Regular sale - Using any available stock for product ${i.product_id}`);
+      
+      // First try to get batches with quantity
+      const batches = await queryPromise(
+        connection,
+        `
+        SELECT batch_number, quantity
+        FROM batches 
+        WHERE product_id = ? 
+          AND quantity > 0 
+        ORDER BY created_at ASC
+        `,
+        [i.product_id]
+      );
+      
+      console.log(`📊 Found ${batches.length} batches for product ${i.product_id}`);
+      
+      if (batches.length === 0) {
+        throw new Error(`No stock available for product ID ${i.product_id}`);
       }
       
-    } else if (transactionType === "Purchase" || transactionType === "CreditNote") {
+      // Try to deduct from available batches
+      for (const batch of batches) {
+        if (remainingQuantity <= 0) break;
+        
+        const batchQtyAvailable = batch.quantity;
+        const batchNumber = batch.batch_number;
+        
+        const deductQty = Math.min(remainingQuantity, batchQtyAvailable);
+        
+        if (deductQty > 0) {
+          console.log(`➖ Deducting ${deductQty} from batch ${batchNumber}`);
+          
+          await queryPromise(
+            connection,
+            `
+            UPDATE batches 
+              SET quantity = quantity - ?, 
+                  stock_out = stock_out + ?, 
+                  updated_at = NOW()
+            WHERE product_id = ? 
+              AND batch_number = ? 
+              AND quantity >= ?
+            `,
+            [deductQty, deductQty, i.product_id, batchNumber, deductQty]
+          );
+          
+          remainingQuantity -= deductQty;
+        }
+      }
+    }
+    
+    // Final check if all quantity was deducted
+    if (remainingQuantity > 0) {
+      throw new Error(`Insufficient stock for product ID ${i.product_id}. Required: ${i.quantity}, Fulfilled: ${i.quantity - remainingQuantity}, Shortage: ${remainingQuantity} units`);
+    }
+    
+  } else if (transactionType === "Purchase" || transactionType === "CreditNote") {
+    // ADD STOCK LOGIC
+    console.log(`➕ Adding ${i.quantity} to product ${i.product_id}, batch: ${i.batch || i.batch_number}`);
+    
+    const batchToUse = i.batch || i.batch_number || i.batchNumber || "DEFAULT";
+    
+    // First check if batch exists
+    const batchCheck = await queryPromise(
+      connection,
+      `
+      SELECT batch_number FROM batches 
+      WHERE product_id = ? AND batch_number = ?
+      `,
+      [i.product_id, batchToUse]
+    );
+    
+    if (batchCheck.length > 0) {
+      // Update existing batch
       await queryPromise(
         connection,
         `
@@ -2644,10 +2785,23 @@ const processTransaction = async (transactionData, transactionType, connection) 
               updated_at = NOW()
         WHERE product_id = ? AND batch_number = ?
         `,
-        [i.quantity, i.quantity, i.product_id, i.batch]
+        [i.quantity, i.quantity, i.product_id, batchToUse]
       );
+      console.log(`📝 Updated existing batch ${batchToUse}`);
+    } else {
+      // Insert new batch
+      await queryPromise(
+        connection,
+        `
+        INSERT INTO batches (product_id, batch_number, quantity, stock_in, mfg_date, created_at, updated_at)
+        VALUES (?, ?, ?, ?, ?, NOW(), NOW())
+        `,
+        [i.product_id, batchToUse, i.quantity, i.quantity, i.mfg_date]
+      );
+      console.log(`📝 Created new batch ${batchToUse}`);
     }
   }
+}
 
   return {
     voucherId: nextVoucherId,
