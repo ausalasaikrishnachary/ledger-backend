@@ -38,7 +38,6 @@ const RetailerOrderRoutes = require("./routes/Retailer/OrderRoutes");
 // Add this line with your other route imports
 const creditPeriodFixRoutes = require('./routes/CreditPeriod/CreditPeriodRoutes');
 const inventory = require('./routes/Retailer/InventoryRoutes');
-const ResetPasswordRoutes = require('./routes/Retailer/ResetPassword');
 
 
 
@@ -82,7 +81,6 @@ app.use('/api', categoriesRoutes);
 app.use("/api/reports", retailerReportRoutes);
 app.use("/api/reports", expenseReportRoutes);
 app.use("/api/reports", salesReportRoutes);
-app.use("/api/retailer", ResetPasswordRoutes);
 
 // Add this line with your other route uses
 app.use('/api/credit-period-fix', creditPeriodFixRoutes);
