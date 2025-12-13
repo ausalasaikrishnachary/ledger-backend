@@ -92,7 +92,6 @@ router.post("/transactions/:id/pdf", async (req, res) => {
 
 
 
-// Get PDF data for invoice
 router.get("/transactions/:id/pdf", (req, res) => {
   const voucherId = req.params.id;
 
@@ -129,7 +128,6 @@ router.get("/transactions/:id/pdf", (req, res) => {
   });
 });
 
-// Download PDF endpoint
 router.get("/transactions/:id/download-pdf", (req, res) => {
   const voucherId = req.params.id;
 
@@ -198,7 +196,70 @@ try {
   });
 });
 
-// Helper function to wrap connection.query in a promise
+router.get("/transactions/download-pdf", (req, res) => {
+  const { order_number } = req.query;
+
+  if (!order_number) {
+    return res.status(400).json({
+      success: false,
+      message: 'Order number is required'
+    });
+  }
+
+  console.log('Downloading PDF(s) for order:', order_number);
+
+  const query = `
+    SELECT pdf_data, pdf_file_name 
+    FROM voucher 
+    WHERE order_number = ? AND pdf_data IS NOT NULL
+    ORDER BY created_at ASC
+  `;
+
+  db.query(query, [order_number], (err, results) => {
+    if (err) {
+      console.error('Error fetching PDFs:', err);
+      return res.status(500).json({
+        success: false,
+        message: 'Failed to fetch PDFs'
+      });
+    }
+
+    if (results.length === 0) {
+      return res.status(404).json({
+        success: false,
+        message: 'PDFs not found for this order'
+      });
+    }
+
+    // Return all PDFs as an array in response
+    const pdfs = results.map((pdfInfo, index) => {
+      let base64Data = pdfInfo.pdf_data;
+      
+      if (Buffer.isBuffer(base64Data)) {
+        base64Data = base64Data.toString();
+      }
+
+      if (typeof base64Data === "string") {
+        if (base64Data.startsWith("data:application/pdf;base64,")) {
+          base64Data = base64Data.replace("data:application/pdf;base64,", "");
+        }
+      }
+
+      return {
+        fileName: pdfInfo.pdf_file_name || `invoice_${index + 1}.pdf`,
+        data: base64Data
+      };
+    });
+
+    res.json({
+      success: true,
+      count: pdfs.length,
+      orderNumber: order_number,
+      pdfs: pdfs
+    });
+  });
+});
+
 function queryPromise(connection, sql, params = []) {
   return new Promise((resolve, reject) => {
     connection.query(sql, params, (err, results) => {
@@ -1992,8 +2053,7 @@ function recalculateRunningBalances(transactions) {
 
 router.post("/transaction", (req, res) => {
   const transactionData = req.body;
-  console.log("📦 COMPLETE REQUEST BODY:", JSON.stringify(transactionData, null, 2));
-  console.log("Received transaction:", transactionData);
+  
 
   const transactionType =
     transactionData.TransactionType ||
@@ -2055,6 +2115,7 @@ router.post("/transaction", (req, res) => {
             invoiceNumber,
             vchNo,
             items: batchDetails,
+
           });
         });
       } catch (error) {
@@ -2081,7 +2142,20 @@ const processTransaction = async (transactionData, transactionType, connection) 
   );
   const nextVoucherId = maxIdResult[0].nextId;
 
-  // STEP 2: EXTRACT ITEMS
+  // STEP 2: Get order_mode from transactionData
+  const orderMode = (transactionData.order_mode || transactionData.orderMode || "Pakka").toUpperCase();
+  const isKacha = orderMode === "KACHA";
+  
+  console.log(`📊 Order Mode from request: ${orderMode}, Is Kacha: ${isKacha}`);
+
+  // STEP 3: GET STAFF INCENTIVE FROM TRANSACTION DATA
+  const staffIncentive = parseFloat(transactionData.staff_incentive) || 
+                        parseFloat(transactionData.originalOrder?.staff_incentive) || 
+                        0;
+  
+  console.log(`💰 Staff Incentive from request: ${staffIncentive}`);
+
+  // STEP 4: EXTRACT ITEMS
   let items = [];
 
   if (Array.isArray(transactionData.items)) items = transactionData.items;
@@ -2089,22 +2163,46 @@ const processTransaction = async (transactionData, transactionType, connection) 
   else if (Array.isArray(transactionData.batchDetails)) items = transactionData.batchDetails;
   else items = [];
 
-  // Normalize items - SIMPLIFIED, NO originalItemId
-  items = items.map((i) => ({
-    product: i.product || "",
-    product_id: parseInt(i.product_id || i.productId) || null,
-    batch: i.batch || i.batch_number || "DEFAULT",
-    quantity: parseFloat(i.quantity) || 0,
-    price: parseFloat(i.price) || 0,
-    discount: parseFloat(i.discount) || 0,
-    gst: parseFloat(i.gst) || 0,
-    cgst: parseFloat(i.cgst) || 0,
-    sgst: parseFloat(i.sgst) || 0,
-    igst: parseFloat(i.igst) || 0,
-    cess: parseFloat(i.cess) || 0,
-    total: parseFloat(i.total) || (parseFloat(i.quantity) * parseFloat(i.price)),
-    mfg_date: i.mfg_date || null
-  }));
+  items = items.map((i) => {
+    const itemStaffIncentive = parseFloat(i.staff_incentive) || 0;
+    
+    if (isKacha) {
+      console.log(`🔄 Converting item ${i.product} to KACHA mode - removing GST`);
+      return {
+        product: i.product || "",
+        product_id: parseInt(i.product_id || i.productId) || null,
+        batch: i.batch || i.batch_number || "DEFAULT",
+        quantity: parseFloat(i.quantity) || 0,
+        price: parseFloat(i.price) || 0,
+        discount: parseFloat(i.discount) || 0,
+        gst: 0,
+        cgst: 0,
+        sgst: 0,
+        igst: 0,
+        cess: 0,
+        total: parseFloat(i.total) || (parseFloat(i.quantity) * parseFloat(i.price)),
+        mfg_date: i.mfg_date || null,
+        staff_incentive: itemStaffIncentive
+      };
+    } else {
+      return {
+        product: i.product || "",
+        product_id: parseInt(i.product_id || i.productId) || null,
+        batch: i.batch || i.batch_number || "DEFAULT",
+        quantity: parseFloat(i.quantity) || 0,
+        price: parseFloat(i.price) || 0,
+        discount: parseFloat(i.discount) || 0,
+        gst: parseFloat(i.gst) || 0,
+        cgst: parseFloat(i.cgst) || 0,
+        sgst: parseFloat(i.sgst) || 0,
+        igst: parseFloat(i.igst) || 0,
+        cess: parseFloat(i.cess) || 0,
+        total: parseFloat(i.total) || (parseFloat(i.quantity) * parseFloat(i.price)),
+        mfg_date: i.mfg_date || null,
+        staff_incentive: itemStaffIncentive
+      };
+    }
+  });
 
   // Check if this is from an order (has order_number)
   const orderNumber = transactionData.orderNumber || transactionData.order_number || null;
@@ -2116,159 +2214,145 @@ const processTransaction = async (transactionData, transactionType, connection) 
   
   console.log("📋 Has item selection:", hasItemSelection ? `Yes (${selectedItemIds.length} items)` : "No");
 
- if (orderNumber) {
-  console.log("✅ This is an order conversion. Updating order items and order status...");
-  
-  const invoiceNumber = transactionData.InvoiceNumber || transactionData.invoiceNumber || `INV${Date.now()}`;
-  const invoiceDate = transactionData.Date || new Date().toISOString().split('T')[0];
-  
-  try {
-    // Step 1: Update order_items table
-    if (hasItemSelection && selectedItemIds.length > 0) {
-      // **UPDATE ONLY SELECTED ITEMS**
-      console.log(`🔄 Updating ${selectedItemIds.length} selected items in order ${orderNumber}`);
+  if (orderNumber) {
+    console.log("✅ This is an order conversion. Updating order items and order status...");
+    
+    const invoiceNumber = transactionData.InvoiceNumber || transactionData.invoiceNumber || `INV${Date.now()}`;
+    const invoiceDate = transactionData.Date || new Date().toISOString().split('T')[0];
+    
+    try {
+      // Step 1: Update order_items table
+      if (hasItemSelection && selectedItemIds.length > 0) {
+        const placeholders = selectedItemIds.map(() => '?').join(',');
+        const updateParams = [invoiceNumber, invoiceDate, orderNumber, ...selectedItemIds];
+        
+        await queryPromise(
+          connection,
+          `
+          UPDATE order_items SET 
+            invoice_number = ?, 
+            invoice_date = ?, 
+            invoice_status = 1, 
+            updated_at = NOW()
+          WHERE order_number = ? 
+            AND id IN (${placeholders})
+          `,
+          updateParams
+        );
+        
+        console.log(`✅ Updated ${selectedItemIds.length} selected items in order ${orderNumber} with invoice ${invoiceNumber}`);
+        
+      } else {
+        await queryPromise(
+          connection,
+          `
+          UPDATE order_items SET 
+            invoice_number = ?, 
+            invoice_date = ?, 
+            invoice_status = 1, 
+            updated_at = NOW()
+          WHERE order_number = ?
+          `,
+          [invoiceNumber, invoiceDate, orderNumber]
+        );
+        
+        const countResult = await queryPromise(
+          connection,
+          "SELECT COUNT(*) as count FROM order_items WHERE order_number = ?",
+          [orderNumber]
+        );
+        
+        console.log(`✅ Updated ALL ${countResult[0].count} items in order ${orderNumber} with invoice ${invoiceNumber}`);
+      }
       
-      const placeholders = selectedItemIds.map(() => '?').join(',');
-      const updateParams = [invoiceNumber, invoiceDate, orderNumber, ...selectedItemIds];
+      // Step 2: Update orders table
+      console.log(`🔄 Updating order status in orders table for: ${orderNumber}`);
       
       await queryPromise(
         connection,
         `
-        UPDATE order_items SET 
-          invoice_number = ?, 
-          invoice_date = ?, 
-          invoice_status = 1, 
-          updated_at = NOW()
-        WHERE order_number = ? 
-          AND id IN (${placeholders})
-        `,
-        updateParams
-      );
-      
-      console.log(`✅ Updated ${selectedItemIds.length} selected items in order ${orderNumber} with invoice ${invoiceNumber}`);
-      
-    } else {
-      // **UPDATE ALL ITEMS**
-      console.log("📦 No item selection specified, updating ALL items in the order");
-      
-      await queryPromise(
-        connection,
-        `
-        UPDATE order_items SET 
-          invoice_number = ?, 
-          invoice_date = ?, 
-          invoice_status = 1, 
+        UPDATE orders SET 
+          order_status = 'Invoice',
+          invoice_number = ?,
+          invoice_date = ?,
+          invoice_status = 1,
           updated_at = NOW()
         WHERE order_number = ?
         `,
         [invoiceNumber, invoiceDate, orderNumber]
       );
       
-      // Get count of updated items
-      const countResult = await queryPromise(
-        connection,
-        "SELECT COUNT(*) as count FROM order_items WHERE order_number = ?",
-        [orderNumber]
-      );
+      console.log(`✅ Order ${orderNumber} status updated to 'Invoiced' in orders table with invoice ${invoiceNumber}`);
       
-      console.log(`✅ Updated ALL ${countResult[0].count} items in order ${orderNumber} with invoice ${invoiceNumber}`);
-    }
-    
-    // Step 2: CRITICAL FIX - Update orders table too!
-    console.log(`🔄 Updating order status in orders table for: ${orderNumber}`);
-    
-    await queryPromise(
-      connection,
-      `
-      UPDATE orders SET 
-        order_status = 'Invoice',
-        invoice_number = ?,
-        invoice_date = ?,
-        invoice_status = 1,
-        updated_at = NOW()
-      WHERE order_number = ?
-      `,
-      [invoiceNumber, invoiceDate, orderNumber]
-    );
-    
-    console.log(`✅ Order ${orderNumber} status updated to 'Invoiced' in orders table with invoice ${invoiceNumber}`);
-    
-  } catch (error) {
-    // Handle column errors
-    if (error.code === 'ER_BAD_FIELD_ERROR') {
-      if (error.message.includes('updated_at')) {
-        console.log("ℹ️ 'updated_at' column not found, updating without it...");
-        
-        if (hasItemSelection && selectedItemIds.length > 0) {
-          const placeholders = selectedItemIds.map(() => '?').join(',');
-          const updateParams = [invoiceNumber, invoiceDate, orderNumber, ...selectedItemIds];
+    } catch (error) {
+      if (error.code === 'ER_BAD_FIELD_ERROR') {
+        if (error.message.includes('updated_at')) {
+          console.log("ℹ️ 'updated_at' column not found, updating without it...");
+          
+          if (hasItemSelection && selectedItemIds.length > 0) {
+            const placeholders = selectedItemIds.map(() => '?').join(',');
+            const updateParams = [invoiceNumber, invoiceDate, orderNumber, ...selectedItemIds];
+            
+            await queryPromise(
+              connection,
+              `
+              UPDATE order_items SET 
+                invoice_number = ?, 
+                invoice_date = ?, 
+                invoice_status = 1
+              WHERE order_number = ? 
+                AND id IN (${placeholders})
+              `,
+              updateParams
+            );
+          } else {
+            await queryPromise(
+              connection,
+              `
+              UPDATE order_items SET 
+                invoice_number = ?, 
+                invoice_date = ?, 
+                invoice_status = 1
+              WHERE order_number = ?
+              `,
+              [invoiceNumber, invoiceDate, orderNumber]
+            );
+          }
           
           await queryPromise(
             connection,
             `
-            UPDATE order_items SET 
-              invoice_number = ?, 
-              invoice_date = ?, 
-              invoice_status = 1
-            WHERE order_number = ? 
-              AND id IN (${placeholders})
-            `,
-            updateParams
-          );
-        } else {
-          await queryPromise(
-            connection,
-            `
-            UPDATE order_items SET 
-              invoice_number = ?, 
-              invoice_date = ?, 
+            UPDATE orders SET 
+              order_status = 'Invoice',
+              invoice_number = ?,
+              invoice_date = ?,
               invoice_status = 1
             WHERE order_number = ?
             `,
             [invoiceNumber, invoiceDate, orderNumber]
           );
+          
+        } else if (error.message.includes('invoice_status')) {
+          console.log("ℹ️ 'invoice_status' column not found in orders table, updating without it...");
+          
+          await queryPromise(
+            connection,
+            `
+            UPDATE orders SET 
+              order_status = 'Invoice',
+              invoice_number = ?,
+              invoice_date = ?
+            WHERE order_number = ?
+            `,
+            [invoiceNumber, invoiceDate, orderNumber]
+          );
         }
-        
-        // Also update orders table without updated_at
-        await queryPromise(
-          connection,
-          `
-          UPDATE orders SET 
-            order_status = 'Invoice',
-            invoice_number = ?,
-            invoice_date = ?,
-            invoice_status = 1
-          WHERE order_number = ?
-          `,
-          [invoiceNumber, invoiceDate, orderNumber]
-        );
-        
-        console.log(`✅ Order ${orderNumber} status updated to 'Invoiced' (without updated_at)`);
-        
-      } else if (error.message.includes('invoice_status')) {
-        // If invoice_status column doesn't exist in orders table
-        console.log("ℹ️ 'invoice_status' column not found in orders table, updating without it...");
-        
-        await queryPromise(
-          connection,
-          `
-          UPDATE orders SET 
-            order_status = 'Invoiced',
-            invoice_number = ?,
-            invoice_date = ?
-          WHERE order_number = ?
-          `,
-          [invoiceNumber, invoiceDate, orderNumber]
-        );
-        
-        console.log(`✅ Order ${orderNumber} status updated to 'Invoiced' (without invoice_status)`);
+      } else {
+        console.error(`❌ Error updating order ${orderNumber}:`, error.message);
+        throw error;
       }
-    } else {
-      console.error(`❌ Error updating order ${orderNumber}:`, error.message);
-      throw error;
     }
   }
-}
 
   let voucherBatchNumber = null;
   
@@ -2315,17 +2399,41 @@ const processTransaction = async (transactionData, transactionType, connection) 
   }
 
   // STEP 5: TOTALS
-  const taxableAmount =
-    parseFloat(transactionData.BasicAmount) ||
-    items.reduce((sum, i) => sum + i.quantity * i.price, 0);
+  let taxableAmount, totalGST, grandTotal;
+  
+  if (isKacha) {
+    console.log("🔴 KACHA Order Mode Detected - Calculating totals without GST");
+    
+    taxableAmount = parseFloat(transactionData.BasicAmount) ||
+                   parseFloat(transactionData.taxableAmount) ||
+                   parseFloat(transactionData.Subtotal) ||
+                   items.reduce((sum, i) => sum + i.total, 0);
+    
+    totalGST = 0;
+    grandTotal = taxableAmount;
+    
+  } else {
+    taxableAmount = parseFloat(transactionData.BasicAmount) ||
+                    parseFloat(transactionData.taxableAmount) ||
+                    parseFloat(transactionData.Subtotal) ||
+                    items.reduce((sum, i) => sum + (i.quantity * i.price), 0);
+    
+    totalGST = parseFloat(transactionData.TaxAmount) ||
+               parseFloat(transactionData.totalGST) ||
+               items.reduce((sum, i) => {
+                 const itemTotal = i.quantity * i.price;
+                 const discountAmount = itemTotal * (i.discount / 100);
+                 const amountAfterDiscount = itemTotal - discountAmount;
+                 return sum + (amountAfterDiscount * (i.gst / 100));
+               }, 0);
+    
+    grandTotal = parseFloat(transactionData.TotalAmount) ||
+                 parseFloat(transactionData.grandTotal) ||
+                 taxableAmount + totalGST;
+  }
 
-  const totalGST =
-    parseFloat(transactionData.TaxAmount) ||
-    items.reduce((sum, i) => sum + (i.quantity * i.price * (i.gst / 100)), 0);
-
-  const grandTotal =
-    parseFloat(transactionData.TotalAmount) ||
-    taxableAmount + totalGST;
+  console.log(`💰 Totals - Taxable: ${taxableAmount}, GST: ${totalGST}, Grand Total: ${grandTotal}`);
+  console.log(`💰 Staff Incentive: ${staffIncentive}`);
 
   // STEP 6: ACCOUNT / PARTY
   const supplier = transactionData.supplierInfo || {};
@@ -2357,13 +2465,14 @@ const processTransaction = async (transactionData, transactionType, connection) 
     transactionData.AccountName ||
     "";
 
-  // **SIMPLIFIED Voucher Data - NO selected_item_ids**
+  // STEP 7: VOUCHER DATA WITH STAFF INCENTIVE
   const voucherData = {
     VoucherID: nextVoucherId,
     TransactionType: transactionType,
     VchNo: vchNo,
     InvoiceNumber: invoiceNumber,
     order_number: orderNumber, 
+    order_mode: orderMode,
     Date: transactionData.Date || new Date().toISOString().split("T")[0],
 
     PaymentTerms: transactionData.PaymentTerms || "Immediate",
@@ -2385,15 +2494,22 @@ const processTransaction = async (transactionData, transactionType, connection) 
     ValueOfGoods: taxableAmount,
     EntryDate: new Date(),
 
-    SGSTPercentage: parseFloat(transactionData.SGSTPercentage) || 0,
-    CGSTPercentage: parseFloat(transactionData.CGSTPercentage) || 0,
-    IGSTPercentage: parseFloat(transactionData.IGSTPercentage) || (items[0]?.igst || 0),
+    SGSTPercentage: isKacha ? 0 : (parseFloat(transactionData.SGSTPercentage) || 0),
+    CGSTPercentage: isKacha ? 0 : (parseFloat(transactionData.CGSTPercentage) || 0),
+    IGSTPercentage: isKacha ? 0 : (parseFloat(transactionData.IGSTPercentage) || (items[0]?.igst || 0)),
 
-    SGSTAmount: parseFloat(transactionData.SGSTAmount) || 0,
-    CGSTAmount: parseFloat(transactionData.CGSTAmount) || 0,
-    IGSTAmount: parseFloat(transactionData.IGSTAmount) || 0,
-
-    TaxSystem: transactionData.TaxSystem || "GST",
+    SGSTAmount: isKacha ? 0 : (parseFloat(transactionData.SGSTAmount) || 0),
+    CGSTAmount: isKacha ? 0 : (parseFloat(transactionData.CGSTAmount) || 0),
+    IGSTAmount: isKacha ? 0 : (parseFloat(transactionData.IGSTAmount) || 0),
+    
+    description_preview: transactionData.description_preview || 
+                        (transactionData.description ? 
+                         transactionData.description.substring(0, 200) : ''),
+    
+    note_preview: transactionData.note_preview || 
+                 (transactionData.note ? transactionData.note.substring(0, 200) : ''),
+    
+    TaxSystem: isKacha ? "KACHA_NO_GST" : (transactionData.TaxSystem || "GST"),
 
     product_id: items[0]?.product_id || null,
     batch_id: voucherBatchNumber,
@@ -2403,8 +2519,9 @@ const processTransaction = async (transactionData, transactionType, connection) 
     ChequeDate: transactionData.ChequeDate || null,
     BankName: transactionData.BankName || "",
 
-    staffid: transactionData.selectedStaffId || transactionData.staffid || null,
-    assigned_staff: transactionData.assigned_staff || null, 
+    staffid: transactionData.staffid || null,
+    assigned_staff: transactionData.assigned_staff || null,
+    staff_incentive: staffIncentive, // Now properly defined
 
     created_at: new Date(),
     balance_amount: parseFloat(transactionData.balance_amount) || 0,
@@ -2414,10 +2531,9 @@ const processTransaction = async (transactionData, transactionType, connection) 
     pdf_data: transactionData.pdf_data || null,
     pdf_file_name: transactionData.pdf_file_name || null,
     pdf_created_at: transactionData.pdf_created_at || null
-    // **REMOVED: selected_item_ids, is_partial_invoice, source**
   };
 
-  console.log("📦 Voucher Data being inserted with order_number:", orderNumber);
+  console.log("🔍 DEBUG - Staff Incentive in voucher:", voucherData.staff_incentive);
 
   await queryPromise(
     connection,
@@ -2425,17 +2541,22 @@ const processTransaction = async (transactionData, transactionType, connection) 
     [voucherData]
   );
 
-  // STEP 8: INSERT ITEMS INTO voucherdetails - NO original_item_id
+  // STEP 8: INSERT ITEMS INTO voucherdetails - Fix the SQL query
   const insertDetailQuery = `
     INSERT INTO voucherdetails (
       voucher_id, product, product_id, transaction_type, InvoiceNumber,
       batch, quantity, price, discount,
-      gst, cgst, sgst, igst, cess, total, created_at
-      -- REMOVED: original_item_id
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW())
+      gst, cgst, sgst, igst, cess, total,  created_at
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,  ?, ?, ?, NOW())
   `;
 
   for (const i of items) {
+    const itemGST = isKacha ? 0 : i.gst;
+    const itemCGST = isKacha ? 0 : i.cgst;
+    const itemSGST = isKacha ? 0 : i.sgst;
+    const itemIGST = isKacha ? 0 : i.igst;
+    const itemCess = isKacha ? 0 : i.cess;
+    
     await queryPromise(connection, insertDetailQuery, [
       nextVoucherId,
       i.product,
@@ -2446,21 +2567,90 @@ const processTransaction = async (transactionData, transactionType, connection) 
       i.quantity,
       i.price,
       i.discount,
-      i.gst,
-      i.cgst,
-      i.sgst,
-      i.igst,
-      i.cess,
-      i.total
-      // REMOVED: i.originalItemId
+      itemGST,
+      itemCGST,
+      itemSGST,
+      itemIGST,
+      itemCess,
+      i.total,
     ]);
   }
 
-  // STEP 9: SMART STOCK UPDATES
-  for (const i of items) {
-    if (transactionType === "Sales" || transactionType === "DebitNote" || transactionType === "stock transfer") {
+for (const i of items) {
+  if (transactionType === "Sales" || transactionType === "DebitNote" || transactionType === "stock transfer") {
+    
+    let remainingQuantity = i.quantity;
+    
+    // Get the batch identifier from item (could be batch, batch_number, or batchNumber)
+    const specificBatch = i.batch || i.batch_number || i.batchNumber;
+    const shouldUseSpecificBatch = specificBatch && specificBatch !== "DEFAULT";
+    const isFromOrder = orderNumber;
+    
+    console.log(`🔄 Stock Deduction - Order: ${isFromOrder ? 'Yes' : 'No'}, Batch: ${specificBatch || 'None'}, Qty: ${remainingQuantity}`);
+    
+    if (shouldUseSpecificBatch) {
+      // Case 1: Specific batch provided in the transaction
+      console.log(`🔍 Deducting from specific batch: ${specificBatch} for product ${i.product_id}`);
       
-      let remainingQuantity = i.quantity;
+      try {
+        // First check if the batch exists and has enough stock
+        const batchCheck = await queryPromise(
+          connection,
+          `
+          SELECT batch_number, quantity 
+          FROM batches 
+          WHERE product_id = ? 
+            AND batch_number = ? 
+            AND quantity >= ?
+          `,
+          [i.product_id, specificBatch, remainingQuantity]
+        );
+        
+        if (batchCheck.length === 0) {
+          // Check if batch exists but doesn't have enough stock
+          const batchExists = await queryPromise(
+            connection,
+            `
+            SELECT batch_number, quantity 
+            FROM batches 
+            WHERE product_id = ? 
+              AND batch_number = ?
+            `,
+            [i.product_id, specificBatch]
+          );
+          
+          if (batchExists.length === 0) {
+            throw new Error(`Batch ${specificBatch} not found for product ID ${i.product_id}`);
+          } else {
+            throw new Error(`Insufficient stock in batch ${specificBatch} for product ID ${i.product_id}. Available: ${batchExists[0].quantity}, Required: ${remainingQuantity}`);
+          }
+        }
+        
+        // Deduct from the specific batch
+        await queryPromise(
+          connection,
+          `
+          UPDATE batches 
+            SET quantity = quantity - ?, 
+                stock_out = stock_out + ?, 
+                updated_at = NOW()
+          WHERE product_id = ? 
+            AND batch_number = ?
+          `,
+          [remainingQuantity, remainingQuantity, i.product_id, specificBatch]
+        );
+        
+        console.log(`✅ Successfully deducted ${remainingQuantity} from batch ${specificBatch}`);
+        remainingQuantity = 0;
+        
+      } catch (error) {
+        console.error(`❌ Error with specific batch ${specificBatch}:`, error.message);
+        throw error;
+      }
+      
+    } else if (isFromOrder) {
+      // Case 2: Coming from an order - use FIFO with mfg_date
+      console.log(`📦 Order-based sale - Using FIFO with MFG date for product ${i.product_id}`);
       
       const batches = await queryPromise(
         connection,
@@ -2475,13 +2665,11 @@ const processTransaction = async (transactionData, transactionType, connection) 
       );
       
       console.log(`📊 Found ${batches.length} batches for product ${i.product_id}`);
-      console.log(`📦 Need to deduct ${remainingQuantity} units`);
       
       if (batches.length === 0) {
         throw new Error(`No stock available for product ID ${i.product_id}`);
       }
       
-      // Process batches in FIFO order (oldest MFG date first)
       for (const batch of batches) {
         if (remainingQuantity <= 0) break;
         
@@ -2508,16 +2696,86 @@ const processTransaction = async (transactionData, transactionType, connection) 
           );
           
           remainingQuantity -= deductQty;
-          console.log(`📉 Remaining quantity to deduct: ${remainingQuantity}`);
         }
       }
       
-      if (remainingQuantity > 0) {
-        throw new Error(`Insufficient stock for product ID ${i.product_id}. Shortage: ${remainingQuantity} units`);
+    } else {
+      // Case 3: Regular sale (not from order) - use any available batch without mfg_date constraint
+      console.log(`🛍️ Regular sale - Using any available stock for product ${i.product_id}`);
+      
+      // First try to get batches with quantity
+      const batches = await queryPromise(
+        connection,
+        `
+        SELECT batch_number, quantity
+        FROM batches 
+        WHERE product_id = ? 
+          AND quantity > 0 
+        ORDER BY created_at ASC
+        `,
+        [i.product_id]
+      );
+      
+      console.log(`📊 Found ${batches.length} batches for product ${i.product_id}`);
+      
+      if (batches.length === 0) {
+        throw new Error(`No stock available for product ID ${i.product_id}`);
       }
       
-    } else if (transactionType === "Purchase" || transactionType === "CreditNote") {
-      // For purchase/credit note, add to specific batch
+      // Try to deduct from available batches
+      for (const batch of batches) {
+        if (remainingQuantity <= 0) break;
+        
+        const batchQtyAvailable = batch.quantity;
+        const batchNumber = batch.batch_number;
+        
+        const deductQty = Math.min(remainingQuantity, batchQtyAvailable);
+        
+        if (deductQty > 0) {
+          console.log(`➖ Deducting ${deductQty} from batch ${batchNumber}`);
+          
+          await queryPromise(
+            connection,
+            `
+            UPDATE batches 
+              SET quantity = quantity - ?, 
+                  stock_out = stock_out + ?, 
+                  updated_at = NOW()
+            WHERE product_id = ? 
+              AND batch_number = ? 
+              AND quantity >= ?
+            `,
+            [deductQty, deductQty, i.product_id, batchNumber, deductQty]
+          );
+          
+          remainingQuantity -= deductQty;
+        }
+      }
+    }
+    
+    // Final check if all quantity was deducted
+    if (remainingQuantity > 0) {
+      throw new Error(`Insufficient stock for product ID ${i.product_id}. Required: ${i.quantity}, Fulfilled: ${i.quantity - remainingQuantity}, Shortage: ${remainingQuantity} units`);
+    }
+    
+  } else if (transactionType === "Purchase" || transactionType === "CreditNote") {
+    // ADD STOCK LOGIC
+    console.log(`➕ Adding ${i.quantity} to product ${i.product_id}, batch: ${i.batch || i.batch_number}`);
+    
+    const batchToUse = i.batch || i.batch_number || i.batchNumber || "DEFAULT";
+    
+    // First check if batch exists
+    const batchCheck = await queryPromise(
+      connection,
+      `
+      SELECT batch_number FROM batches 
+      WHERE product_id = ? AND batch_number = ?
+      `,
+      [i.product_id, batchToUse]
+    );
+    
+    if (batchCheck.length > 0) {
+      // Update existing batch
       await queryPromise(
         connection,
         `
@@ -2527,18 +2785,36 @@ const processTransaction = async (transactionData, transactionType, connection) 
               updated_at = NOW()
         WHERE product_id = ? AND batch_number = ?
         `,
-        [i.quantity, i.quantity, i.product_id, i.batch]
+        [i.quantity, i.quantity, i.product_id, batchToUse]
       );
+      console.log(`📝 Updated existing batch ${batchToUse}`);
+    } else {
+      // Insert new batch
+      await queryPromise(
+        connection,
+        `
+        INSERT INTO batches (product_id, batch_number, quantity, stock_in, mfg_date, created_at, updated_at)
+        VALUES (?, ?, ?, ?, ?, NOW(), NOW())
+        `,
+        [i.product_id, batchToUse, i.quantity, i.quantity, i.mfg_date]
+      );
+      console.log(`📝 Created new batch ${batchToUse}`);
     }
   }
+}
 
   return {
     voucherId: nextVoucherId,
     invoiceNumber,
     vchNo,
     batchDetails: items,
+    taxableAmount,
+    totalGST,
     grandTotal,
+    staffIncentive: staffIncentive, // Return staff incentive
     orderNumber: orderNumber,
+    orderMode: orderMode,
+    isKacha: isKacha,
     updatedItemCount: hasItemSelection ? selectedItemIds.length : 'all',
     orderStatusUpdated: orderNumber ? true : false
   };
@@ -2595,6 +2871,66 @@ router.get("/voucherdetails", async (req, res) => {
       message: "Internal server error"
     });
   }
+});
+
+
+router.get('/order/:order_number', async (req, res) => {
+    try {
+        const orderNumber = req.params.order_number;
+
+        if (!orderNumber) {
+            return res.status(400).json({
+                success: false,
+                message: 'Order number is required'
+            });
+        }
+
+        const query = `
+            SELECT 
+                VoucherID, TransactionType, VchNo, product_id, batch_id, 
+                batch_number, InvoiceNumber, order_number, Date, PaymentTerms, 
+                Freight, TotalPacks, TaxAmount, Subtotal, BillSundryAmount, 
+                TotalAmount, ChequeNo, ChequeDate, BankName, AccountID, 
+                AccountName, PartyID, PartyName, BasicAmount, ValueOfGoods, 
+                EntryDate, SGSTPercentage, CGSTPercentage, IGSTPercentage, 
+                SGSTAmount, CGSTAmount, IGSTAmount, TaxSystem, paid_amount, 
+                created_at, balance_amount, status, paid_date, pdf_data, 
+                DC, staffid, assigned_staff, pdf_file_name, pdf_created_at, 
+                note_preview, description_preview, order_mode
+            FROM voucher
+            WHERE order_number = ?
+            ORDER BY created_at DESC
+        `;
+
+        const results = await new Promise((resolve, reject) => {
+            db.query(query, [orderNumber], (err, rows) => {
+                if (err) return reject(err);
+                resolve(rows);
+            });
+        });
+
+        if (!results || results.length === 0) {
+            return res.status(404).json({
+                success: false,
+                message: 'No vouchers found for the given order number'
+            });
+        }
+
+        res.status(200).json({
+            success: true,
+            count: results.length,
+            data: results
+        });
+
+    } catch (error) {
+        console.error('Error fetching vouchers:', error.message);
+
+        res.status(500).json({
+            success: false,
+            message: 'Server error while fetching vouchers',
+            error: error.message
+        });
+    }
 });
 
 

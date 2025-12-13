@@ -111,8 +111,8 @@ router.post('/create-complete-order', (req, res) => {
           INSERT INTO orders (
             order_number, customer_id, customer_name, order_total, discount_amount,
             taxable_amount, tax_amount, net_payable, credit_period,
-            estimated_delivery_date, order_placed_by, ordered_by, staff_id , assigned_staff, order_mode, created_at
-          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,?,?,?, NOW())
+            estimated_delivery_date, order_placed_by, ordered_by, staff_id , assigned_staff, staff_incentive , order_mode,approval_status, created_at
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,?,?,?,?,?, NOW())
         `;
 
         const orderValues = [
@@ -130,7 +130,9 @@ router.post('/create-complete-order', (req, res) => {
           order.ordered_by,
           order.staffid,
           order.assigned_staff,
+          order.staff_incentive,
           order.order_mode,
+          order.approval_status,
         ];
 
         console.log('🚀 Inserting order with values:', orderValues);
@@ -336,6 +338,55 @@ router.put("/cancel/:order_number", (req, res) => {
 });
 
 
+// Update approval_status for an order
+router.put('/update-approval-status/:order_number', async (req, res) => {
+  const { order_number } = req.params;
+  const { approval_status } = req.body;
+
+  console.log("📝 Updating approval_status:", order_number, approval_status);
+
+  if (!approval_status) {
+    return res.status(400).json({
+      error: "approval_status is required",
+    });
+  }
+
+  try {
+    const query = `
+      UPDATE orders 
+      SET approval_status = ?
+      WHERE order_number = ?
+    `;
+
+    const [result] = await db.promise().query(query, [
+      approval_status,
+      order_number,
+    ]);
+
+    if (result.affectedRows === 0) {
+      return res.status(404).json({
+        error: "Order not found",
+      });
+    }
+
+    console.log("✅ approval_status updated for:", order_number);
+
+    res.json({
+      success: true,
+      message: "Approval status updated successfully",
+      order_number,
+      approval_status,
+    });
+
+  } catch (err) {
+    console.error("❌ Error updating approval_status:", err);
+
+    res.status(500).json({
+      error: "Failed to update approval_status",
+      details: err.message,
+    });
+  }
+});
 
 
 

@@ -119,8 +119,8 @@ router.post('/receipts', upload.single('transaction_proof'), async (req, res) =>
       bank_name,
       invoice_number,
       product_id,
-      batch_id, // This should be the batch_id
-      batch,    // This should be the batch_number
+      batch_id,
+      batch,
       quantity,
       price,
       discount,
@@ -133,7 +133,6 @@ router.post('/receipts', upload.single('transaction_proof'), async (req, res) =>
       TransactionType
     } = req.body;
 
-    // 🔥 CONDITIONAL TRANSACTION TYPE
     let safeTransactionType =
       TransactionType === "purchase voucher"
         ? "purchase voucher"
@@ -143,20 +142,23 @@ router.post('/receipts', upload.single('transaction_proof'), async (req, res) =>
     const currentDate = new Date();
     const safeInvoiceNumber = invoice_number || null;
 
-    // FILE UPLOAD
+    // IMPORTANT: Get the uploaded file from req.file
     let transaction_proof_filename = null;
-    if (req.file) transaction_proof_filename = req.file.filename;
-
-    // Debug logging
-    console.log("🔍 Receipt Form Data:", {
-      batch_id: batch_id,
-      batch: batch,
-      product_id: product_id,
-      retailer_name: retailer_name
-    });
+    if (req.file) {
+      transaction_proof_filename = req.file.filename; // This should be the uploaded file name
+      console.log("📁 Uploaded transaction proof file:", transaction_proof_filename);
+      console.log("📁 File details:", {
+        originalname: req.file.originalname,
+        filename: req.file.filename,
+        path: req.file.path,
+        size: req.file.size
+      });
+    } else {
+      console.log("⚠️ No transaction proof file uploaded");
+    }
 
     // -------------------------------------------
-    // 1️⃣ Generate NEXT receipt number using VchNo
+    // 1️⃣ Generate NEXT receipt number
     // -------------------------------------------
     let queryCondition =
       safeTransactionType === "purchase voucher"
@@ -172,7 +174,6 @@ router.post('/receipts', upload.single('transaction_proof'), async (req, res) =>
     );
 
     let nextReceipt = "REC001";
-
     if (recRows.length > 0) {
       const match = recRows[0].VchNo?.match(/REC(\d+)/);
       if (match) {
@@ -185,7 +186,7 @@ router.post('/receipts', upload.single('transaction_proof'), async (req, res) =>
     console.log("Transaction Type:", safeTransactionType);
 
     // -------------------------------------------
-    // 2️⃣ INSERT RECEIPT INTO VOUCHER TABLE (with batch_id)
+    // 2️⃣ INSERT RECEIPT INTO VOUCHER TABLE
     // -------------------------------------------
     const [receiptInsert] = await connection.promise().execute(
       `INSERT INTO voucher (
@@ -195,53 +196,49 @@ router.post('/receipts', upload.single('transaction_proof'), async (req, res) =>
         PartyID, PartyName, BasicAmount, ValueOfGoods, EntryDate, SGSTPercentage, 
         CGSTPercentage, IGSTPercentage, SGSTAmount, CGSTAmount, IGSTAmount, 
         TaxSystem, paid_amount, created_at, balance_amount, status, paid_date, 
-        pdf_data, DC, pdf_file_name, pdf_created_at
+        pdf_data, DC, pdf_file_name, pdf_created_at, transaction_proof
       )
       VALUES (?, ?, ?, ?, ?, ?, 'Immediate', 0, 0, 0, ?, 0, ?, NULL, NULL, ?, ?, ?, ?, ?, ?, ?, ?, 0, 0, 0, 0, 0, 0,
-              'GST', ?, ?, 0, 'Paid', ?, ?, 'C', ?, ?)`,
+              'GST', ?, ?, 0, 'Paid', ?, ?, 'C', ?, ?, ?)`,
       [
         safeTransactionType,
         nextReceipt,
         product_id || null,
-        batch_id || null, // ✅ Store batch_id in voucher table
+        batch_id || null,
         safeInvoiceNumber,
         currentDate,
-
-        receiptAmount, // Subtotal
-        receiptAmount, // TotalAmount
+        receiptAmount,
+        receiptAmount,
         bank_name || null,
         retailer_id || null,
         retailer_name || "",
         retailer_id || null,
         retailer_name || "",
-        receiptAmount, // BasicAmount
-        receiptAmount, // ValueOfGoods
-
+        receiptAmount,
+        receiptAmount,
         currentDate,
-        receiptAmount, // paid_amount
-        currentDate,   // created_at
-        currentDate,   // paid_date
-        null,          // pdf_data
-        transaction_proof_filename,
-        currentDate    // pdf_created_at
+        receiptAmount,
+        currentDate,
+        currentDate,
+        null,
+        null, // pdf_file_name - changed from transaction_proof_filename
+        currentDate,
+        transaction_proof_filename // This is where transaction_proof goes
       ]
     );
 
     const receiptVoucherId = receiptInsert.insertId;
 
-    console.log("✅ Voucher Inserted - VoucherID:", receiptVoucherId, "batch_id:", batch_id);
-
     // ---------------------------------------------------
-    // 3️⃣ INSERT INTO VOUCHERDETAILS TABLE (with batch number)
+    // 3️⃣ INSERT INTO VOUCHERDETAILS TABLE
     // ---------------------------------------------------
-    // FIXED: Remove JavaScript comments from SQL query
     await connection.promise().execute(
       `INSERT INTO voucherdetails (
         voucher_id,
         product,
         product_id,
         InvoiceNumber,
-        batch,           -- This stores batch number (batch_number)
+        batch,
         quantity,
         price,
         discount,
@@ -258,7 +255,7 @@ router.post('/receipts', upload.single('transaction_proof'), async (req, res) =>
         retailer_name || "",
         product_id || null,
         safeInvoiceNumber,
-        batch || null,   // ✅ Store batch number here (not batch_id)
+        batch || null,
         quantity || 0,
         price || 0,
         discount || 0,
@@ -272,50 +269,93 @@ router.post('/receipts', upload.single('transaction_proof'), async (req, res) =>
       ]
     );
 
-    console.log("✅ VoucherDetails Inserted - batch:", batch);
-
     // ---------------------------------------------------
-    // 4️⃣ APPLY PAYMENT TO SALES VOUCHERS (ONLY RECEIPT)
+    // 4️⃣ STAFF INCENTIVE CALCULATION AND UPDATION
     // ---------------------------------------------------
-    if (retailer_id && safeTransactionType === "Receipt") {
-      const [sales] = await connection.promise().query(
-        `SELECT * FROM voucher 
-         WHERE PartyID = ? AND TransactionType = 'Sales' 
-         ORDER BY VoucherID ASC`,
-        [retailer_id]
+    if (safeTransactionType === "Receipt" && safeInvoiceNumber) {
+      console.log("🔍 Looking for matching Sales with InvoiceNumber:", safeInvoiceNumber);
+      
+      const [salesRows] = await connection.promise().query(
+        `SELECT staffid, staff_incentive 
+         FROM voucher 
+         WHERE TransactionType = 'Sales' 
+         AND InvoiceNumber = ? 
+         LIMIT 1`,
+        [safeInvoiceNumber]
       );
 
-      let remaining = receiptAmount;
+      if (salesRows.length > 0) {
+        const salesRow = salesRows[0];
+        const staffIdFromSales = salesRow.staffid;
+        
+        console.log("📊 Sales Row Found:", {
+          invoiceNumber: safeInvoiceNumber,
+          staff_id_from_sales: staffIdFromSales,
+          staff_incentive_percentage: salesRow.staff_incentive,
+          receipt_paid_amount: receiptAmount
+        });
 
-      for (const s of sales) {
-        if (remaining <= 0) break;
+        if (staffIdFromSales) {
+          let staffIncentivePercentage = 0;
+          
+          if (salesRow.staff_incentive !== null && salesRow.staff_incentive !== undefined) {
+            staffIncentivePercentage = parseFloat(salesRow.staff_incentive);
+          }
+          
+          console.log("ℹ️ Staff Incentive Percentage from Sales:", staffIncentivePercentage);
 
-        const total = parseFloat(s.TotalAmount || 0);
-        const paid = parseFloat(s.paid_amount || 0);
-        const balance = total - paid;
+          if (staffIncentivePercentage > 0) {
+            const calculatedIncentive = (receiptAmount * staffIncentivePercentage) / 100;
+            const roundedIncentive = parseFloat(calculatedIncentive.toFixed(2));
+            
+            console.log("💰 Incentive Calculation:", {
+              receiptAmount: receiptAmount,
+              staffIncentivePercentage: staffIncentivePercentage + "%",
+              calculatedIncentive: roundedIncentive
+            });
 
-        if (balance <= 0) continue;
+            const [accountExists] = await connection.promise().query(
+              `SELECT id, staff_incentive, name FROM accounts WHERE id = ?`,
+              [staffIdFromSales]
+            );
 
-        const apply = Math.min(remaining, balance);
+            console.log("🔍 Looking for staff in accounts table with ID:", staffIdFromSales);
+            console.log("🔍 Account found:", accountExists.length > 0 ? accountExists[0] : "No account found");
 
-        const newPaid = paid + apply;
-        const newBalance = total - newPaid;
-        const status = newBalance <= 0 ? "Paid" : "Partial";
-
-        await connection.promise().execute(
-          `UPDATE voucher 
-           SET paid_amount = ?, balance_amount = ?, status = ?, paid_date = ? 
-           WHERE VoucherID = ?`,
-          [newPaid, newBalance, status, currentDate, s.VoucherID]
-        );
-
-        remaining -= apply;
+            if (accountExists.length > 0) {
+              const currentIncentive = accountExists[0].staff_incentive !== null 
+                ? parseFloat(accountExists[0].staff_incentive) || 0 
+                : 0;
+              
+              const newTotalIncentive = currentIncentive + roundedIncentive;
+              const staffName = accountExists[0].name || "Unknown";
+              
+              await connection.promise().execute(
+                `UPDATE accounts SET staff_incentive = ? WHERE id = ?`,
+                [newTotalIncentive, staffIdFromSales]
+              );
+              
+              console.log("✅ Incentive added to staff account:", {
+                accounts_id: staffIdFromSales,
+                staff_name: staffName,
+                previous_incentive: currentIncentive,
+                added_incentive: roundedIncentive,
+                new_total_incentive: newTotalIncentive
+              });
+            } else {
+              console.log("❌ Staff not found in accounts table with ID:", staffIdFromSales);
+            }
+          } else {
+            console.log("ℹ️ No staff_incentive percentage found or it's 0 in sales row");
+          }
+        } else {
+          console.log("⚠️ No staffid found in sales row");
+        }
+      } else {
+        console.log("⚠️ No matching Sales found for InvoiceNumber:", safeInvoiceNumber);
       }
     }
 
-    // -------------------------------------------
-    // 5️⃣ COMMIT
-    // -------------------------------------------
     await connection.promise().commit();
 
     res.json({
@@ -323,10 +363,10 @@ router.post('/receipts', upload.single('transaction_proof'), async (req, res) =>
       message: `${safeTransactionType} created successfully`,
       receipt_no: nextReceipt,
       voucherId: receiptVoucherId,
-      transaction_proof: transaction_proof_filename,
+      transaction_proof: transaction_proof_filename, // Include this in response
       transactionType: safeTransactionType,
-      stored_batch_id: batch_id,    // For debugging
-      stored_batch_number: batch    // For debugging
+      stored_batch_id: batch_id,
+      stored_batch_number: batch
     });
 
   } catch (error) {
@@ -1387,7 +1427,6 @@ router.delete('/voucher/:id', async (req, res) => {
 // ------------------------------
 router.get('/receipts/:id/download-proof', async (req, res) => {
   try {
-    // First get the receipt to check if it has a transaction proof file
     db.execute(
       'SELECT transaction_proof_filename FROM receipts WHERE id = ?',
       [req.params.id],
@@ -1407,37 +1446,33 @@ router.get('/receipts/:id/download-proof', async (req, res) => {
           return res.status(404).json({ error: 'No transaction proof file found for this receipt' });
         }
 
-        const filePath = path.join(__dirname, '../uploads/receipts', receipt.transaction_proof_filename);
+        // FIXED: Correct the file path
+        const filePath = path.join(__dirname, '../../uploads/receipts', receipt.transaction_proof_filename);
         
         // Check if file exists
         if (!fs.existsSync(filePath)) {
+          console.error('File not found at path:', filePath);
           return res.status(404).json({ error: 'Transaction proof file not found on server' });
         }
 
-        // Get file stats for content type and size
+        // Get file stats
         const stats = fs.statSync(filePath);
         const fileSize = stats.size;
         const fileExt = path.extname(receipt.transaction_proof_filename).toLowerCase();
 
-        // Determine content type based on file extension
+        // Determine content type
         let contentType = 'application/octet-stream';
-        switch (fileExt) {
-          case '.pdf':
-            contentType = 'application/pdf';
-            break;
-          case '.jpg':
-          case '.jpeg':
-            contentType = 'image/jpeg';
-            break;
-          case '.png':
-            contentType = 'image/png';
-            break;
-          case '.doc':
-            contentType = 'application/msword';
-            break;
-          case '.docx':
-            contentType = 'application/vnd.openxmlformats-officedocument.wordprocessingml.document';
-            break;
+        const contentTypes = {
+          '.pdf': 'application/pdf',
+          '.jpg': 'image/jpeg',
+          '.jpeg': 'image/jpeg',
+          '.png': 'image/png',
+          '.doc': 'application/msword',
+          '.docx': 'application/vnd.openxmlformats-officedocument.wordprocessingml.document'
+        };
+        
+        if (contentTypes[fileExt]) {
+          contentType = contentTypes[fileExt];
         }
 
         // Set headers for file download
@@ -1451,16 +1486,19 @@ router.get('/receipts/:id/download-proof', async (req, res) => {
         
         fileStream.on('error', (error) => {
           console.error('File stream error:', error);
-          res.status(500).json({ error: 'Error reading file' });
+          if (!res.headersSent) {
+            res.status(500).json({ error: 'Error reading file' });
+          }
         });
 
         fileStream.pipe(res);
-
       }
     );
   } catch (error) {
     console.error('Error in download proof route:', error);
-    res.status(500).json({ error: 'Failed to download file' });
+    if (!res.headersSent) {
+      res.status(500).json({ error: 'Failed to download file' });
+    }
   }
 });
 
@@ -1488,9 +1526,11 @@ router.get('/receipts/:id/view-proof', async (req, res) => {
           return res.status(404).json({ error: 'No transaction proof file found for this receipt' });
         }
 
-        const filePath = path.join(__dirname, '../uploads/receipts', receipt.transaction_proof_filename);
+        // FIXED: Correct the file path
+        const filePath = path.join(__dirname, '../../uploads/receipts', receipt.transaction_proof_filename);
         
         if (!fs.existsSync(filePath)) {
+          console.error('File not found at path:', filePath);
           return res.status(404).json({ error: 'Transaction proof file not found on server' });
         }
 
@@ -1500,48 +1540,50 @@ router.get('/receipts/:id/view-proof', async (req, res) => {
 
         // Determine content type for inline viewing
         let contentType = 'application/octet-stream';
-        switch (fileExt) {
-          case '.pdf':
-            contentType = 'application/pdf';
-            break;
-          case '.jpg':
-          case '.jpeg':
-            contentType = 'image/jpeg';
-            break;
-          case '.png':
-            contentType = 'image/png';
-            break;
-          case '.doc':
-            contentType = 'application/msword';
-            break;
-          case '.docx':
-            contentType = 'application/vnd.openxmlformats-officedocument.wordprocessingml.document';
-            break;
+        const contentTypes = {
+          '.pdf': 'application/pdf',
+          '.jpg': 'image/jpeg',
+          '.jpeg': 'image/jpeg',
+          '.png': 'image/png',
+          '.doc': 'application/msword',
+          '.docx': 'application/vnd.openxmlformats-officedocument.wordprocessingml.document'
+        };
+        
+        if (contentTypes[fileExt]) {
+          contentType = contentTypes[fileExt];
         }
 
-        // Set headers for inline viewing (not download)
+        // For images and PDFs, set inline disposition
+        if (fileExt.match(/\.(jpg|jpeg|png|pdf)$/i)) {
+          res.setHeader('Content-Disposition', `inline; filename="${receipt.transaction_proof_filename}"`);
+        } else {
+          // For other files, force download
+          res.setHeader('Content-Disposition', `attachment; filename="${receipt.transaction_proof_filename}"`);
+        }
+        
         res.setHeader('Content-Type', contentType);
         res.setHeader('Content-Length', fileSize);
-        res.setHeader('Content-Disposition', `inline; filename="${receipt.transaction_proof_filename}"`);
         res.setHeader('Cache-Control', 'no-cache');
 
         const fileStream = fs.createReadStream(filePath);
         
         fileStream.on('error', (error) => {
           console.error('File stream error:', error);
-          res.status(500).json({ error: 'Error reading file' });
+          if (!res.headersSent) {
+            res.status(500).json({ error: 'Error reading file' });
+          }
         });
 
         fileStream.pipe(res);
-
       }
     );
   } catch (error) {
     console.error('Error in view proof route:', error);
-    res.status(500).json({ error: 'Failed to view file' });
+    if (!res.headersSent) {
+      res.status(500).json({ error: 'Failed to view file' });
+    }
   }
 });
-
 
 
 
