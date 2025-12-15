@@ -527,8 +527,12 @@ router.post('/products', async (req, res) => {
       ...cleanProduct,
 
 
+
             purchase_price: data.purchase_price || 0, // ADD THIS: Ensure purchase_price is included
 
+
+
+      purchase_price: data.purchase_price || 0, // ADD THIS: Ensure purchase_price is included
 
       images: JSON.stringify(imagesArray),
       created_at: now,

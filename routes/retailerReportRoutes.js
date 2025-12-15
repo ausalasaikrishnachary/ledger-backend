@@ -19,7 +19,7 @@ router.get("/retailer-report", (req, res) => {
       business_name,
       display_name
     FROM accounts
-    WHERE \`group\` = 'customer'
+    WHERE \`group\` = 'retailer'
     ORDER BY id ASC
   `;
 
@@ -49,7 +49,7 @@ router.post("/retailer-report/download", (req, res) => {
       business_name,
       display_name
     FROM accounts
-    WHERE \`group\` = 'customer'
+    WHERE \`group\` = 'retailer'
     ORDER BY id ASC
   `;
 
