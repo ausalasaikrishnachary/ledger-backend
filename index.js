@@ -2,6 +2,7 @@ const express = require('express');
 const cors = require('cors'); // ✅ Import CORS
 const cron = require('node-cron'); // ✅ Move cron to top (only declare once)
 const app = express();
+require("dotenv").config();
 
 const accountsRoutes = require('./routes/accountRoutes'); // Import account routes
 const inventoryRoutes = require('./routes/Inventory/inventoryRoutes'); // Import inventory routes

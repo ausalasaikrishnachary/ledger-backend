@@ -1,6 +1,8 @@
 const express = require("express");
 const router = express.Router();
 const db = require('./../../db');
+const { sendMail } = require("../../utils/mailer");
+require("dotenv").config();
 
 
 // ===================================================
@@ -80,39 +82,42 @@ router.get("/details/:order_number", (req, res) => {
 });
 
 
-router.post('/create-complete-order', (req, res) => {
-  console.log('📦 Creating complete order:', req.body);
+router.post("/create-complete-order", (req, res) => {
+  console.log("📦 Creating complete order:", req.body);
 
   const { order, orderItems } = req.body;
 
   if (!order || !orderItems) {
     return res.status(400).json({
-      error: 'Missing order or orderItems data'
+      error: "Missing order or orderItems data",
     });
   }
 
   db.getConnection((err, connection) => {
     if (err) {
-      console.error('❌ Database connection error:', err);
-      return res.status(500).json({ error: 'Database connection failed' });
+      console.error("❌ Database connection error:", err);
+      return res.status(500).json({ error: "Database connection failed" });
     }
 
-    // Start transaction
     connection.beginTransaction(async (err) => {
       if (err) {
         connection.release();
-        console.error('❌ Transaction start error:', err);
-        return res.status(500).json({ error: 'Failed to start transaction' });
+        console.error("❌ Transaction start error:", err);
+        return res.status(500).json({ error: "Failed to start transaction" });
       }
 
       try {
-        // Step 1: Insert into orders table
+        // ---------------------------------------------------
+        // 1. INSERT ORDER
+        // ---------------------------------------------------
         const orderQuery = `
           INSERT INTO orders (
             order_number, customer_id, customer_name, order_total, discount_amount,
             taxable_amount, tax_amount, net_payable, credit_period,
-            estimated_delivery_date, order_placed_by, ordered_by, staff_id , assigned_staff, staff_incentive , order_mode,approval_status, created_at
-          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,?,?,?,?,?, NOW())
+            estimated_delivery_date, order_placed_by, ordered_by,
+            staff_id, assigned_staff, staff_incentive,
+            order_mode, approval_status, created_at
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW())
         `;
 
         const orderValues = [
@@ -126,7 +131,7 @@ router.post('/create-complete-order', (req, res) => {
           order.net_payable,
           order.credit_period,
           order.estimated_delivery_date,
-          order.order_placed_by, // This should be the account ID, not name
+          order.order_placed_by,
           order.ordered_by,
           order.staffid,
           order.assigned_staff,
@@ -135,8 +140,6 @@ router.post('/create-complete-order', (req, res) => {
           order.approval_status,
         ];
 
-        console.log('🚀 Inserting order with values:', orderValues);
-
         const orderResult = await new Promise((resolve, reject) => {
           connection.query(orderQuery, orderValues, (err, result) => {
             if (err) reject(err);
@@ -144,19 +147,22 @@ router.post('/create-complete-order', (req, res) => {
           });
         });
 
-        console.log('✅ Order inserted with ID:', orderResult.insertId);
+        console.log("✅ Order inserted:", orderResult.insertId);
 
-        // Step 2: Insert order items
+        // ---------------------------------------------------
+        // 2. INSERT ORDER ITEMS
+        // ---------------------------------------------------
         const orderItemQuery = `
           INSERT INTO order_items (
             order_number, item_name, product_id, mrp, sale_price, price, quantity,
             total_amount, discount_percentage, discount_amount, taxable_amount,
             tax_percentage, tax_amount, item_total, credit_period, credit_percentage,
-            sgst_percentage, sgst_amount, cgst_percentage, cgst_amount, discount_applied_scheme
+            sgst_percentage, sgst_amount, cgst_percentage, cgst_amount,
+            discount_applied_scheme
           ) VALUES ?
         `;
 
-        const orderItemValues = orderItems.map(item => [
+        const orderItemValues = orderItems.map((item) => [
           order.order_number,
           item.item_name,
           item.product_id,
@@ -177,45 +183,42 @@ router.post('/create-complete-order', (req, res) => {
           item.sgst_amount,
           item.cgst_percentage,
           item.cgst_amount,
-          item.discount_applied_scheme
+          item.discount_applied_scheme,
         ]);
 
-        console.log('🚀 Inserting order items:', orderItemValues.length);
-
-        const orderItemsResult = await new Promise((resolve, reject) => {
+        await new Promise((resolve, reject) => {
           connection.query(orderItemQuery, [orderItemValues], (err, result) => {
             if (err) reject(err);
             else resolve(result);
           });
         });
 
-        console.log('✅ Order items inserted:', orderItemsResult.affectedRows);
+        console.log("✅ Order items inserted");
 
-        // Step 3: Clear cart items for this customer and staff
-        // Assuming the cart table is named 'cart_items' based on your data structure
+        // ---------------------------------------------------
+        // 3. CLEAR CART
+        // ---------------------------------------------------
         const clearCartQuery = `
-          DELETE FROM cart_items 
+          DELETE FROM cart_items
           WHERE customer_id = ? AND staff_id = ?
         `;
 
-        const clearCartValues = [
-          order.customer_id,
-          order.order_placed_by // staff_id is stored here
-        ];
-
-        console.log('🛒 Clearing cart for customer:', order.customer_id, 'and staff:', order.order_placed_by);
-
         const clearCartResult = await new Promise((resolve, reject) => {
-          connection.query(clearCartQuery, clearCartValues, (err, result) => {
-            if (err) reject(err);
-            else {
-              console.log('✅ Cart cleared, affected rows:', result.affectedRows);
-              resolve(result);
+          connection.query(
+            clearCartQuery,
+            [order.customer_id, order.order_placed_by],
+            (err, result) => {
+              if (err) reject(err);
+              else resolve(result);
             }
-          });
+          );
         });
 
-        // Commit transaction
+        console.log("🛒 Cart cleared:", clearCartResult.affectedRows);
+
+        // ---------------------------------------------------
+        // 4. COMMIT TRANSACTION
+        // ---------------------------------------------------
         await new Promise((resolve, reject) => {
           connection.commit((err) => {
             if (err) reject(err);
@@ -223,33 +226,76 @@ router.post('/create-complete-order', (req, res) => {
           });
         });
 
-        console.log('✅ Transaction committed successfully');
-
         connection.release();
+        console.log("✅ Transaction committed");
 
+        // ---------------------------------------------------
+        // 5. SEND EMAILS
+        // ---------------------------------------------------
+        const staffEmail = order.staff_email;
+        const retailerEmail = order.retailer_email;
+        const adminEmail = process.env.ADMIN_EMAIL;
+
+        try {
+          const emailHTML = `
+            <h2>Order Placed Successfully</h2>
+            <p><strong>Order Number:</strong> ${order.order_number}</p>
+            <p><strong>Customer:</strong> ${order.customer_name}</p>
+            <p><strong>Net Amount:</strong> ₹${order.net_payable}</p>
+            <p><strong>Placed By:</strong> ${order.ordered_by}</p>
+            <br/>
+            <p>Thank you.</p>
+          `;
+
+          await Promise.all([
+            sendMail({
+              to: adminEmail,
+              subject: `New Order Placed - ${order.order_number}`,
+              html: emailHTML,
+            }),
+            sendMail({
+              to: staffEmail,
+              subject: `Order Placed Successfully - ${order.order_number}`,
+              html: emailHTML,
+            }),
+            sendMail({
+              to: retailerEmail,
+              subject: `Your Order Has Been Placed - ${order.order_number}`,
+              html: emailHTML,
+            }),
+          ]);
+
+          console.log("📧 Emails sent successfully");
+        } catch (mailErr) {
+          console.error("❌ Email error:", mailErr);
+        }
+
+        // ---------------------------------------------------
+        // 6. RESPONSE
+        // ---------------------------------------------------
         res.status(201).json({
           success: true,
           order_number: order.order_number,
           order_id: orderResult.insertId,
           cart_cleared: clearCartResult.affectedRows,
-          message: 'Order created successfully and cart cleared'
+          message: "Order created successfully",
         });
-
       } catch (error) {
-        // Rollback transaction on error
         connection.rollback(() => {
           connection.release();
-          console.error('❌ Transaction error, rolled back:', error);
+          console.error("❌ Transaction failed:", error);
           res.status(500).json({
-            error: 'Failed to create order',
+            error: "Failed to create order",
             details: error.message,
-            sqlMessage: error.sqlMessage
           });
         });
       }
     });
   });
 });
+
+module.exports = router;
+
 
 
 router.get("/orders-placed-by/:order_placed_by", (req, res) => {

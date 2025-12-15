@@ -209,7 +209,7 @@ router.get("/transactions/download-pdf", (req, res) => {
   console.log('Downloading PDF(s) for order:', order_number);
 
   const query = `
-    SELECT pdf_data, pdf_file_name 
+    SELECT pdf_data, pdf_file_name ,status 
     FROM voucher 
     WHERE order_number = ? AND pdf_data IS NOT NULL
     ORDER BY created_at ASC
@@ -247,6 +247,7 @@ router.get("/transactions/download-pdf", (req, res) => {
 
       return {
         fileName: pdfInfo.pdf_file_name || `invoice_${index + 1}.pdf`,
+        status: pdfInfo.status,
         data: base64Data
       };
     });
@@ -255,7 +256,7 @@ router.get("/transactions/download-pdf", (req, res) => {
       success: true,
       count: pdfs.length,
       orderNumber: order_number,
-      pdfs: pdfs
+      pdfs: pdfs 
     });
   });
 });
