@@ -1,193 +1,281 @@
 const express = require("express");
 const router = express.Router();
-const db = require("../db"); // your MySQL connection
+const db = require("../db");
 const excelJS = require("exceljs");
 const PDFDocument = require("pdfkit");
 
-// ---------- Helper to build SQL ----------
-function buildSalesSQL(fromDate, toDate) {
-  let sql = `
+/* ================= HELPER QUERY ================= */
+function buildVoucherDetailsSQL() {
+  return `
     SELECT 
-      a.name AS service_name,
-      v.InvoiceNumber AS invoice,
+      MIN(vd.id) AS id,
+      vd.product,
+      vd.product_id,
+      vd.batch,
       DATE(v.Date) AS invoice_date,
-      v.SubTotal AS taxable_amount,
-      v.TotalAmount AS net_payable
-    FROM voucher v
-    LEFT JOIN accounts a ON v.PartyID = a.id
+      v.order_mode,
+      v.Subtotal,
+      v.PartyName AS retailer,
+      a.name AS assigned_staff,
+      a.address AS staff_address,
+      SUM(vd.quantity) AS quantity,
+      SUM(vd.price) AS price,
+      SUM(vd.discount) AS discount,
+      SUM(vd.gst) AS gst,
+      SUM(vd.cgst) AS cgst,
+      SUM(vd.sgst) AS sgst,
+      SUM(vd.igst) AS igst,
+      SUM(vd.cess) AS cess,
+      SUM(vd.total) AS total,
+      GROUP_CONCAT(DISTINCT v.InvoiceNumber SEPARATOR ', ') AS invoice_numbers
+    FROM voucherdetails vd
+    LEFT JOIN voucher v ON vd.voucher_id = v.VoucherID
+    LEFT JOIN accounts a ON v.staffid = a.id
     WHERE v.TransactionType = 'Sales'
+    GROUP BY 
+      vd.product_id,
+      vd.batch,
+      vd.product,
+      v.PartyName,
+      a.name,
+      a.address
+    ORDER BY invoice_date DESC
   `;
-  const params = [];
-
-  if (fromDate && toDate) {
-    sql += ` AND DATE(v.Date) BETWEEN ? AND ?`;
-    params.push(fromDate, toDate);
-  }
-
-  sql += ` ORDER BY v.Date DESC`;
-  return { sql, params };
 }
 
-// ---------- GET: Fetch Sales Data ----------
+/* ================= GET VOUCHER DETAILS ================= */
 router.get("/sales-report", (req, res) => {
-  const { fromDate, toDate } = req.query;
-  const { sql, params } = buildSalesSQL(fromDate, toDate);
+  const sql = buildVoucherDetailsSQL();
 
-  db.query(sql, params, (err, results) => {
+  db.query(sql, (err, results) => {
     if (err) {
-      console.error("❌ DB Error (sales-report):", err);
-      return res.status(500).json({ error: err.message });
+      console.error("VoucherDetails GET error:", err);
+      return res.status(500).json({ success: false });
     }
 
-    // ✅ Add serial numbers to results for frontend
-    const dataWithSlNo = results.map((r, i) => ({ sl_no: i + 1, ...r }));
-    res.json(dataWithSlNo);
+    const data = results.map((r, i) => ({
+      sl_no: i + 1,
+      ...r,
+      invoice_date: r.invoice_date
+        ? new Date(r.invoice_date).toLocaleDateString("en-IN")
+        : "-"
+    }));
+
+    res.json({
+      success: true,
+      data,
+      totalCount: data.length
+    });
   });
 });
 
-// ---------- POST: Download Sales Report ----------
+/* ================= POST DOWNLOAD ================= */
 router.post("/sales-report/download", (req, res) => {
-  const { fromDate, toDate, format } = req.body;
-  const { sql, params } = buildSalesSQL(fromDate, toDate);
+  const { format } = req.body;
+  const sql = buildVoucherDetailsSQL();
 
-  db.query(sql, params, async (err, results) => {
+  db.query(sql, async (err, results) => {
     if (err) {
-      console.error("❌ DB Error (download sales):", err);
+      console.error("VoucherDetails download error:", err);
       return res.status(500).json({ error: err.message });
     }
 
-    // ===== PDF EXPORT =====
+    /* ================== PDF EXPORT ================== */
     if (format === "pdf") {
       const doc = new PDFDocument({ margin: 30, layout: "landscape" });
+
       res.setHeader("Content-Type", "application/pdf");
       res.setHeader(
         "Content-Disposition",
-        `attachment; filename=Sales_Report_${fromDate || "ALL"}_${toDate || "ALL"}.pdf`
+        `attachment; filename=Sales_Details_Report_${new Date().toISOString().split('T')[0]}.pdf`
       );
+
       doc.pipe(res);
 
-      // Title
-      doc.fontSize(18).text("Sales Report", { align: "center" });
-      doc.moveDown();
-      if (fromDate && toDate) {
-        doc.fontSize(12).text(`From ${fromDate} to ${toDate}`, { align: "center" });
-      } else {
-        doc.fontSize(12).text("All Dates", { align: "center" });
-      }
-      doc.moveDown(1.2);
+      // Title with larger font
+      doc.fontSize(22).text("Sales Details Report", { align: "center" });
+      doc.moveDown(1);
+      
+      // Report date
+      doc.fontSize(10).text(`Generated on: ${new Date().toLocaleDateString('en-IN')}`, { align: "center" });
+      doc.moveDown(2);
 
-      // ✅ Headers including Sl No
-      const headers = ["Sl No", "Service", "Invoice", "Date", "Taxable Amount", "Net Payable"];
-      const widths = [50, 180, 120, 100, 120, 120];
+      const headers = [
+        "Sl No",
+        "Product",
+        "Quantity",
+        "Taxable Amount",
+        "Total Amount",
+        "Retailer",
+        "Staff",
+        "Date"
+      ];
 
-      let y = 100;
+      // Adjusted column widths for better spacing
+      const widths = [50, 150, 70, 100, 100, 140, 120, 90];
+
       let x = 30;
+      let y = 130;
 
-      // Header row
+      /* ===== HEADER ===== */
       headers.forEach((h, i) => {
-        doc.rect(x, y, widths[i], 25).fillAndStroke("#e9ecef", "black");
-        doc.fillColor("#000").font("Helvetica-Bold").fontSize(10).text(h, x + 5, y + 8);
+        doc
+          .rect(x, y, widths[i], 25)
+          .fillAndStroke("#343a40", "black");
+
+        doc
+          .fillColor("white")
+          .font("Helvetica-Bold")
+          .fontSize(11) // Increased font size
+          .text(h, x + 4, y + 8, {
+            width: widths[i] - 8,
+            align: "center"
+          });
+
+        doc.fillColor("black");
         x += widths[i];
       });
 
       y += 25;
-      let totalTaxable = 0;
-      let totalNet = 0;
 
-      // Data rows
-      results.forEach((r, index) => {
-        totalTaxable += Number(r.taxable_amount || 0);
-        totalNet += Number(r.net_payable || 0);
-
+      /* ===== ROWS ===== */
+      results.forEach((r, i) => {
         const row = [
-          index + 1, // ✅ Sl No
-          r.service_name || "-",
-          r.invoice || "-",
-          r.invoice_date ? new Date(r.invoice_date).toLocaleDateString("en-GB") : "-",
-          Number(r.taxable_amount || 0).toFixed(2),
-          Number(r.net_payable || 0).toFixed(2),
+          i + 1,
+          r.product || "-",
+          r.quantity || 0,
+          r.Subtotal ? `₹${parseFloat(r.Subtotal).toFixed(2)}` : "₹0.00",
+          r.total ? `₹${parseFloat(r.total).toFixed(2)}` : "₹0.00",
+          r.retailer || "-",
+          r.assigned_staff || "-",
+          r.invoice_date
+            ? new Date(r.invoice_date).toLocaleDateString("en-IN")
+            : "-"
         ];
 
         x = 30;
-        row.forEach((val, i) => {
-          doc.rect(x, y, widths[i], 20).stroke();
-          doc.font("Helvetica").fontSize(9).fillColor("#000").text(String(val), x + 5, y + 6);
-          x += widths[i];
+        row.forEach((val, j) => {
+          doc.rect(x, y, widths[j], 22).stroke();
+          doc.font("Helvetica").fontSize(10) // Increased font size
+            .text(String(val), x + 4, y + 8, {
+              width: widths[j] - 8,
+              align: "center"
+            });
+          x += widths[j];
         });
-        y += 20;
 
-        if (y > doc.page.height - 60) {
+        y += 22;
+        if (y > doc.page.height - 50) {
           doc.addPage({ layout: "landscape" });
           y = 60;
         }
       });
 
-      // Totals Row
-      x = 30;
-      const totals = [
-        { text: "TOTAL", width: widths[0] + widths[1] + widths[2] + widths[3] },
-        { text: totalTaxable.toFixed(2), width: widths[4] },
-        { text: totalNet.toFixed(2), width: widths[5] },
-      ];
-      totals.forEach((cell) => {
-        doc.rect(x, y, cell.width, 22).fillAndStroke("#dee2e6", "black");
-        doc.font("Helvetica-Bold").fontSize(10).text(cell.text, x + 5, y + 6);
-        x += cell.width;
-      });
+      // Add summary at the end
+      const totalSales = results.reduce((sum, r) => sum + parseFloat(r.total || 0), 0);
+      const totalSubtotal = results.reduce((sum, r) => sum + parseFloat(r.Subtotal || 0), 0);
+      
+      doc.moveDown(3);
+      doc.fontSize(12).font("Helvetica-Bold")
+        .text("Summary", { align: "center" });
+      doc.moveDown(0.5);
+      
+      doc.fontSize(10).font("Helvetica")
+        .text(`Total Taxable Amount: ₹${totalSubtotal.toFixed(2)}`, { align: "center" });
+      doc.text(`Total Sales Amount: ₹${totalSales.toFixed(2)}`, { align: "center" });
+      doc.text(`Total Records: ${results.length}`, { align: "center" });
 
       doc.end();
       return;
     }
 
-    // ===== EXCEL EXPORT =====
+    /* ================== EXCEL EXPORT ================== */
     if (format === "excel") {
       const workbook = new excelJS.Workbook();
-      const ws = workbook.addWorksheet("Sales Report");
+      const ws = workbook.addWorksheet("Sales Details");
 
       ws.columns = [
         { header: "Sl No", key: "sl_no", width: 8 },
-        { header: "Service", key: "service_name", width: 35 },
-        { header: "Invoice", key: "invoice", width: 18 },
-        { header: "Date", key: "invoice_date", width: 16 },
-        { header: "Taxable Amount", key: "taxable_amount", width: 18 },
-        { header: "Net Payable", key: "net_payable", width: 18 },
+        { header: "Product", key: "product", width: 30 },
+        { header: "Quantity", key: "quantity", width: 12 },
+        { header: "Taxable Amount", key: "subtotal", width: 18 },
+        { header: "Total Amount", key: "total", width: 18 },
+        { header: "Retailer", key: "retailer", width: 30 },
+        { header: "Staff", key: "assigned_staff", width: 25 },
+        { header: "Date", key: "invoice_date", width: 15 }
       ];
 
-      let totalTaxable = 0;
-      let totalNet = 0;
-
-      results.forEach((r, index) => {
-        totalTaxable += Number(r.taxable_amount || 0);
-        totalNet += Number(r.net_payable || 0);
-
+      results.forEach((r, i) => {
         ws.addRow({
-          sl_no: index + 1,
-          service_name: r.service_name || "-",
-          invoice: r.invoice || "-",
+          sl_no: i + 1,
+          product: r.product || "-",
+          quantity: r.quantity || 0,
+          subtotal: r.Subtotal ? parseFloat(r.Subtotal) : 0,
+          total: r.total ? parseFloat(r.total) : 0,
+          retailer: r.retailer || "-",
+          assigned_staff: r.assigned_staff || "-",
           invoice_date: r.invoice_date
-            ? new Date(r.invoice_date).toLocaleDateString("en-GB")
-            : "-",
-          taxable_amount: Number(r.taxable_amount || 0),
-          net_payable: Number(r.net_payable || 0),
+            ? new Date(r.invoice_date).toLocaleDateString("en-IN")
+            : "-"
         });
       });
 
-      const totalsRow = ws.addRow({
-        sl_no: "",
-        service_name: "TOTAL",
-        invoice: "",
-        invoice_date: "",
-        taxable_amount: totalTaxable,
-        net_payable: totalNet,
+      // Add summary row
+      const totalRow = ws.addRow({});
+      ws.addRow({
+        product: "TOTAL",
+        subtotal: results.reduce((sum, r) => sum + parseFloat(r.Subtotal || 0), 0),
+        total: results.reduce((sum, r) => sum + parseFloat(r.total || 0), 0)
       });
 
-      totalsRow.font = { bold: true };
-      ws.getRow(1).font = { bold: true, color: { argb: "FFFFFFFF" } };
-      ws.getRow(1).fill = {
+      /* ===== HEADER STYLE ===== */
+      const headerRow = ws.getRow(1);
+      headerRow.font = {
+        bold: true,
+        size: 12, // Increased font size
+        color: { argb: "FFFFFFFF" }
+      };
+      headerRow.fill = {
         type: "pattern",
         pattern: "solid",
-        fgColor: { argb: "FF4F81BD" },
+        fgColor: { argb: "FF343A40" }
       };
+      headerRow.alignment = {
+        horizontal: "center",
+        vertical: "middle"
+      };
+
+      // Style for summary row
+      const summaryRow = ws.getRow(results.length + 2);
+      summaryRow.font = {
+        bold: true,
+        size: 11
+      };
+      summaryRow.fill = {
+        type: "pattern",
+        pattern: "solid",
+        fgColor: { argb: "FFF0F0F0" }
+      };
+
+      // Center align all cells
+      ws.eachRow((row) => {
+        row.alignment = {
+          vertical: "middle",
+          horizontal: "center"
+        };
+      });
+
+      // Format currency columns
+      const subtotalCol = ws.getColumn(4);
+      const totalCol = ws.getColumn(5);
+      
+      [subtotalCol, totalCol].forEach(col => {
+        col.eachCell((cell) => {
+          if (cell.value && typeof cell.value === 'number') {
+            cell.numFmt = '"₹"#,##0.00';
+          }
+        });
+      });
 
       res.setHeader(
         "Content-Type",
@@ -195,14 +283,14 @@ router.post("/sales-report/download", (req, res) => {
       );
       res.setHeader(
         "Content-Disposition",
-        `attachment; filename=Sales_Report_${fromDate || "ALL"}_${toDate || "ALL"}.xlsx`
+        `attachment; filename=Sales_Details_Report_${new Date().toISOString().split('T')[0]}.xlsx`
       );
 
       await workbook.xlsx.write(res);
       return res.end();
     }
 
-    res.status(400).json({ error: "Invalid format (use pdf or excel)" });
+    res.status(400).json({ error: "Invalid format (pdf / excel)" });
   });
 });
 

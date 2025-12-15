@@ -269,93 +269,93 @@ router.post('/receipts', upload.single('transaction_proof'), async (req, res) =>
       ]
     );
 
-    // ---------------------------------------------------
-    // 4️⃣ STAFF INCENTIVE CALCULATION AND UPDATION
-    // ---------------------------------------------------
-    if (safeTransactionType === "Receipt" && safeInvoiceNumber) {
-      console.log("🔍 Looking for matching Sales with InvoiceNumber:", safeInvoiceNumber);
-      
-      const [salesRows] = await connection.promise().query(
-        `SELECT staffid, staff_incentive 
-         FROM voucher 
-         WHERE TransactionType = 'Sales' 
-         AND InvoiceNumber = ? 
-         LIMIT 1`,
-        [safeInvoiceNumber]
-      );
+   // ---------------------------------------------------
+// 4️⃣ STAFF INCENTIVE CALCULATION AND UPDATION
+// ---------------------------------------------------
+if (safeTransactionType === "Receipt" && safeInvoiceNumber) {
+  console.log("🔍 Looking for matching Stock Transfer with InvoiceNumber:", safeInvoiceNumber);
+  
+  // CHANGE: Changed from 'Sales' to 'Stock Transfer'
+  const [stockTransferRows] = await connection.promise().query(
+    `SELECT staffid, staff_incentive 
+     FROM voucher 
+     WHERE TransactionType = 'Stock Transfer' 
+     AND InvoiceNumber = ? 
+     LIMIT 1`,
+    [safeInvoiceNumber]
+  );
 
-      if (salesRows.length > 0) {
-        const salesRow = salesRows[0];
-        const staffIdFromSales = salesRow.staffid;
+  if (stockTransferRows.length > 0) {
+    const stockTransferRow = stockTransferRows[0];
+    const staffIdFromTransfer = stockTransferRow.staffid;
+    
+    console.log("📊 Stock Transfer Row Found:", {
+      invoiceNumber: safeInvoiceNumber,
+      staff_id_from_transfer: staffIdFromTransfer,
+      staff_incentive_percentage: stockTransferRow.staff_incentive,
+      receipt_paid_amount: receiptAmount
+    });
+
+    if (staffIdFromTransfer) {
+      let staffIncentivePercentage = 0;
+      
+      if (stockTransferRow.staff_incentive !== null && stockTransferRow.staff_incentive !== undefined) {
+        staffIncentivePercentage = parseFloat(stockTransferRow.staff_incentive);
+      }
+      
+      console.log("ℹ️ Staff Incentive Percentage from Stock Transfer:", staffIncentivePercentage);
+
+      if (staffIncentivePercentage > 0) {
+        const calculatedIncentive = (receiptAmount * staffIncentivePercentage) / 100;
+        const roundedIncentive = parseFloat(calculatedIncentive.toFixed(2));
         
-        console.log("📊 Sales Row Found:", {
-          invoiceNumber: safeInvoiceNumber,
-          staff_id_from_sales: staffIdFromSales,
-          staff_incentive_percentage: salesRow.staff_incentive,
-          receipt_paid_amount: receiptAmount
+        console.log("💰 Incentive Calculation:", {
+          receiptAmount: receiptAmount,
+          staffIncentivePercentage: staffIncentivePercentage + "%",
+          calculatedIncentive: roundedIncentive
         });
 
-        if (staffIdFromSales) {
-          let staffIncentivePercentage = 0;
+        const [accountExists] = await connection.promise().query(
+          `SELECT id, staff_incentive, name FROM accounts WHERE id = ?`,
+          [staffIdFromTransfer]
+        );
+
+        console.log("🔍 Looking for staff in accounts table with ID:", staffIdFromTransfer);
+        console.log("🔍 Account found:", accountExists.length > 0 ? accountExists[0] : "No account found");
+
+        if (accountExists.length > 0) {
+          const currentIncentive = accountExists[0].staff_incentive !== null 
+            ? parseFloat(accountExists[0].staff_incentive) || 0 
+            : 0;
           
-          if (salesRow.staff_incentive !== null && salesRow.staff_incentive !== undefined) {
-            staffIncentivePercentage = parseFloat(salesRow.staff_incentive);
-          }
+          const newTotalIncentive = currentIncentive + roundedIncentive;
+          const staffName = accountExists[0].name || "Unknown";
           
-          console.log("ℹ️ Staff Incentive Percentage from Sales:", staffIncentivePercentage);
-
-          if (staffIncentivePercentage > 0) {
-            const calculatedIncentive = (receiptAmount * staffIncentivePercentage) / 100;
-            const roundedIncentive = parseFloat(calculatedIncentive.toFixed(2));
-            
-            console.log("💰 Incentive Calculation:", {
-              receiptAmount: receiptAmount,
-              staffIncentivePercentage: staffIncentivePercentage + "%",
-              calculatedIncentive: roundedIncentive
-            });
-
-            const [accountExists] = await connection.promise().query(
-              `SELECT id, staff_incentive, name FROM accounts WHERE id = ?`,
-              [staffIdFromSales]
-            );
-
-            console.log("🔍 Looking for staff in accounts table with ID:", staffIdFromSales);
-            console.log("🔍 Account found:", accountExists.length > 0 ? accountExists[0] : "No account found");
-
-            if (accountExists.length > 0) {
-              const currentIncentive = accountExists[0].staff_incentive !== null 
-                ? parseFloat(accountExists[0].staff_incentive) || 0 
-                : 0;
-              
-              const newTotalIncentive = currentIncentive + roundedIncentive;
-              const staffName = accountExists[0].name || "Unknown";
-              
-              await connection.promise().execute(
-                `UPDATE accounts SET staff_incentive = ? WHERE id = ?`,
-                [newTotalIncentive, staffIdFromSales]
-              );
-              
-              console.log("✅ Incentive added to staff account:", {
-                accounts_id: staffIdFromSales,
-                staff_name: staffName,
-                previous_incentive: currentIncentive,
-                added_incentive: roundedIncentive,
-                new_total_incentive: newTotalIncentive
-              });
-            } else {
-              console.log("❌ Staff not found in accounts table with ID:", staffIdFromSales);
-            }
-          } else {
-            console.log("ℹ️ No staff_incentive percentage found or it's 0 in sales row");
-          }
+          await connection.promise().execute(
+            `UPDATE accounts SET staff_incentive = ? WHERE id = ?`,
+            [newTotalIncentive, staffIdFromTransfer]
+          );
+          
+          console.log("✅ Incentive added to staff account:", {
+            accounts_id: staffIdFromTransfer,
+            staff_name: staffName,
+            previous_incentive: currentIncentive,
+            added_incentive: roundedIncentive,
+            new_total_incentive: newTotalIncentive
+          });
         } else {
-          console.log("⚠️ No staffid found in sales row");
+          console.log("❌ Staff not found in accounts table with ID:", staffIdFromTransfer);
         }
       } else {
-        console.log("⚠️ No matching Sales found for InvoiceNumber:", safeInvoiceNumber);
+        console.log("ℹ️ No staff_incentive percentage found or it's 0 in stock transfer row");
       }
+    } else {
+      console.log("⚠️ No staffid found in stock transfer row");
     }
-
+  } else {
+    console.log("⚠️ No matching Stock Transfer found for InvoiceNumber:", safeInvoiceNumber);
+  }
+}
     await connection.promise().commit();
 
     res.json({
