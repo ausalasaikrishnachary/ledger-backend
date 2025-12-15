@@ -7,7 +7,7 @@ const db = require('./../../db');
 // ============================
 // Add to Cart
 router.post("/add-to-cart", (req, res) => {
-  const { customer_id, product_id, staff_id, quantity, credit_period, credit_percentage } = req.body;
+  const { customer_id, product_id,price , staff_id, quantity, credit_period, credit_percentage } = req.body;
 
   if (!customer_id || !product_id) {
     return res.status(400).json({ 
@@ -17,13 +17,13 @@ router.post("/add-to-cart", (req, res) => {
   }
 
   const sql = `
-    INSERT INTO cart_items (customer_id, product_id, staff_id,quantity, credit_period, credit_percentage)
-    VALUES (?, ?, ?,?, ?, ?)
+    INSERT INTO cart_items (customer_id, product_id, price ,staff_id,quantity, credit_period, credit_percentage)
+    VALUES (?, ?, ?,?, ?, ?,?)
   `;
 
   db.query(
     sql,
-    [customer_id, product_id, staff_id, quantity || 1, credit_period || 0, credit_percentage || 0],
+    [customer_id, product_id,price, staff_id, quantity || 1, credit_period || 0, credit_percentage || 0],
     (err, result) => {
       if (err) {
         return res.status(500).json({ 
@@ -159,5 +159,20 @@ router.get("/customer-cart/:customer_id", (req, res) => {
   });
 });
 
+
+router.put("/update-cart-price/:id", (req, res) => {
+  const { id } = req.params;
+  const { price } = req.body;
+
+  if (price === undefined) {
+    return res.status(400).json({ error: "Price is required" });
+  }
+
+  const sql = "UPDATE cart_items SET price = ? WHERE id = ?";
+  db.query(sql, [price, id], (err, result) => {
+    if (err) return res.status(500).json({ error: err });
+    res.json({ message: "Price updated" });
+  });
+});
 
 module.exports = router;

@@ -257,4 +257,39 @@ router.get("/get-sales-retailers/:id", (req, res) => {
 
 
 
+
+// UPDATE retailer personal info
+router.put("/update-retailer-info/:id", (req, res) => {
+  const { id } = req.params;
+  const { name, email, mobile_number } = req.body;
+
+  if (!name || !email || !mobile_number) {
+    return res.status(400).json({ error: "All fields are required" });
+  }
+
+  const sql = `
+    UPDATE accounts 
+    SET name = ?, email = ?, mobile_number = ?
+    WHERE id = ? AND role = 'retailer'
+  `;
+
+  db.query(sql, [name, email, mobile_number, id], (err, result) => {
+    if (err) {
+      console.error("❌ DB UPDATE ERROR:", err);
+      return res.status(500).json({ error: "Database error" });
+    }
+
+    if (result.affectedRows === 0) {
+      return res.status(404).json({ error: "Retailer not found" });
+    }
+
+    res.json({ success: true, message: "Profile updated successfully" });
+  });
+});
+
+module.exports = router;
+
+
+
+
 module.exports = router;
