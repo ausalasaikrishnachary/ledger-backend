@@ -2,7 +2,7 @@ const express = require('express');
 const cors = require('cors'); // ✅ Import CORS
 const cron = require('node-cron'); // ✅ Move cron to top (only declare once)
 const app = express();
-
+const salespersonScoreRoutes = require('./routes/salespersonScoreRoutes');
 const accountsRoutes = require('./routes/accountRoutes'); // Import account routes
 const inventoryRoutes = require('./routes/Inventory/inventoryRoutes'); // Import inventory routes
 // const offersRoutes = require('./routes/Inventory/OffersRoutes'); 
@@ -54,6 +54,7 @@ app.use(express.urlencoded({ limit: '50mb', extended: true }));
 
 // Middleware to parse JSON
 app.use('/api', retailerScoreRoutes);
+app.use('/api', salespersonScoreRoutes);
 app.use(express.json());
 app.use('/', AuthRoutes); 
 app.use('/', accountsRoutes);

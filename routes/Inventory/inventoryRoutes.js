@@ -525,11 +525,11 @@ router.post('/products', async (req, res) => {
 
     const productData = {
       ...cleanProduct,
-<<<<<<< HEAD
-=======
+
+
             purchase_price: data.purchase_price || 0, // ADD THIS: Ensure purchase_price is included
 
->>>>>>> c5344c80dbb72c43031b46a9918d3abe6aa45138
+
       images: JSON.stringify(imagesArray),
       created_at: now,
       updated_at: now,
