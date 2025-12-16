@@ -9,7 +9,6 @@ const app = express();
 const salespersonScoreRoutes = require('./routes/salespersonScoreRoutes');
 require("dotenv").config();
 
-
 const accountsRoutes = require('./routes/accountRoutes'); // Import account routes
 const inventoryRoutes = require('./routes/Inventory/inventoryRoutes'); // Import inventory routes
 // const offersRoutes = require('./routes/Inventory/OffersRoutes'); 

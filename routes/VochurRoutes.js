@@ -2828,52 +2828,52 @@ for (const i of items) {
 // Update accounts table credit_limit_balance for stock transfer
 
 if (transactionType === "stock transfer" && partyID) {
-  console.log(`💰 CREDIT LIMIT UPDATE - PartyID: ${partyID}, TotalAmount: ${grandTotal}`);
+  console.log(`💰 UNPAID AMOUNT UPDATE - PartyID: ${partyID}, TotalAmount: ${grandTotal}`);
   
   try {
-    // Check if accounts table has credit_limit_balance column
+    // Check if accounts table has unpaid_amount column
     const tableCheck = await queryPromise(
       connection,
-      "SHOW COLUMNS FROM accounts LIKE 'credit_limit_balance'"
+      "SHOW COLUMNS FROM accounts LIKE 'unpaid_amount'"
     );
     
     if (tableCheck.length === 0) {
-      console.warn("⚠️ 'credit_limit_balance' column not found in accounts table.");
+      console.warn("⚠️ 'unpaid_amount' column not found in accounts table.");
     } else {
-      // Get current balance
+      // Get current unpaid amount
       const currentAccount = await queryPromise(
         connection,
-        "SELECT credit_limit_balance FROM accounts WHERE id = ?",
+        "SELECT unpaid_amount FROM accounts WHERE id = ?",
         [partyID]
       );
       
       if (currentAccount.length === 0) {
         console.warn(`⚠️ Account with id ${partyID} not found in accounts table.`);
       } else {
-        const currentBalance = parseFloat(currentAccount[0].credit_limit_balance) || 0;
-        const newBalance = currentBalance + grandTotal;
+        const currentUnpaid = parseFloat(currentAccount[0].unpaid_amount) || 0;
+        const newUnpaid = currentUnpaid + grandTotal;
         
-        // Update the credit_limit_balance in accounts table only
+        // Update the unpaid_amount in accounts table only
         await queryPromise(
           connection,
           `
           UPDATE accounts 
-          SET credit_limit_balance = ?,
+          SET unpaid_amount = ?,
               updated_at = NOW()
           WHERE id = ?
           `,
-          [newBalance, partyID]
+          [newUnpaid, partyID]
         );
         
-        console.log(`✅ CREDIT LIMIT UPDATED IN ACCOUNTS TABLE`);
+        console.log(`✅ UNPAID AMOUNT UPDATED IN ACCOUNTS TABLE`);
         console.log(`   PartyID: ${partyID}`);
-        console.log(`   Previous Balance: ${currentBalance}`);
+        console.log(`   Previous Unpaid: ${currentUnpaid}`);
         console.log(`   Added Amount: ${grandTotal}`);
-        console.log(`   New Balance: ${newBalance}`);
+        console.log(`   New Unpaid: ${newUnpaid}`);
       }
     }
   } catch (error) {
-    console.error(`❌ ERROR updating credit limit balance:`, error.message);
+    console.error(`❌ ERROR updating unpaid amount:`, error.message);
   }
 }
 

@@ -30,6 +30,7 @@ Error: Unknown error
 Error: Unknown error
 Error: Unknown error
 Error: Unknown error
+<<<<<<< HEAD
 Error: Unknown error
 Error: Unknown error
 Error: Unknown error
@@ -50,3 +51,5 @@ Success: {"success":true,"message":"Search taxpayer is completed successfully","
 Error: Invalid GSTIN / UID
 Error: Invalid GSTIN / UID
 Success: {"success":true,"message":"Search taxpayer is completed successfully","result":{"stjCd":"DL007","lgnm":"BUSINESS STANDARD PRIVATE LIMITED","stj":"Ward 7","dty":"Regular","adadr":[],"cxdt":"","gstin":"07AABCB2115P1ZR","nba":["Recipient of Goods or Services","Others","Service Provision"],"lstupdt":"19/01/2023","rgdt":"01/07/2017","ctb":"Private Limited Company","pradr":{"addr":{"bnm":"","st":"Bahadurshah Zafar Marg","loc":"delhi","bno":"Nehru House 4","dst":"New Delhi","lt":"","locality":"","pncd":"110002","landMark":"","stcd":"Delhi","geocodelvl":"NA","flno":"","lg":""},"ntr":"Recipient of Goods or Services, Others, Service Provision"},"sts":"Active","ctjCd":"ZI0101","tradeNam":"BUSINESS STANDARD PRIVATE LIMITED","ctj":"RANGE - 1","einvoiceStatus":"Yes"},"status":200,"errorCode":"1000"}
+=======
+>>>>>>> da0900a1018a4593b772a3a3cf3d89a7f02f74aa

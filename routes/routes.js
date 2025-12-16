@@ -269,6 +269,50 @@ router.post('/receipts', upload.single('transaction_proof'), async (req, res) =>
       ]
     );
 
+
+if (safeTransactionType === "Receipt" && retailer_id) {
+  console.log(`💰 UNPAID AMOUNT DEDUCTION - PartyID: ${retailer_id}, Amount: ${receiptAmount}`);
+  
+  try {
+    const tableCheck = await connection.promise().query(
+      "SHOW COLUMNS FROM accounts LIKE 'unpaid_amount'"
+    );
+    
+    if (tableCheck[0].length === 0) {
+      console.warn("⚠️ 'unpaid_amount' column not found in accounts table.");
+    } else {
+      const [currentAccount] = await connection.promise().query(
+        "SELECT unpaid_amount FROM accounts WHERE id = ?",
+        [retailer_id]
+      );
+      
+      if (currentAccount.length === 0) {
+        console.warn(`⚠️ Account with id ${retailer_id} not found in accounts table.`);
+      } else {
+        const currentUnpaid = parseFloat(currentAccount[0].unpaid_amount) || 0;
+        const newUnpaid = currentUnpaid - receiptAmount;
+        
+        await connection.promise().query(
+          `
+          UPDATE accounts 
+          SET unpaid_amount = ?,
+              updated_at = NOW()
+          WHERE id = ?
+          `,
+          [newUnpaid, retailer_id]
+        );
+        
+        console.log(`✅ UNPAID AMOUNT DEDUCTED IN ACCOUNTS TABLE`);
+        console.log(`   PartyID: ${retailer_id}`);
+        console.log(`   Previous Unpaid: ${currentUnpaid}`);
+        console.log(`   Deducted Amount: ${receiptAmount}`);
+        console.log(`   New Unpaid: ${newUnpaid}`);
+      }
+    }
+  } catch (error) {
+    console.error(`❌ ERROR updating unpaid amount:`, error.message);
+  }
+}
    // ---------------------------------------------------
 // 4️⃣ STAFF INCENTIVE CALCULATION AND UPDATION
 // ---------------------------------------------------
