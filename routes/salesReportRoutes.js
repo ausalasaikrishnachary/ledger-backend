@@ -4,7 +4,7 @@ const db = require("../db");
 const excelJS = require("exceljs");
 const PDFDocument = require("pdfkit");
 
-/* ================= HELPER QUERY ================= */
+/* ================= SALES REPORT HELPER QUERY ================= */
 function buildVoucherDetailsSQL() {
   return `
     SELECT 
@@ -13,6 +13,7 @@ function buildVoucherDetailsSQL() {
       vd.product_id,
       vd.batch,
       DATE(v.Date) AS invoice_date,
+      v.order_number,
       v.order_mode,
       v.Subtotal,
       v.TransactionType,
@@ -28,11 +29,23 @@ function buildVoucherDetailsSQL() {
       SUM(vd.igst) AS igst,
       SUM(vd.cess) AS cess,
       SUM(vd.total) AS total,
-      GROUP_CONCAT(DISTINCT v.InvoiceNumber SEPARATOR ', ') AS invoice_numbers
+      GROUP_CONCAT(DISTINCT v.InvoiceNumber SEPARATOR ', ') AS invoice_numbers,
+      -- Determine sales type: 
+      -- Pakka = ONLY TransactionType = 'Sales'
+      -- Kacha = ONLY TransactionType = 'Stock Transfer' AND order_number IS NULL/empty
+      CASE 
+        WHEN v.TransactionType = 'Sales' THEN 'pakka'
+        WHEN v.TransactionType = 'Stock Transfer' AND (v.order_number IS NULL OR v.order_number = '') THEN 'kacha'
+      END AS sales_type
     FROM voucherdetails vd
     LEFT JOIN voucher v ON vd.voucher_id = v.VoucherID
     LEFT JOIN accounts a ON v.staffid = a.id
-    WHERE v.TransactionType = 'Sales'
+    WHERE v.TransactionType IN ('Sales', 'Stock Transfer')
+    AND (
+      v.TransactionType = 'Sales' 
+      OR 
+      (v.TransactionType = 'Stock Transfer' AND (v.order_number IS NULL OR v.order_number = ''))
+    )
     GROUP BY 
       vd.product_id,
       vd.batch,
@@ -41,21 +54,22 @@ function buildVoucherDetailsSQL() {
       a.name,
       a.address,
       v.TransactionType,
-      v.order_mode,
+      v.order_number,
       v.Subtotal,
-      DATE(v.Date)
+      DATE(v.Date),
+      sales_type
     ORDER BY invoice_date DESC
   `;
 }
 
-/* ================= GET VOUCHER DETAILS ================= */
+/* ================= GET SALES REPORT DATA ================= */
 router.get("/sales-report", (req, res) => {
   const sql = buildVoucherDetailsSQL();
 
   db.query(sql, (err, results) => {
     if (err) {
-      console.error("VoucherDetails GET error:", err);
-      return res.status(500).json({ success: false });
+      console.error("Sales Report GET error:", err);
+      return res.status(500).json({ success: false, error: err.message });
     }
 
     const data = results.map((r, i) => ({
