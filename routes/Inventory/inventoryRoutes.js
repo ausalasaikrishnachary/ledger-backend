@@ -427,7 +427,7 @@ router.get('/batches/check-batch-number', async (req, res) => {
 //       opening_stock: opening_stock || 0,
 //       stock_in: 0,
 //       stock_out: 0,
-//       cost_price: price || 0,
+//       min_sale_price: price || 0,
 //       selling_price: price || 0,
 //       purchase_price: price || 0,
 //       mrp: price || 0,
@@ -445,7 +445,7 @@ router.get('/batches/check-batch-number', async (req, res) => {
 //     const insertBatchQuery = `
 //       INSERT INTO batches (
 //         product_id, batch_number, group_by, mfg_date, exp_date,
-//         quantity, opening_stock, stock_in, stock_out, cost_price,
+//         quantity, opening_stock, stock_in, stock_out, min_sale_price,
 //         selling_price, purchase_price, mrp, batch_price, barcode,
 //         created_at, updated_at
 //       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
@@ -461,7 +461,7 @@ router.get('/batches/check-batch-number', async (req, res) => {
 //       batchData.opening_stock,
 //       batchData.stock_in,
 //       batchData.stock_out,
-//       batchData.cost_price,
+//       batchData.min_sale_price,
 //       batchData.selling_price,
 //       batchData.purchase_price,
 //       batchData.mrp,
@@ -572,7 +572,7 @@ router.post('/products', async (req, res) => {
           parseFloat(batch.opening_stock || quantity),
           parseFloat(batch.stock_in || 0),
           parseFloat(batch.stock_out || 0),
-          parseFloat(batch.cost_price || 0),
+          parseFloat(batch.min_sale_price || 0),
           parseFloat(batch.selling_price || 0),
           parseFloat(batch.purchase_price || 0),
           parseFloat(batch.mrp || 0),
@@ -586,7 +586,7 @@ router.post('/products', async (req, res) => {
       const batchSql = `
         INSERT INTO batches 
         (product_id, batch_number, group_by, mfg_date, exp_date, quantity, opening_stock, stock_in, stock_out, 
-         cost_price, selling_price, purchase_price, mrp, batch_price, barcode, created_at, updated_at)
+         min_sale_price, selling_price, purchase_price, mrp, batch_price, barcode, created_at, updated_at)
         VALUES ?
       `;
       await db.promise().query(batchSql, [batchValues]);
@@ -611,7 +611,7 @@ router.post('/products', async (req, res) => {
         openingStock,
         stockIn,
         stockOut,
-        0, // cost_price
+        0, // min_sale_price
         parseFloat(data.price || 0), // selling_price
         0, // purchase_price
         parseFloat(data.price || 0), // mrp
@@ -624,7 +624,7 @@ router.post('/products', async (req, res) => {
       const batchSql = `
         INSERT INTO batches 
         (product_id, batch_number, group_by, mfg_date, exp_date, quantity, opening_stock, stock_in, stock_out, 
-         cost_price, selling_price, purchase_price, mrp, batch_price, barcode, created_at, updated_at)
+         min_sale_price, selling_price, purchase_price, mrp, batch_price, barcode, created_at, updated_at)
         VALUES (?)
       `;
       await db.promise().query(batchSql, [defaultBatch]);
@@ -726,7 +726,7 @@ router.put('/products/:id', async (req, res) => {
               purchase_price: productPurchasePrice, // USE product purchase_price
           stock_in: parseFloat(batch.stock_in || 0),
           stock_out: parseFloat(batch.stock_out || 0),
-          cost_price: parseFloat(batch.cost_price || 0),
+          min_sale_price: parseFloat(batch.min_sale_price || 0),
           selling_price: parseFloat(batch.selling_price || 0),
           purchase_price: parseFloat(batch.purchase_price || 0),
           mrp: parseFloat(batch.mrp || 0),
@@ -744,7 +744,7 @@ router.put('/products/:id', async (req, res) => {
           const updateSql = `
             UPDATE batches SET 
               batch_number = ?, group_by = ?, mfg_date = ?, exp_date = ?, quantity = ?, 
-              opening_stock = ?, stock_in = ?, stock_out = ?, cost_price = ?, selling_price = ?, 
+              opening_stock = ?, stock_in = ?, stock_out = ?, min_sale_price = ?, selling_price = ?, 
               purchase_price = ?, mrp = ?, batch_price = ?, barcode = ?, updated_at = ?
             WHERE id = ?
           `;
@@ -752,7 +752,7 @@ router.put('/products/:id', async (req, res) => {
             batchData.batch_number, batchData.group_by,
             batchData.mfg_date, batchData.exp_date, batchData.quantity,
             batchData.opening_stock, batchData.stock_in, batchData.stock_out,
-            batchData.cost_price, batchData.selling_price, batchData.purchase_price,
+            batchData.min_sale_price, batchData.selling_price, batchData.purchase_price,
             batchData.mrp, batchData.batch_price, batchData.barcode, batchData.updated_at,
             parseInt(batch.id)
           ];
@@ -763,7 +763,7 @@ router.put('/products/:id', async (req, res) => {
           const insertSql = `
             INSERT INTO batches (
               product_id, batch_number, group_by, mfg_date, exp_date, quantity, opening_stock, 
-              stock_in, stock_out, cost_price, selling_price, purchase_price, mrp, batch_price, 
+              stock_in, stock_out, min_sale_price, selling_price, purchase_price, mrp, batch_price, 
               barcode, created_at, updated_at
             ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
           `;
@@ -771,7 +771,7 @@ router.put('/products/:id', async (req, res) => {
             productId, batchData.batch_number, batchData.group_by,
             batchData.mfg_date, batchData.exp_date, batchData.quantity,
             batchData.opening_stock, batchData.stock_in, batchData.stock_out,
-            batchData.cost_price, batchData.selling_price, batchData.purchase_price,
+            batchData.min_sale_price, batchData.selling_price, batchData.purchase_price,
             batchData.mrp, batchData.batch_price, batchData.barcode,
             new Date(), batchData.updated_at
           ];
@@ -812,7 +812,7 @@ router.put('/products/:id', async (req, res) => {
         opening_stock: openingStockValue,
         stock_in: 0,
         stock_out: 0,
-        cost_price: parseFloat(data.price || 0),
+        min_sale_price: parseFloat(data.price || 0),
         selling_price: parseFloat(data.price || 0),
         purchase_price: parseFloat(data.price || 0),
         mrp: parseFloat(data.price || 0),
@@ -826,13 +826,13 @@ router.put('/products/:id', async (req, res) => {
       if (existingDefault.length > 0) {
         const updateSql = `
           UPDATE batches SET 
-            quantity = ?, opening_stock = ?, cost_price = ?, selling_price = ?, 
+            quantity = ?, opening_stock = ?, min_sale_price = ?, selling_price = ?, 
             purchase_price = ?, mrp = ?, batch_price = ?, updated_at = ?
           WHERE product_id = ? AND batch_number = "DEFAULT"
         `;
         const values = [
           batchData.quantity, batchData.opening_stock,
-          batchData.cost_price, batchData.selling_price,
+          batchData.min_sale_price, batchData.selling_price,
           batchData.purchase_price, batchData.mrp,
           batchData.batch_price, batchData.updated_at,
           productId
@@ -843,7 +843,7 @@ router.put('/products/:id', async (req, res) => {
         const insertSql = `
           INSERT INTO batches (
             product_id, batch_number, group_by, mfg_date, exp_date, quantity, opening_stock,
-            stock_in, stock_out, cost_price, selling_price, purchase_price, mrp, batch_price,
+            stock_in, stock_out, min_sale_price, selling_price, purchase_price, mrp, batch_price,
             barcode, created_at, updated_at
           ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         `;
@@ -851,7 +851,7 @@ router.put('/products/:id', async (req, res) => {
           productId, batchData.batch_number, batchData.group_by,
           batchData.mfg_date, batchData.exp_date, batchData.quantity,
           batchData.opening_stock, batchData.stock_in, batchData.stock_out,
-          batchData.cost_price, batchData.selling_price, batchData.purchase_price,
+          batchData.min_sale_price, batchData.selling_price, batchData.purchase_price,
           batchData.mrp, batchData.batch_price, batchData.barcode,
           new Date(), batchData.updated_at
         ];
@@ -1031,7 +1031,7 @@ router.get('/products/:id/with-batches', async (req, res) => {
         b.stock_in AS batch_stock_in,
         b.stock_out AS batch_stock_out,
         (b.opening_stock + b.stock_in - b.stock_out) AS current_stock,
-        b.cost_price,
+        b.min_sale_price,
         b.selling_price,
         b.purchase_price,
         b.mrp,
@@ -1067,7 +1067,7 @@ router.get('/products/:id/with-batches', async (req, res) => {
             stock_in: row.batch_stock_in,
             stock_out: row.batch_stock_out,
             current_stock: row.current_stock,
-            cost_price: row.cost_price,
+            min_sale_price: row.min_sale_price,
             selling_price: row.selling_price,
             purchase_price: row.purchase_price,
             mrp: row.mrp,
