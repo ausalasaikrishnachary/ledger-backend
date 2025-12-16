@@ -4,10 +4,6 @@ const cron = require('node-cron'); // ✅ Move cron to top (only declare once)
 const app = express();
 
 
-const salespersonScoreRoutes = require('./routes/salespersonScoreRoutes');
-
-require("dotenv").config();
-
 
 
 const salespersonScoreRoutes = require('./routes/salespersonScoreRoutes');
