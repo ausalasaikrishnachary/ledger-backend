@@ -436,4 +436,120 @@ router.put('/update-approval-status/:order_number', async (req, res) => {
 
 
 
+router.put("/items/:item_id/approve", async (req, res) => {
+  const { item_id } = req.params;
+  const { approval_status } = req.body;
+
+  console.log(`📝 Updating item approval status: ${item_id} -> ${approval_status}`);
+
+  // Validate approval_status
+  if (!approval_status || !["approved", "rejected", "pending"].includes(approval_status)) {
+    return res.status(400).json({
+      error: "Invalid approval_status. Must be 'approved', 'rejected', or 'pending'",
+    });
+  }
+
+  try {
+    // First, check if item exists
+    const [itemRows] = await db.promise().query(
+      "SELECT * FROM order_items WHERE id = ?",
+      [item_id]
+    );
+
+    if (itemRows.length === 0) {
+      return res.status(404).json({
+        error: "Order item not found",
+      });
+    }
+
+    const item = itemRows[0];
+    const order_number = item.order_number;
+
+    // Update the item's approval status
+    const updateQuery = `
+      UPDATE order_items 
+      SET approval_status = ?, updated_at = NOW()
+      WHERE id = ?
+    `;
+
+    const [result] = await db.promise().query(updateQuery, [
+      approval_status,
+      item_id,
+    ]);
+
+    if (result.affectedRows === 0) {
+      return res.status(404).json({
+        error: "Item not found or no changes made",
+      });
+    }
+
+    console.log(`✅ Item approval status updated for item ID: ${item_id}`);
+
+    // Get updated item details
+    const [updatedItemRows] = await db.promise().query(
+      "SELECT * FROM order_items WHERE id = ?",
+      [item_id]
+    );
+
+    // Check if all items in the order have the same approval status
+    const [allItems] = await db.promise().query(
+      "SELECT approval_status FROM order_items WHERE order_number = ?",
+      [order_number]
+    );
+
+    // Determine if we should update the parent order's approval status
+    let orderApprovalStatus = null;
+    
+    if (allItems.length > 0) {
+      const allApproved = allItems.every(item => item.approval_status === "approved");
+      const allRejected = allItems.every(item => item.approval_status === "rejected");
+      const anyPending = allItems.some(item => item.approval_status === "pending" || !item.approval_status);
+      const mixedStatus = allItems.some(item => item.approval_status === "approved") && 
+                         allItems.some(item => item.approval_status === "rejected");
+
+      if (allApproved) {
+        orderApprovalStatus = "approved";
+      } else if (allRejected) {
+        orderApprovalStatus = "rejected";
+      } else if (mixedStatus) {
+        orderApprovalStatus = "partially_approved";
+      } else if (anyPending) {
+        orderApprovalStatus = "pending";
+      }
+    }
+
+    // Update parent order's approval status if needed
+    if (orderApprovalStatus) {
+      await db.promise().query(
+        "UPDATE orders SET approval_status = ?, updated_at = NOW() WHERE order_number = ?",
+        [orderApprovalStatus, order_number]
+      );
+      
+      console.log(`📦 Parent order ${order_number} approval status updated to: ${orderApprovalStatus}`);
+    }
+
+    res.json({
+      success: true,
+      message: `Item ${approval_status} successfully`,
+      data: {
+        item_id,
+        approval_status,
+        order_number,
+        updated_item: updatedItemRows[0],
+        order_approval_status: orderApprovalStatus
+      }
+    });
+
+  } catch (err) {
+    console.error("❌ Error updating item approval status:", err);
+    
+    res.status(500).json({
+      error: "Failed to update item approval status",
+      details: err.message,
+    });
+  }
+});
+
+
+
 module.exports = router;
