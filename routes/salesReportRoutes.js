@@ -3,7 +3,6 @@ const router = express.Router();
 const db = require("../db");
 const excelJS = require("exceljs");
 const PDFDocument = require("pdfkit");
-
 /* ================= SALES REPORT HELPER QUERY ================= */
 function buildVoucherDetailsSQL() {
   return `
@@ -31,21 +30,17 @@ function buildVoucherDetailsSQL() {
       SUM(vd.total) AS total,
       GROUP_CONCAT(DISTINCT v.InvoiceNumber SEPARATOR ', ') AS invoice_numbers,
       -- Determine sales type: 
-      -- Pakka = ONLY TransactionType = 'Sales'
-      -- Kacha = ONLY TransactionType = 'Stock Transfer' AND order_number IS NULL/empty
+      -- Pakka = TransactionType = 'Sales' (sales with invoice)
+      -- Kacha = TransactionType = 'Stock Transfer' (direct sales without invoice)
       CASE 
         WHEN v.TransactionType = 'Sales' THEN 'pakka'
-        WHEN v.TransactionType = 'Stock Transfer' AND (v.order_number IS NULL OR v.order_number = '') THEN 'kacha'
+        WHEN v.TransactionType = 'Stock Transfer' THEN 'kacha'
+        ELSE 'other'
       END AS sales_type
     FROM voucherdetails vd
     LEFT JOIN voucher v ON vd.voucher_id = v.VoucherID
     LEFT JOIN accounts a ON v.staffid = a.id
     WHERE v.TransactionType IN ('Sales', 'Stock Transfer')
-    AND (
-      v.TransactionType = 'Sales' 
-      OR 
-      (v.TransactionType = 'Stock Transfer' AND (v.order_number IS NULL OR v.order_number = ''))
-    )
     GROUP BY 
       vd.product_id,
       vd.batch,
@@ -61,7 +56,6 @@ function buildVoucherDetailsSQL() {
     ORDER BY invoice_date DESC
   `;
 }
-
 /* ================= GET SALES REPORT DATA ================= */
 router.get("/sales-report", (req, res) => {
   const sql = buildVoucherDetailsSQL();
