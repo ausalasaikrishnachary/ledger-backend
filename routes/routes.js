@@ -408,89 +408,104 @@ router.post('/receipts', upload.single('transaction_proof'), async (req, res) =>
     // ---------------------------------------------------
     // 6️⃣ STAFF INCENTIVE CALCULATION (Only for transactions with order_number)
     // ---------------------------------------------------
-    if (safeTransactionType === "Receipt" && safeInvoiceNumber && originalInvoiceRow) {
-      console.log("🔍 Processing staff incentive for invoice:", safeInvoiceNumber);
-      
-      const staffIdFromTransfer = originalInvoiceRow.staffid;
-      const transactionType = originalInvoiceRow.TransactionType;
-      const orderNumber = originalInvoiceRow.order_number;
-      
-      console.log("📊 Transaction Row Found:", {
-        invoiceNumber: safeInvoiceNumber,
-        transactionType: transactionType,
-        order_number: orderNumber,
-        staff_id_from_transfer: staffIdFromTransfer,
-        staff_incentive_percentage: originalInvoiceRow.staff_incentive,
-        receipt_paid_amount: receiptAmount
-      });
+if (safeTransactionType === "Receipt" && safeInvoiceNumber) {
+  console.log("🔍 Looking for matching transaction with InvoiceNumber:", safeInvoiceNumber);
+  
+  // Find transaction with order_number
+  const [transactionRows] = await connection.promise().query(
+    `SELECT staffid, staff_incentive, TransactionType, order_number 
+     FROM voucher 
+     WHERE (TransactionType = 'Stock Transfer' OR TransactionType = 'Sales')
+     AND InvoiceNumber = ? 
+     LIMIT 1`,
+    [safeInvoiceNumber]
+  );
 
-      // IMPORTANT: Only proceed if order_number exists
-      if (orderNumber) {
-        console.log("✅ Order number exists, proceeding with staff incentive calculation");
+  if (transactionRows.length > 0) {
+    const transactionRow = transactionRows[0];
+    const staffIdFromTransfer = transactionRow.staffid;
+    const transactionType = transactionRow.TransactionType;
+    const orderNumber = transactionRow.order_number;
+    
+    console.log("📊 Transaction Row Found:", {
+      invoiceNumber: safeInvoiceNumber,
+      transactionType: transactionType,
+      order_number: orderNumber,
+      staff_id_from_transfer: staffIdFromTransfer,
+      staff_incentive_percentage: transactionRow.staff_incentive,
+      receipt_paid_amount: receiptAmount
+    });
+
+    // IMPORTANT: Only proceed if order_number exists
+    if (orderNumber) {
+      console.log("✅ Order number exists, proceeding with staff incentive calculation");
+      
+      if (staffIdFromTransfer) {
+        let staffIncentivePercentage = 0;
         
-        if (staffIdFromTransfer) {
-          let staffIncentivePercentage = 0;
-          
-          if (originalInvoiceRow.staff_incentive !== null && originalInvoiceRow.staff_incentive !== undefined) {
-            staffIncentivePercentage = parseFloat(originalInvoiceRow.staff_incentive);
-          }
-          
-          console.log("ℹ️ Staff Incentive Percentage from transaction:", staffIncentivePercentage);
+        if (transactionRow.staff_incentive !== null && transactionRow.staff_incentive !== undefined) {
+          staffIncentivePercentage = parseFloat(transactionRow.staff_incentive);
+        }
+        
+        console.log("ℹ️ Staff Incentive Percentage from transaction:", staffIncentivePercentage);
 
-          if (staffIncentivePercentage > 0) {
-            const calculatedIncentive = (receiptAmount * staffIncentivePercentage) / 100;
-            const roundedIncentive = parseFloat(calculatedIncentive.toFixed(2));
+        if (staffIncentivePercentage > 0) {
+          const calculatedIncentive = (receiptAmount * staffIncentivePercentage) / 100;
+          const roundedIncentive = parseFloat(calculatedIncentive.toFixed(2));
+          
+          console.log("💰 Incentive Calculation:", {
+            receiptAmount: receiptAmount,
+            staffIncentivePercentage: staffIncentivePercentage + "%",
+            calculatedIncentive: roundedIncentive
+          });
+
+          const [accountExists] = await connection.promise().query(
+            `SELECT id, staff_incentive, name FROM accounts WHERE id = ?`,
+            [staffIdFromTransfer]
+          );
+
+          console.log("🔍 Looking for staff in accounts table with ID:", staffIdFromTransfer);
+          console.log("🔍 Account found:", accountExists.length > 0 ? accountExists[0] : "No account found");
+
+          if (accountExists.length > 0) {
+            const currentIncentive = accountExists[0].staff_incentive !== null 
+              ? parseFloat(accountExists[0].staff_incentive) || 0 
+              : 0;
             
-            console.log("💰 Incentive Calculation:", {
-              receiptAmount: receiptAmount,
-              staffIncentivePercentage: staffIncentivePercentage + "%",
-              calculatedIncentive: roundedIncentive
-            });
-
-            const [accountExists] = await connection.promise().query(
-              `SELECT id, staff_incentive, name FROM accounts WHERE id = ?`,
-              [staffIdFromTransfer]
+            const newTotalIncentive = currentIncentive + roundedIncentive;
+            const staffName = accountExists[0].name || "Unknown";
+            
+            await connection.promise().execute(
+              `UPDATE accounts SET staff_incentive = ? WHERE id = ?`,
+              [newTotalIncentive, staffIdFromTransfer]
             );
-
-            console.log("🔍 Looking for staff in accounts table with ID:", staffIdFromTransfer);
-            console.log("🔍 Account found:", accountExists.length > 0 ? accountExists[0] : "No account found");
-
-            if (accountExists.length > 0) {
-              const currentIncentive = accountExists[0].staff_incentive !== null 
-                ? parseFloat(accountExists[0].staff_incentive) || 0 
-                : 0;
-              
-              const newTotalIncentive = currentIncentive + roundedIncentive;
-              const staffName = accountExists[0].name || "Unknown";
-              
-              await connection.promise().execute(
-                `UPDATE accounts SET staff_incentive = ? WHERE id = ?`,
-                [newTotalIncentive, staffIdFromTransfer]
-              );
-              
-              console.log("✅ Incentive added to staff account:", {
-                accounts_id: staffIdFromTransfer,
-                staff_name: staffName,
-                transaction_type: transactionType,
-                order_number: orderNumber,
-                previous_incentive: currentIncentive,
-                added_incentive: roundedIncentive,
-                new_total_incentive: newTotalIncentive
-              });
-            } else {
-              console.log("❌ Staff not found in accounts table with ID:", staffIdFromTransfer);
-            }
+            
+            console.log("✅ Incentive added to staff account:", {
+              accounts_id: staffIdFromTransfer,
+              staff_name: staffName,
+              transaction_type: transactionType,
+              order_number: orderNumber,
+              previous_incentive: currentIncentive,
+              added_incentive: roundedIncentive,
+              new_total_incentive: newTotalIncentive
+            });
           } else {
-            console.log("ℹ️ No staff_incentive percentage found or it's 0 in transaction row");
+            console.log("❌ Staff not found in accounts table with ID:", staffIdFromTransfer);
           }
         } else {
-          console.log("⚠️ No staffid found in transaction row");
+          console.log("ℹ️ No staff_incentive percentage found or it's 0 in transaction row");
         }
       } else {
-        console.log("❌ Order number is NULL/empty. Staff incentive calculation SKIPPED.");
-        console.log("ℹ️ Only transactions with order_number qualify for staff incentives");
+        console.log("⚠️ No staffid found in transaction row");
       }
+    } else {
+      console.log("❌ Order number is NULL/empty. Staff incentive calculation SKIPPED.");
+      console.log("ℹ️ Only transactions with order_number qualify for staff incentives");
     }
+  } else {
+    console.log("⚠️ No matching Stock Transfer or Sales found for InvoiceNumber:", safeInvoiceNumber);
+  }
+}
 
     await connection.promise().commit();
 

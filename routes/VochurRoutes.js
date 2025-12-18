@@ -2093,7 +2093,7 @@ router.post("/transaction", (req, res) => {
                        transactionData.transactionType || 
                        "Sales";
 
-  // Normalize transaction type for comparison
+  // Normalize for comparison
   const normalizedType = transactionType.toLowerCase().trim();
   
   // Check if this should be considered as stock transfer
@@ -2107,7 +2107,6 @@ router.post("/transaction", (req, res) => {
     console.log("⚠️ Stock Transfer specified but no order number - Reverting to Sales");
     transactionType = "Sales";
   }
-  // If it's Sales with order number, keep it as Sales (not converting to stock transfer)
 
   console.log("Processing as:", transactionType);
   console.log("Order Number:", orderNumber);
@@ -2518,6 +2517,8 @@ const processTransaction = async (transactionData, transactionType, connection) 
     InvoiceNumber: invoiceNumber,
     order_number: orderNumber, 
     order_mode: orderMode,
+        due_date: transactionData.due_date || null,
+
     Date: transactionData.Date || new Date().toISOString().split("T")[0],
 
     PaymentTerms: transactionData.PaymentTerms || "Immediate",
@@ -2843,7 +2844,7 @@ const processTransaction = async (transactionData, transactionType, connection) 
   }
 
   // UNPAID AMOUNT UPDATE FOR SALES AND STOCK TRANSFER WITH ORDER NUMBER
-  // Update accounts table for Sales AND stock transfer transactions with order number
+  // Update accounts table for BOTH Sales AND stock transfer transactions with order number
   if ((transactionType === "Sales" || transactionType === "stock transfer") && partyID && orderNumber) {
     console.log(`💰 UNPAID AMOUNT UPDATE - ${transactionType} with order number detected`);
     console.log(`   PartyID: ${partyID}, TotalAmount: ${grandTotal}, Order Number: ${orderNumber}`);
