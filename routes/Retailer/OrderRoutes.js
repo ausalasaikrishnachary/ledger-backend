@@ -154,7 +154,7 @@ router.post("/create-complete-order", (req, res) => {
         // ---------------------------------------------------
         const orderItemQuery = `
           INSERT INTO order_items (
-            order_number, item_name, product_id, mrp, sale_price, price, quantity,
+            order_number, item_name, product_id, mrp, sale_price, edited_sale_price,credit_charge,customer_sale_price,final_amount,quantity,
             total_amount, discount_percentage, discount_amount, taxable_amount,
             tax_percentage, tax_amount, item_total, credit_period, credit_percentage,
             sgst_percentage, sgst_amount, cgst_percentage, cgst_amount,
@@ -168,7 +168,10 @@ router.post("/create-complete-order", (req, res) => {
           item.product_id,
           item.mrp,
           item.sale_price,
-          item.price,
+          item.edited_sale_price,
+          item.credit_charge,
+          item.customer_sale_price,
+          item.final_amount,
           item.quantity,
           item.total_amount,
           item.discount_percentage,
