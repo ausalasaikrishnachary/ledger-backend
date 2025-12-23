@@ -2093,13 +2093,10 @@ router.post("/transaction", (req, res) => {
                        transactionData.transactionType || 
                        "Sales";
 
-  // Normalize for comparison
   const normalizedType = transactionType.toLowerCase().trim();
   
-  // Check if this should be considered as stock transfer
   const orderNumber = transactionData.orderNumber || transactionData.order_number || null;
   
-  // If user explicitly sends "stock transfer" or "Stock Transfer" AND has order number
   if ((normalizedType === "stock transfer" || normalizedType === "stocktransfer") && orderNumber) {
     console.log("🔄 Stock Transfer detected with order number");
     transactionType = "stock transfer"; // Keep as stock transfer
@@ -2204,6 +2201,10 @@ const processTransaction = async (transactionData, transactionType, connection) 
 
   let items = [];
 
+  let totalDiscount = 0;
+  let totalCreditCharge = 0;
+
+
   if (Array.isArray(transactionData.items)) items = transactionData.items;
   else if (Array.isArray(transactionData.batch_details)) items = transactionData.batch_details;
   else if (Array.isArray(transactionData.batchDetails)) items = transactionData.batchDetails;
@@ -2213,7 +2214,12 @@ const processTransaction = async (transactionData, transactionType, connection) 
 items = items.map((i) => {
   const itemStaffIncentive = parseFloat(i.staff_incentive) || 0;
   const quantity = parseFloat(i.quantity) || 1;  // Get quantity
-  
+
+    const discountAmount = parseFloat(i.discount_amount) || 0;
+  const creditCharge = parseFloat(i.credit_charge) || 0;
+totalDiscount += discountAmount;  
+totalCreditCharge += creditCharge; // DON'T multiply by quantity
+
   if (isKacha) {
     console.log(`🔄 Converting item ${i.product} to KACHA mode - removing GST`);
     return {
@@ -2223,6 +2229,8 @@ items = items.map((i) => {
       quantity: quantity,
       price: parseFloat(i.price) || 0,
       discount: parseFloat(i.discount) || 0,
+         discount_amount: discountAmount,
+      credit_charge: creditCharge,
       gst: 0,
       cgst: 0,
       sgst: 0,
@@ -2250,6 +2258,8 @@ items = items.map((i) => {
       quantity: quantity,
       price: parseFloat(i.price) || 0,
       discount: parseFloat(i.discount) || 0,
+          discount_amount: discountAmount,
+      credit_charge: creditCharge,
       gst: gstPercentage,
       cgst: cgstToStore,  // NEW: Stores 5.00 (2.5 × 2)
       sgst: sgstToStore,  // NEW: Stores 5.00 (2.5 × 2)
@@ -2466,7 +2476,7 @@ items = items.map((i) => {
                    items.reduce((sum, i) => sum + i.total, 0);
     
     totalGST = 0;
-    grandTotal = taxableAmount;
+     grandTotal = taxableAmount + totalCreditCharge; // Include credit charge
     
   } else {
     taxableAmount = parseFloat(transactionData.BasicAmount) ||
@@ -2485,7 +2495,7 @@ items = items.map((i) => {
     
     grandTotal = parseFloat(transactionData.TotalAmount) ||
                  parseFloat(transactionData.grandTotal) ||
-                 taxableAmount + totalGST;
+                 taxableAmount + totalGST + totalCreditCharge; // Include credit charge
   }
 
   console.log(`💰 Totals - Taxable: ${taxableAmount}, GST: ${totalGST}, Grand Total: ${grandTotal}`);
@@ -2542,7 +2552,8 @@ items = items.map((i) => {
     BillSundryAmount: parseFloat(transactionData.BillSundryAmount) || 0,
     TotalAmount: grandTotal,
     paid_amount: parseFloat(transactionData.paid_amount) || grandTotal,
-
+total_discount: totalDiscount,
+    total_credit_charge: totalCreditCharge,
     AccountID: accountID,
     AccountName: accountName,
     PartyID: partyID,
@@ -2855,58 +2866,110 @@ items = items.map((i) => {
     }
   }
 
-  // UNPAID AMOUNT UPDATE FOR SALES AND STOCK TRANSFER WITH ORDER NUMBER
-  // Update accounts table for BOTH Sales AND stock transfer transactions with order number
-  if ((transactionType === "Sales" || transactionType === "stock transfer") && partyID && orderNumber) {
-    console.log(`💰 UNPAID AMOUNT UPDATE - ${transactionType} with order number detected`);
-    console.log(`   PartyID: ${partyID}, TotalAmount: ${grandTotal}, Order Number: ${orderNumber}`);
+// UNPAID AMOUNT UPDATE FOR SALES AND STOCK TRANSFER WITH ORDER NUMBER
+// Update accounts table for BOTH Sales AND stock transfer transactions with order number
+if ((transactionType === "Sales" || transactionType === "stock transfer") && partyID && orderNumber) {
+  console.log(`💰 UNPAID AMOUNT UPDATE - ${transactionType} with order number detected`);
+  console.log(`   PartyID: ${partyID}, TotalAmount: ${grandTotal}, Order Number: ${orderNumber}`);
+  
+  try {
+    // Check if accounts table has unpaid_amount column
+    const tableCheck = await queryPromise(
+      connection,
+      "SHOW COLUMNS FROM accounts LIKE 'unpaid_amount'"
+    );
     
-    try {
-      // Check if accounts table has unpaid_amount column
-      const tableCheck = await queryPromise(
+    if (tableCheck.length === 0) {
+      console.warn("⚠️ 'unpaid_amount' column not found in accounts table.");
+    } else {
+      // First check if credit_limit column exists
+      const creditLimitCheck = await queryPromise(
         connection,
-        "SHOW COLUMNS FROM accounts LIKE 'unpaid_amount'"
+        "SHOW COLUMNS FROM accounts LIKE 'credit_limit'"
       );
       
-      if (tableCheck.length === 0) {
-        console.warn("⚠️ 'unpaid_amount' column not found in accounts table.");
+      // Get current account data including credit_limit
+      let currentAccount;
+      if (creditLimitCheck.length > 0) {
+        currentAccount = await queryPromise(
+          connection,
+          "SELECT unpaid_amount, credit_limit FROM accounts WHERE id = ?",
+          [partyID]
+        );
       } else {
-        // Get current unpaid amount
-        const currentAccount = await queryPromise(
+        currentAccount = await queryPromise(
           connection,
           "SELECT unpaid_amount FROM accounts WHERE id = ?",
           [partyID]
         );
-        
-        if (currentAccount.length === 0) {
-          console.warn(`⚠️ Account with id ${partyID} not found in accounts table.`);
-        } else {
-          const currentUnpaid = parseFloat(currentAccount[0].unpaid_amount) || 0;
-          const newUnpaid = currentUnpaid + grandTotal;
-          
-          // Update the unpaid_amount in accounts table only
-          await queryPromise(
-            connection,
-            `
-            UPDATE accounts 
-            SET unpaid_amount = ?,
-                updated_at = NOW()
-            WHERE id = ?
-            `,
-            [newUnpaid, partyID]
-          );
-          
-          console.log(`✅ UNPAID AMOUNT UPDATED IN ACCOUNTS TABLE`);
-          console.log(`   PartyID: ${partyID}`);
-          console.log(`   Previous Unpaid: ${currentUnpaid}`);
-          console.log(`   Added Amount: ${grandTotal}`);
-          console.log(`   New Unpaid: ${newUnpaid}`);
-        }
       }
-    } catch (error) {
-      console.error(`❌ ERROR updating unpaid amount:`, error.message);
+      
+      if (currentAccount.length === 0) {
+        console.warn(`⚠️ Account with id ${partyID} not found in accounts table.`);
+      } else {
+        const currentUnpaid = parseFloat(currentAccount[0].unpaid_amount) || 0;
+        const newUnpaid = currentUnpaid + grandTotal;
+        
+        // Check if balance_amount column exists
+        const balanceCheck = await queryPromise(
+          connection,
+          "SHOW COLUMNS FROM accounts LIKE 'balance_amount'"
+        );
+        
+        let updateQuery, updateParams;
+        
+        if (balanceCheck.length > 0 && creditLimitCheck.length > 0) {
+          // Both balance_amount and credit_limit columns exist
+          const creditLimit = parseFloat(currentAccount[0].credit_limit) || 0;
+          const newBalanceAmount = creditLimit - newUnpaid;
+          
+          updateQuery = `
+          UPDATE accounts 
+          SET unpaid_amount = ?,
+              balance_amount = ?,
+              updated_at = NOW()
+          WHERE id = ?
+          `;
+          updateParams = [newUnpaid, newBalanceAmount, partyID];
+          
+          const oldBalanceAmount = creditLimit - currentUnpaid;
+          console.log(`✅ BALANCE AMOUNT CALCULATED - Old: ${oldBalanceAmount}, New: ${newBalanceAmount}, Difference: -${grandTotal}`);
+        } else if (balanceCheck.length > 0 && creditLimitCheck.length === 0) {
+          // balance_amount exists but credit_limit doesn't - can't calculate balance
+          console.warn("⚠️ 'balance_amount' column exists but 'credit_limit' column not found. Cannot calculate balance.");
+          updateQuery = `
+          UPDATE accounts 
+          SET unpaid_amount = ?,
+              updated_at = NOW()
+          WHERE id = ?
+          `;
+          updateParams = [newUnpaid, partyID];
+        } else {
+          // balance_amount column doesn't exist, update only unpaid_amount
+          updateQuery = `
+          UPDATE accounts 
+          SET unpaid_amount = ?,
+              updated_at = NOW()
+          WHERE id = ?
+          `;
+          updateParams = [newUnpaid, partyID];
+          console.log("ℹ️ 'balance_amount' column not found. Only updating unpaid_amount.");
+        }
+        
+        // Update the accounts table
+        await queryPromise(connection, updateQuery, updateParams);
+        
+        console.log(`✅ UNPAID AMOUNT UPDATED IN ACCOUNTS TABLE`);
+        console.log(`   PartyID: ${partyID}`);
+        console.log(`   Previous Unpaid: ${currentUnpaid}`);
+        console.log(`   Added Amount: ${grandTotal}`);
+        console.log(`   New Unpaid: ${newUnpaid}`);
+      }
     }
+  } catch (error) {
+    console.error(`❌ ERROR updating unpaid amount:`, error.message);
   }
+}
 
   return {
     voucherId: nextVoucherId,
@@ -2915,6 +2978,8 @@ items = items.map((i) => {
     batchDetails: items,
     taxableAmount,
     totalGST,
+     totalDiscount,
+    totalCreditCharge,
     grandTotal,
     staffIncentive: staffIncentive,
     orderNumber: orderNumber,

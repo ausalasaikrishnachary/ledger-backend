@@ -351,59 +351,96 @@ router.post('/receipts', upload.single('transaction_proof'), async (req, res) =>
       console.log("ℹ️ No original invoice found for InvoiceNumber:", safeInvoiceNumber);
     }
 
-    // ---------------------------------------------------
-    // 5️⃣ UNPAID AMOUNT DEDUCTION (Only for transactions with order_number)
-    // ---------------------------------------------------
-    if (safeTransactionType === "Receipt" && retailer_id) {
-      console.log(`🔍 Checking if unpaid amount deduction is applicable...`);
+  // ---------------------------------------------------
+// 5️⃣ UNPAID AMOUNT DEDUCTION (Only for transactions with order_number)
+// ---------------------------------------------------
+if (safeTransactionType === "Receipt" && retailer_id) {
+  console.log(`🔍 Checking if unpaid amount deduction is applicable...`);
+  
+  try {
+    // Use the stored originalInvoiceRow to check order_number
+    if (originalInvoiceRow && originalInvoiceRow.order_number) {
+      const orderNumber = originalInvoiceRow.order_number;
       
-      try {
-        // Use the stored originalInvoiceRow to check order_number
-        if (originalInvoiceRow && originalInvoiceRow.order_number) {
-          const orderNumber = originalInvoiceRow.order_number;
+      
+      // Check if required columns exist
+      const tableCheck = await connection.promise().query(
+        "SHOW COLUMNS FROM accounts LIKE 'unpaid_amount'"
+      );
+      
+      if (tableCheck[0].length === 0) {
+        console.warn("⚠️ 'unpaid_amount' column not found in accounts table.");
+      } else {
+        // First, check if credit_limit column exists
+        const creditLimitCheck = await connection.promise().query(
+          "SHOW COLUMNS FROM accounts LIKE 'credit_limit'"
+        );
+        
+        // Get current account data
+        const [currentAccount] = await connection.promise().query(
+          "SELECT unpaid_amount, credit_limit FROM accounts WHERE id = ?",
+          [retailer_id]
+        );
+        
+        if (currentAccount.length === 0) {
+          console.warn(`⚠️ Account with id ${retailer_id} not found in accounts table.`);
+        } else {
+          const currentUnpaid = parseFloat(currentAccount[0].unpaid_amount) || 0;
+          const creditLimit = parseFloat(currentAccount[0].credit_limit) || 0;
+          const newUnpaid = currentUnpaid - receiptAmount;
           
-          console.log(`✅ Order number found (${orderNumber}), proceeding with unpaid amount deduction`);
-          console.log(`💰 UNPAID AMOUNT DEDUCTION - PartyID: ${retailer_id}, Amount: ${receiptAmount}`);
+          // Calculate new balance_amount (credit_limit - unpaid_amount)
+          const newBalanceAmount = creditLimit - newUnpaid;
           
-          const tableCheck = await connection.promise().query(
-            "SHOW COLUMNS FROM accounts LIKE 'unpaid_amount'"
+          // Prepare update query based on whether balance_amount column exists
+          let updateQuery, updateParams;
+          
+          // Check if balance_amount column exists
+          const balanceCheck = await connection.promise().query(
+            "SHOW COLUMNS FROM accounts LIKE 'balance_amount'"
           );
           
-          if (tableCheck[0].length === 0) {
-            console.warn("⚠️ 'unpaid_amount' column not found in accounts table.");
+          if (balanceCheck[0].length > 0) {
+            // Column exists, include it in update
+            updateQuery = `
+            UPDATE accounts 
+            SET unpaid_amount = ?,
+                balance_amount = ?,
+                updated_at = NOW()
+            WHERE id = ?
+            `;
+            updateParams = [newUnpaid, newBalanceAmount, retailer_id];
           } else {
-            const [currentAccount] = await connection.promise().query(
-              "SELECT unpaid_amount FROM accounts WHERE id = ?",
-              [retailer_id]
-            );
-            
-            if (currentAccount.length === 0) {
-              console.warn(`⚠️ Account with id ${retailer_id} not found in accounts table.`);
-            } else {
-              const currentUnpaid = parseFloat(currentAccount[0].unpaid_amount) || 0;
-              const newUnpaid = currentUnpaid - receiptAmount;
-              
-              await connection.promise().query(
-                `
-                UPDATE accounts 
-                SET unpaid_amount = ?,
-                    updated_at = NOW()
-                WHERE id = ?
-                `,
-                [newUnpaid, retailer_id]
-              );
-              
-              console.log(`✅ UNPAID AMOUNT UPDATED - Old: ${currentUnpaid}, New: ${newUnpaid}, Difference: -${receiptAmount}`);
-            }
+            // Column doesn't exist, update only unpaid_amount
+            updateQuery = `
+            UPDATE accounts 
+            SET unpaid_amount = ?,
+                updated_at = NOW()
+            WHERE id = ?
+            `;
+            updateParams = [newUnpaid, retailer_id];
+            console.log("⚠️ 'balance_amount' column not found. Only updating unpaid_amount.");
           }
-        } else {
-          console.log(`❌ Order number is NULL/empty. UNPAID AMOUNT DEDUCTION SKIPPED.`);
-          console.log(`ℹ️ Only transactions with order_number qualify for unpaid amount updates`);
+          
+          await connection.promise().query(updateQuery, updateParams);
+          
+          // Log detailed information
+          console.log(`✅ UNPAID AMOUNT UPDATED - Old: ${currentUnpaid}, New: ${newUnpaid}, Difference: -${receiptAmount}`);
+          
+          if (balanceCheck[0].length > 0) {
+            const oldBalanceAmount = creditLimit - currentUnpaid;
+            console.log(`✅ BALANCE AMOUNT UPDATED - Old: ${oldBalanceAmount}, New: ${newBalanceAmount}, Difference: ${receiptAmount}`);
+          }
         }
-      } catch (error) {
-        console.error(`❌ ERROR in unpaid amount deduction check:`, error.message);
       }
+    } else {
+      console.log(`❌ Order number is NULL/empty. UNPAID AMOUNT DEDUCTION SKIPPED.`);
+      console.log(`ℹ️ Only transactions with order_number qualify for unpaid amount updates`);
     }
+  } catch (error) {
+    console.error(`❌ ERROR in unpaid amount deduction check:`, error.message);
+  }
+}
 
     // ---------------------------------------------------
     // 6️⃣ STAFF INCENTIVE CALCULATION (Only for transactions with order_number)
