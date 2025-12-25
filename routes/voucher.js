@@ -855,9 +855,10 @@ router.get('/sales-receipt-totals', (req, res) => {
   const sqlQuery = `
     SELECT 
       COALESCE(SUM(CASE WHEN TransactionType = 'Sales' THEN TotalAmount ELSE 0 END), 0) as totalSales,
-      COALESCE(SUM(CASE WHEN TransactionType = 'Receipt' THEN paid_amount ELSE 0 END), 0) as totalReceipts
+      COALESCE(SUM(CASE WHEN TransactionType = 'Receipt' THEN paid_amount ELSE 0 END), 0) as totalReceipts,
+      COALESCE(SUM(CASE WHEN TransactionType = 'CreditNote' THEN TotalAmount ELSE 0 END), 0) as totalCreditNote
     FROM voucher 
-    WHERE TransactionType IN ('Sales', 'Receipt')
+    WHERE TransactionType IN ('Sales', 'Receipt', 'CreditNote')
   `;
 
   db.query(sqlQuery, (err, results) => {
@@ -872,18 +873,19 @@ router.get('/sales-receipt-totals', (req, res) => {
 
     const totalSales = parseFloat(results[0].totalSales) || 0;
     const totalReceipts = parseFloat(results[0].totalReceipts) || 0;
+    const totalCreditNote = parseFloat(results[0].totalCreditNote) || 0;
 
     res.json({
       success: true,
       data: {
         totalSales: totalSales,
         totalReceipts: totalReceipts,
-        netAmount: totalSales - totalReceipts
+        totalCreditNote: totalCreditNote,
+        netAmount: totalSales - totalReceipts - totalCreditNote
       }
     });
   });
 });
-
 
 router.get('/total-payables', (req, res) => {
   const sqlQuery = `
