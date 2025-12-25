@@ -848,95 +848,213 @@ router.get('/receipts/:id', async (req, res) => {
 });
 
 
+// ------------------------------
+// Get all purchase vouchers
+// ------------------------------
 router.get('/voucher', async (req, res) => {
   try {
-    db.execute(
-      `SELECT 
-         v.*, 
-         a.business_name, 
-         a.name AS payee_name,
-         (
-           SELECT GROUP_CONCAT(DISTINCT v2.InvoiceNumber)
-           FROM voucher v2
-           WHERE v2.VchNo = v.VchNo  -- Use VchNo instead of receipt_number
-           AND v2.TransactionType IN ('Purchase', 'purchase voucher')
-           AND v2.InvoiceNumber IS NOT NULL
-           AND v2.InvoiceNumber != ''
-         ) AS invoice_numbers
-       FROM voucher v
-       LEFT JOIN accounts a ON v.PartyID = a.id
-       WHERE v.TransactionType = 'purchase voucher'
-       ORDER BY v.created_at DESC`,
-      (error, results) => {
-        if (error) {
-          console.error('Database error fetching vouchers (receipts):', error);
-          return res.status(500).json({ error: 'Failed to fetch receipts' });
-        }
+    const query = `
+      SELECT 
+        v.*, 
+        a.business_name, 
+        a.name AS payee_name,
+        (
+          SELECT GROUP_CONCAT(DISTINCT v2.InvoiceNumber)
+          FROM voucher v2
+          WHERE v2.VchNo = v.VchNo
+            AND v2.TransactionType IN ('Purchase', 'purchase voucher')
+            AND v2.InvoiceNumber IS NOT NULL
+            AND v2.InvoiceNumber != ''
+        ) AS invoice_numbers,
 
-        // Convert invoice_numbers string to array
-        const processedResults = results.map(voucher => ({
-          ...voucher,
-          invoice_numbers: voucher.invoice_numbers ? voucher.invoice_numbers.split(',') : []
-        }));
+        COALESCE((
+          SELECT SUM(p.TotalAmount)
+          FROM voucher p
+          WHERE p.PartyID = v.PartyID
+            AND p.TransactionType = 'Purchase'
+            AND p.InvoiceNumber IS NOT NULL
+            AND p.InvoiceNumber != ''
+            AND FIND_IN_SET(p.InvoiceNumber, 
+              COALESCE((
+                SELECT GROUP_CONCAT(DISTINCT v3.InvoiceNumber)
+                FROM voucher v3
+                WHERE v3.VchNo = v.VchNo
+                  AND v3.TransactionType IN ('Purchase', 'purchase voucher')
+                  AND v3.InvoiceNumber IS NOT NULL
+                  AND v3.InvoiceNumber != ''
+              ), '')
+            ) > 0
+        ), 0) AS total_invoice_amount,
 
-        console.log('Receipts fetched from voucher table:', processedResults.length);
-        res.json(processedResults || []);
+        COALESCE((
+          SELECT SUM(p.paid_amount)
+          FROM voucher p
+          WHERE p.PartyID = v.PartyID
+            AND p.TransactionType = 'Purchase'
+            AND p.InvoiceNumber IS NOT NULL
+            AND p.InvoiceNumber != ''
+            AND FIND_IN_SET(p.InvoiceNumber, 
+              COALESCE((
+                SELECT GROUP_CONCAT(DISTINCT v3.InvoiceNumber)
+                FROM voucher v3
+                WHERE v3.VchNo = v.VchNo
+                  AND v3.TransactionType IN ('Purchase', 'purchase voucher')
+                  AND v3.InvoiceNumber IS NOT NULL
+                  AND v3.InvoiceNumber != ''
+              ), '')
+            ) > 0
+        ), 0) AS total_paid_amount,
+
+        COALESCE((
+          SELECT SUM(p.balance_amount)
+          FROM voucher p
+          WHERE p.PartyID = v.PartyID
+            AND p.TransactionType = 'Purchase'
+            AND p.InvoiceNumber IS NOT NULL
+            AND p.InvoiceNumber != ''
+            AND FIND_IN_SET(p.InvoiceNumber, 
+              COALESCE((
+                SELECT GROUP_CONCAT(DISTINCT v3.InvoiceNumber)
+                FROM voucher v3
+                WHERE v3.VchNo = v.VchNo
+                  AND v3.TransactionType IN ('Purchase', 'purchase voucher')
+                  AND v3.InvoiceNumber IS NOT NULL
+                  AND v3.InvoiceNumber != ''
+              ), '')
+            ) > 0
+        ), 0) AS total_balance_amount
+
+      FROM voucher v
+      LEFT JOIN accounts a ON v.PartyID = a.id
+      WHERE v.TransactionType = 'purchase voucher'
+      ORDER BY v.created_at DESC`;
+
+    db.execute(query, (error, results) => {
+      if (error) {
+        console.error('Database error fetching vouchers:', error);
+        return res.status(500).json({ error: 'Failed to fetch vouchers' });
       }
-    );
+
+      const processedResults = results.map(voucher => ({
+        ...voucher,
+        invoice_numbers: voucher.invoice_numbers ? voucher.invoice_numbers.split(',') : [],
+        total_invoice_amount: parseFloat(voucher.total_invoice_amount) || 0,
+        total_paid_amount: parseFloat(voucher.total_paid_amount) || 0,
+        total_balance_amount: parseFloat(voucher.total_balance_amount) || 0
+      }));
+
+      res.json(processedResults || []);
+    });
   } catch (error) {
-    console.error('Error in /receipts route:', error);
-    res.status(500).json({ error: 'Failed to fetch receipts' });
+    console.error('Error in /voucher route:', error);
+    res.status(500).json({ error: 'Server error' });
   }
 });
 
 // ------------------------------
-// Get receipt by ID
+// Get single purchase voucher by ID
 // ------------------------------
 router.get('/voucher/:id', async (req, res) => {
   try {
-    db.execute(
-      `SELECT 
-         v.*, 
-         a.business_name, 
-         a.name AS payee_name,
-         (
-           SELECT GROUP_CONCAT(DISTINCT v2.InvoiceNumber)
-           FROM voucher v2
-           WHERE v2.VchNo = v.VchNo  -- Use VchNo instead of receipt_number
-           AND v2.TransactionType IN ('Purchase', 'purchase voucher')
-           AND v2.InvoiceNumber IS NOT NULL
-           AND v2.InvoiceNumber != ''
-         ) AS invoice_numbers
-       FROM voucher v
-       LEFT JOIN accounts a ON v.PartyID = a.id
-       WHERE v.VoucherID = ? 
-       AND v.TransactionType = 'purchase voucher'`,
-      [req.params.id],
-      (error, results) => {
-        if (error) {
-          console.error('Database error fetching receipt from voucher:', error);
-          return res.status(500).json({ error: 'Failed to fetch receipt' });
-        }
+    const query = `
+      SELECT 
+        v.*, 
+        a.business_name, 
+        a.name AS payee_name,
+        (
+          SELECT GROUP_CONCAT(DISTINCT v2.InvoiceNumber)
+          FROM voucher v2
+          WHERE v2.VchNo = v.VchNo
+            AND v2.TransactionType IN ('Purchase', 'purchase voucher')
+            AND v2.InvoiceNumber IS NOT NULL
+            AND v2.InvoiceNumber != ''
+        ) AS invoice_numbers,
 
-        if (!results || results.length === 0) {
-          return res.status(404).json({ error: 'Receipt not found' });
-        }
+        COALESCE((
+          SELECT SUM(p.TotalAmount)
+          FROM voucher p
+          WHERE p.PartyID = v.PartyID
+            AND p.TransactionType = 'Purchase'
+            AND p.InvoiceNumber IS NOT NULL
+            AND p.InvoiceNumber != ''
+            AND FIND_IN_SET(p.InvoiceNumber, 
+              COALESCE((
+                SELECT GROUP_CONCAT(DISTINCT v3.InvoiceNumber)
+                FROM voucher v3
+                WHERE v3.VchNo = v.VchNo
+                  AND v3.TransactionType IN ('Purchase', 'purchase voucher')
+                  AND v3.InvoiceNumber IS NOT NULL
+                  AND v3.InvoiceNumber != ''
+              ), '')
+            ) > 0
+        ), 0) AS total_invoice_amount,
 
-        // Convert invoice_numbers to array
-        const receipt = {
-          ...results[0],
-          invoice_numbers: results[0].invoice_numbers
-            ? results[0].invoice_numbers.split(',')
-            : []
-        };
+        COALESCE((
+          SELECT SUM(p.paid_amount)
+          FROM voucher p
+          WHERE p.PartyID = v.PartyID
+            AND p.TransactionType = 'Purchase'
+            AND p.InvoiceNumber IS NOT NULL
+            AND p.InvoiceNumber != ''
+            AND FIND_IN_SET(p.InvoiceNumber, 
+              COALESCE((
+                SELECT GROUP_CONCAT(DISTINCT v3.InvoiceNumber)
+                FROM voucher v3
+                WHERE v3.VchNo = v.VchNo
+                  AND v3.TransactionType IN ('Purchase', 'purchase voucher')
+                  AND v3.InvoiceNumber IS NOT NULL
+                  AND v3.InvoiceNumber != ''
+              ), '')
+            ) > 0
+        ), 0) AS total_paid_amount,
 
-        console.log('Receipt fetched from voucher table:', receipt);
-        res.json(receipt);
+        COALESCE((
+          SELECT SUM(p.balance_amount)
+          FROM voucher p
+          WHERE p.PartyID = v.PartyID
+            AND p.TransactionType = 'Purchase'
+            AND p.InvoiceNumber IS NOT NULL
+            AND p.InvoiceNumber != ''
+            AND FIND_IN_SET(p.InvoiceNumber, 
+              COALESCE((
+                SELECT GROUP_CONCAT(DISTINCT v3.InvoiceNumber)
+                FROM voucher v3
+                WHERE v3.VchNo = v.VchNo
+                  AND v3.TransactionType IN ('Purchase', 'purchase voucher')
+                  AND v3.InvoiceNumber IS NOT NULL
+                  AND v3.InvoiceNumber != ''
+              ), '')
+            ) > 0
+        ), 0) AS total_balance_amount
+
+      FROM voucher v
+      LEFT JOIN accounts a ON v.PartyID = a.id
+      WHERE v.VoucherID = ?
+        AND v.TransactionType = 'purchase voucher'`;
+
+    db.execute(query, [req.params.id], (error, results) => {
+      if (error) {
+        console.error('Database error fetching voucher by ID:', error);
+        return res.status(500).json({ error: 'Failed to fetch voucher' });
       }
-    );
+
+      if (!results || results.length === 0) {
+        return res.status(404).json({ error: 'Voucher not found' });
+      }
+
+      const voucher = {
+        ...results[0],
+        invoice_numbers: results[0].invoice_numbers ? results[0].invoice_numbers.split(',') : [],
+        total_invoice_amount: parseFloat(results[0].total_invoice_amount) || 0,
+        total_paid_amount: parseFloat(results[0].total_paid_amount) || 0,
+        total_balance_amount: parseFloat(results[0].total_balance_amount) || 0
+      };
+
+      res.json(voucher);
+    });
   } catch (error) {
-    console.error('Error in /receipts/:id route:', error);
-    res.status(500).json({ error: 'Failed to fetch receipt' });
+    console.error('Error in /voucher/:id route:', error);
+    res.status(500).json({ error: 'Server error' });
   }
 });
 
