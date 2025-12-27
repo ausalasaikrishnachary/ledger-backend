@@ -495,7 +495,7 @@ router.get('/batches/check-batch-number', async (req, res) => {
 
 router.post('/products', async (req, res) => {
   const data = req.body;
-  console.log("📦 Incoming Product Data:", data);
+  console.log("📦 Incoming Product Data:", JSON.stringify(data, null, 2));
 
   // Handle images if provided
   let imagesArray = [];
@@ -506,8 +506,8 @@ router.post('/products', async (req, res) => {
   try {
     console.log('\n========== CREATE PRODUCT REQUEST ==========');
     console.log('Maintain Batch:', data.maintain_batch);
+    console.log('Price (from frontend):', data.price);
     console.log('Purchase Price:', data.purchase_price);
-    console.log('Selling Price:', data.selling_price);
     console.log('MRP:', data.mrp);
     console.log('Opening Stock:', data.opening_stock);
     console.log('Batches Count:', data.batches ? data.batches.length : 0);
@@ -517,24 +517,36 @@ router.post('/products', async (req, res) => {
 
     // Prepare clean product data
     const {
-      batches, // remove batches before inserting product
-      opening_stock,
+      batches,
+      opening_stock, // This is for batches table only
       stock_in,
       stock_out,
       balance_stock,
-      opening_stock_date,
+      opening_stock_date, // This is for batches table only
       ...cleanProduct
     } = data;
 
+    // IMPORTANT: Map frontend fields to database columns correctly
+    // Frontend sends 'price' which should go to 'price' column in products table
+    // Frontend sends 'purchase_price' which should go to 'purchase_price' column
+    // Frontend sends 'mrp' which should go to 'mrp' column
     const productData = {
       ...cleanProduct,
+      // Keep price as price (not selling_price)
+      price: data.price || 0,
       purchase_price: data.purchase_price || 0,
-      selling_price: data.selling_price || 0, // Store in products table
-      mrp: data.mrp || 0, // Store in products table
+      mrp: data.mrp || 0,
       images: JSON.stringify(imagesArray),
       created_at: now,
       updated_at: now,
     };
+
+    console.log('📊 Product data for DB insertion:', {
+      price: productData.price,
+      purchase_price: productData.purchase_price,
+      mrp: productData.mrp,
+      maintain_batch: productData.maintain_batch
+    });
 
     // Insert product into `products`
     const productColumns = Object.keys(productData).join(", ");
@@ -545,46 +557,71 @@ router.post('/products', async (req, res) => {
     const [productInsert] = await db.promise().query(productSql, productValues);
 
     const productId = productInsert.insertId;
-    console.log("✅ Product Created:", productId);
+    console.log("✅ Product Created with ID:", productId);
 
-    // Get product selling price and MRP for batches
-    const productSellingPrice = parseFloat(data.selling_price || 0);
+    // Get product prices for batches
+    const productPrice = parseFloat(data.price || 0);
     const productMRP = parseFloat(data.mrp || 0);
     const productPurchasePrice = parseFloat(data.purchase_price || 0);
+    const productOpeningStock = parseFloat(data.opening_stock || 0);
+
+    console.log('💰 Prices for batches:', {
+      productPrice,
+      productMRP,
+      productPurchasePrice,
+      productOpeningStock
+    });
 
     // ========== Handle Batches ==========
     if (data.maintain_batch && Array.isArray(batches) && batches.length > 0) {
-      // If product maintains batches
+      console.log('📦 Creating batches for maintain_batch=true');
+      
       const batchValues = [];
 
       for (let index = 0; index < batches.length; index++) {
         const batch = batches[index];
-        const quantity = parseFloat(batch.quantity || 0);
-        const barcode =
-          batch.barcode ||
-          `B${Date.now()}${index}${Math.random().toString(36).substr(2, 5)}`;
+        
+        // Calculate quantity from opening stock
+        const openingStock = parseFloat(batch.opening_stock || batch.quantity || productOpeningStock || 0);
+        const stockIn = parseFloat(batch.stock_in || 0);
+        const stockOut = parseFloat(batch.stock_out || 0);
+        const quantity = openingStock + stockIn - stockOut;
 
-        // Use batch selling price if available, otherwise use product selling price
-        const batchSellingPrice = parseFloat(batch.selling_price || productSellingPrice || 0);
+        const barcode = batch.barcode || `B${Date.now()}${index}${Math.random().toString(36).substr(2, 5)}`;
+
+        // Use batch prices if available, otherwise use product prices
+        const batchSellingPrice = parseFloat(batch.selling_price || batch.sellingPrice || productPrice || 0);
         const batchMRP = parseFloat(batch.mrp || productMRP || 0);
-        const batchPurchasePrice = parseFloat(batch.purchase_price || productPurchasePrice || 0);
+        const batchPurchasePrice = parseFloat(batch.purchase_price || batch.purchasePrice || productPurchasePrice || 0);
+        const batchMinSalePrice = parseFloat(batch.min_sale_price || 0);
+
+        console.log(`📦 Batch ${index + 1} data:`, {
+          batchNumber: batch.batch_number,
+          openingStock,
+          quantity,
+          selling_price: batchSellingPrice,
+          mrp: batchMRP,
+          purchase_price: batchPurchasePrice
+        });
 
         batchValues.push([
           productId,
           batch.batch_number,
           data.group_by || "Salescatalog",
-          batch.mfg_date || null,
-          batch.exp_date || null,
+          batch.mfg_date || batch.mfgDate || null,
+          batch.exp_date || batch.expDate || null,
           quantity,
-          parseFloat(batch.opening_stock || quantity),
-          parseFloat(batch.stock_in || 0),
-          parseFloat(batch.stock_out || 0),
-          parseFloat(batch.min_sale_price || 0),
-          batchSellingPrice, // Use calculated selling price
-          batchPurchasePrice, // Use calculated purchase price
-          batchMRP, // Use calculated MRP
-          parseFloat(batch.batch_price || 0),
+          openingStock,
+          stockIn,
+          stockOut,
+          parseFloat(batch.cost_price || 0),
+          batchSellingPrice, // selling_price in batches table
+          batchPurchasePrice, // purchase_price in batches table
+          batchMRP, // mrp in batches table
+          batchMinSalePrice,
+          batchSellingPrice, // batch_price same as selling_price
           barcode,
+          batch.remark || '',
           now,
           now,
         ]);
@@ -592,8 +629,9 @@ router.post('/products', async (req, res) => {
 
       const batchSql = `
         INSERT INTO batches 
-        (product_id, batch_number, group_by, mfg_date, exp_date, quantity, opening_stock, stock_in, stock_out, 
-         min_sale_price, selling_price, purchase_price, mrp, batch_price, barcode, created_at, updated_at)
+        (product_id, batch_number, group_by, mfg_date, exp_date, quantity, opening_stock, 
+         stock_in, stock_out, cost_price, selling_price, purchase_price, mrp, min_sale_price, 
+         batch_price, barcode, remark, created_at, updated_at)
         VALUES ?
       `;
       await db.promise().query(batchSql, [batchValues]);
@@ -601,14 +639,27 @@ router.post('/products', async (req, res) => {
       console.log("✅ Batches Inserted:", batchValues.length);
       console.log("✅ Selling Price in batches:", batchValues.map(b => b[10]));
       console.log("✅ MRP in batches:", batchValues.map(b => b[12]));
+      console.log("✅ Purchase Price in batches:", batchValues.map(b => b[11]));
+      
     } else {
       // If maintain_batch = false, create a default batch
+      console.log('📦 Creating DEFAULT batch for maintain_batch=false');
+      
       const openingStock = parseFloat(data.opening_stock || 0);
       const stockIn = 0;
-      const stockOut = parseFloat(data.stock_out || 0);
-      const balanceStock = openingStock + stockIn - stockOut;
+      const stockOut = 0;
+      const quantity = openingStock + stockIn - stockOut;
 
       const barcode = `DEF${Date.now()}${Math.random().toString(36).substr(2, 5)}`;
+
+      console.log('📦 Default batch data:', {
+        productId,
+        openingStock,
+        quantity,
+        selling_price: productPrice,
+        mrp: productMRP,
+        purchase_price: productPurchasePrice
+      });
 
       const defaultBatch = [
         productId,
@@ -616,43 +667,40 @@ router.post('/products', async (req, res) => {
         data.group_by || "Salescatalog",
         null, // mfg_date
         null, // exp_date
-        balanceStock,
+        quantity,
         openingStock,
         stockIn,
         stockOut,
-        0, // min_sale_price
-        productSellingPrice, // Use product selling price
-        productPurchasePrice, // Use product purchase price
-        productMRP, // Use product MRP
-        productSellingPrice, // batch_price
+        0, // cost_price
+        productPrice, // selling_price in batches table
+        productPurchasePrice, // purchase_price in batches table
+        productMRP, // mrp in batches table
+        parseFloat(data.min_sale_price || 0), // min_sale_price
+        productPrice, // batch_price
         barcode,
+        '', // remark
         now,
         now,
       ];
 
       const batchSql = `
         INSERT INTO batches 
-        (product_id, batch_number, group_by, mfg_date, exp_date, quantity, opening_stock, stock_in, stock_out, 
-         min_sale_price, selling_price, purchase_price, mrp, batch_price, barcode, created_at, updated_at)
+        (product_id, batch_number, group_by, mfg_date, exp_date, quantity, opening_stock, 
+         stock_in, stock_out, cost_price, selling_price, purchase_price, mrp, min_sale_price, 
+         batch_price, barcode, remark, created_at, updated_at)
         VALUES (?)
       `;
       await db.promise().query(batchSql, [defaultBatch]);
 
-      console.log("✅ Default batch created for non-batch product:", {
-        productId,
-        selling_price: productSellingPrice,
-        mrp: productMRP,
-        openingStock,
-        balanceStock,
-      });
+      console.log("✅ Default batch created for non-batch product");
     }
 
     res.status(201).json({
       success: true,
       message: "Product created successfully",
       product_id: productId,
+      price: productPrice,
       purchase_price: productPurchasePrice,
-      selling_price: productSellingPrice,
       mrp: productMRP,
     });
   } catch (err) {
@@ -672,53 +720,69 @@ router.put('/products/:id', async (req, res) => {
 
   console.log('\n========== UPDATE PRODUCT REQUEST ==========');
   console.log('Product ID:', productId);
-  console.log('Purchase Price:', data.purchase_price);
-  console.log('Selling Price:', data.selling_price);
-  console.log('MRP:', data.mrp);
-  console.log('Maintain Batch:', data.maintain_batch);
-  console.log('Opening Stock (batches table):', data.opening_stock);
-  console.log('Batches received:', batches ? batches.length : 0);
+  console.log('Opening stock from request (batches only):', data.opening_stock);
 
   try {
-    // ✅ Update main product info - ALL prices in products table
-    const allowedProductFields = [
-      'group_by', 'goods_name', 'category_id', 'company_id',
-      'purchase_price', 'selling_price', 'mrp', // ALL prices in products table
-      'inclusive_gst', 'gst_rate', 'non_taxable', 'net_price',
-      'hsn_code', 'unit', 'cess_rate', 'cess_amount', 'sku',
-      'min_stock_alert', 'max_stock_alert', 'description',
-      'maintain_batch', 'can_be_sold'
-      // REMOVED: 'opening_stock', 'opening_stock_date' (batches table only)
-    ];
+    // ✅ First, fetch existing product
+    const [existingProduct] = await db.promise().query(
+      'SELECT * FROM products WHERE id = ?',
+      [productId]
+    );
 
-    const filteredProductData = {};
-    for (const key of allowedProductFields) {
-      if (productData[key] !== undefined) filteredProductData[key] = productData[key];
+    if (existingProduct.length === 0) {
+      return res.status(404).json({
+        success: false,
+        message: 'Product not found'
+      });
     }
 
-    // Get values for both tables
-    const productPurchasePrice = parseFloat(data.purchase_price || 0);
-    const productSellingPrice = parseFloat(data.selling_price || 0);
-    const productMRP = parseFloat(data.mrp || 0);
-    const frontendOpeningStock = parseFloat(data.opening_stock || 0);
+    const existing = existingProduct[0];
+    
+    // ✅ Update main product info - WITHOUT opening_stock
+    const updateData = {
+      group_by: data.group_by || existing.group_by,
+      goods_name: data.goods_name || existing.goods_name,
+      category_id: data.category_id || existing.category_id,
+      company_id: data.company_id || existing.company_id,
+      price: data.price || existing.price,
+      purchase_price: data.purchase_price || existing.purchase_price,
+      mrp: data.mrp || existing.mrp,
+      inclusive_gst: data.inclusive_gst || existing.inclusive_gst,
+      gst_rate: data.gst_rate || existing.gst_rate,
+      non_taxable: data.non_taxable || existing.non_taxable,
+      net_price: data.net_price || existing.net_price,
+      hsn_code: data.hsn_code || existing.hsn_code,
+      unit: data.unit || existing.unit,
+      cess_rate: data.cess_rate || existing.cess_rate,
+      cess_amount: data.cess_amount || existing.cess_amount,
+      sku: data.sku || existing.sku,
+      min_stock_alert: data.min_stock_alert || existing.min_stock_alert,
+      max_stock_alert: data.max_stock_alert || existing.max_stock_alert,
+      description: data.description || existing.description,
+      maintain_batch: data.maintain_batch !== undefined ? data.maintain_batch : existing.maintain_batch,
+      can_be_sold: data.can_be_sold !== undefined ? data.can_be_sold : existing.can_be_sold,
+      min_sale_price: data.min_sale_price || existing.min_sale_price,
+      updated_at: new Date()
+    };
 
-    if (Object.keys(filteredProductData).length > 0) {
-      filteredProductData.updated_at = new Date();
+    console.log('📊 Update data for products table:', {
+      price: updateData.price,
+      purchase_price: updateData.purchase_price,
+      mrp: updateData.mrp,
+      maintain_batch: updateData.maintain_batch
+    });
 
-      const updateFields = Object.keys(filteredProductData)
-        .map(k => `${k} = ?`)
-        .join(', ');
-      const updateValues = Object.values(filteredProductData);
+    // Update product (without opening_stock)
+    const updateFields = Object.keys(updateData)
+      .map(k => `${k} = ?`)
+      .join(', ');
+    const updateValues = Object.values(updateData);
 
-      const updateSql = `UPDATE products SET ${updateFields} WHERE id = ?`;
-      await db.promise().query(updateSql, [...updateValues, productId]);
-      console.log('✅ Product basic info updated');
-      console.log('✅ Purchase Price in products table:', productPurchasePrice);
-      console.log('✅ Selling Price in products table:', productSellingPrice);
-      console.log('✅ MRP in products table:', productMRP);
-    }
+    const updateSql = `UPDATE products SET ${updateFields} WHERE id = ?`;
+    await db.promise().query(updateSql, [...updateValues, productId]);
+    console.log('✅ Product basic info updated');
 
-    // Handle images update
+    // Handle images
     if (data.images !== undefined) {
       await db.promise().query(
         'UPDATE products SET images = ?, updated_at = ? WHERE id = ?',
@@ -727,7 +791,20 @@ router.put('/products/:id', async (req, res) => {
       console.log('✅ Images updated');
     }
 
-    // ✅ Batch Handling - ALL prices also in batches table
+    // Get current values
+    const currentPrice = parseFloat(data.price || existing.price || 0);
+    const currentMRP = parseFloat(data.mrp || existing.mrp || 0);
+    const currentPurchasePrice = parseFloat(data.purchase_price || existing.purchase_price || 0);
+    const requestOpeningStock = parseFloat(data.opening_stock || 0);
+
+    console.log('💰 Current values:', {
+      currentPrice,
+      currentMRP,
+      currentPurchasePrice,
+      requestOpeningStock
+    });
+
+    // ✅ Batch Handling
     if (data.maintain_batch && Array.isArray(batches)) {
       console.log('\n========== PROCESSING BATCHES ==========');
 
@@ -745,80 +822,108 @@ router.put('/products/:id', async (req, res) => {
           barcode = `B${timestamp}${index}${Math.random().toString(36).substr(2, 5)}`;
         }
 
-        // Use batch values if available, otherwise use product values
-        const batchSellingPrice = parseFloat(batch.selling_price || productSellingPrice || 0);
-        const batchMRP = parseFloat(batch.mrp || productMRP || 0);
-        const batchPurchasePrice = parseFloat(batch.purchase_price || productPurchasePrice || 0);
-        const batchOpeningStock = parseFloat(batch.opening_stock || batch.quantity || frontendOpeningStock || 0);
+        // ✅ FIXED: Always use the opening_stock from the request
+        let openingStock;
+        if (batch.opening_stock !== undefined && batch.opening_stock !== null && batch.opening_stock !== '') {
+          // Use the value from the request
+          openingStock = parseFloat(batch.opening_stock);
+          console.log(`Using batch opening_stock from request: ${openingStock}`);
+        } else if (batch.quantity !== undefined && batch.quantity !== null && batch.quantity !== '') {
+          // Fallback to quantity
+          openingStock = parseFloat(batch.quantity);
+          console.log(`Using batch quantity as opening_stock: ${openingStock}`);
+        } else {
+          // Default to 0
+          openingStock = 0;
+          console.log(`Using default opening_stock: ${openingStock}`);
+        }
+
+        // Calculate stock values
+        const stockIn = parseFloat(batch.stock_in || 0);
+        const stockOut = parseFloat(batch.stock_out || 0);
+        const quantity = openingStock + stockIn - stockOut;
+
+        // Get prices - use batch values first, then product values
+        const batchSellingPrice = parseFloat(batch.selling_price || batch.sellingPrice || currentPrice || 0);
+        const batchMRP = parseFloat(batch.mrp || currentMRP || 0);
+        const batchPurchasePrice = parseFloat(batch.purchase_price || batch.purchasePrice || currentPurchasePrice || 0);
+        const batchMinSalePrice = parseFloat(batch.min_sale_price || 0);
+
+        console.log(`🔹 Batch ${index + 1} "${batch.batch_number}" data:`, {
+          openingStock,
+          quantity,
+          selling_price: batchSellingPrice,
+          mrp: batchMRP,
+          purchase_price: batchPurchasePrice,
+          isExisting: batch.isExisting
+        });
 
         const batchData = {
           batch_number: batch.batch_number,
-          group_by: data.group_by || 'Salescatalog',
+          group_by: data.group_by || existing.group_by || 'Salescatalog',
           mfg_date: batch.mfg_date || batch.mfgDate || null,
           exp_date: batch.exp_date || batch.expDate || null,
-          quantity: parseFloat(batch.quantity || batchOpeningStock),
-          opening_stock: batchOpeningStock, // Opening stock ONLY in batches table
-          stock_in: parseFloat(batch.stock_in || 0),
-          stock_out: parseFloat(batch.stock_out || 0),
-          min_sale_price: parseFloat(batch.min_sale_price || 0),
-          selling_price: batchSellingPrice, // Also in batches table
-          purchase_price: batchPurchasePrice, // Also in batches table
-          mrp: batchMRP, // Also in batches table
-          batch_price: parseFloat(batch.batch_price || 0),
+          quantity: quantity,
+          opening_stock: openingStock, // ✅ This will update in batches table
+          stock_in: stockIn,
+          stock_out: stockOut,
+          cost_price: parseFloat(batch.cost_price || 0),
+          selling_price: batchSellingPrice,
+          purchase_price: batchPurchasePrice,
+          mrp: batchMRP,
+          min_sale_price: batchMinSalePrice,
+          batch_price: batchSellingPrice,
           barcode,
+          remark: batch.remark || '',
           updated_at: new Date()
         };
 
-        console.log('🔹 Batch Data:', {
-          batch_number: batchData.batch_number,
-          quantity: batchData.quantity,
-          opening_stock: batchData.opening_stock,
-          selling_price: batchData.selling_price,
-          mrp: batchData.mrp,
-          purchase_price: batchData.purchase_price
-        });
-
         const hasValidId = batch.id && !batch.id.toString().includes('temp_');
-        const isExisting = batch.isExisting && hasValidId;
+        const isExistingBatch = batch.isExisting && hasValidId;
 
-        if (isExisting) {
+        if (isExistingBatch) {
           const updateSql = `
             UPDATE batches SET 
               batch_number = ?, group_by = ?, mfg_date = ?, exp_date = ?, quantity = ?, 
-              opening_stock = ?, stock_in = ?, stock_out = ?, min_sale_price = ?, selling_price = ?, 
-              purchase_price = ?, mrp = ?, batch_price = ?, barcode = ?, updated_at = ?
+              opening_stock = ?, stock_in = ?, stock_out = ?, cost_price = ?, selling_price = ?, 
+              purchase_price = ?, mrp = ?, min_sale_price = ?, batch_price = ?, barcode = ?, 
+              remark = ?, updated_at = ?
             WHERE id = ?
           `;
           const values = [
             batchData.batch_number, batchData.group_by,
             batchData.mfg_date, batchData.exp_date, batchData.quantity,
-            batchData.opening_stock, batchData.stock_in, batchData.stock_out,
-            batchData.min_sale_price, batchData.selling_price, batchData.purchase_price,
-            batchData.mrp, batchData.batch_price, batchData.barcode, batchData.updated_at,
+            batchData.opening_stock, // ✅ This updates opening_stock in batches
+            batchData.stock_in, batchData.stock_out,
+            batchData.cost_price, batchData.selling_price, batchData.purchase_price,
+            batchData.mrp, batchData.min_sale_price, batchData.batch_price,
+            batchData.barcode, batchData.remark, batchData.updated_at,
             parseInt(batch.id)
           ];
           await db.promise().query(updateSql, values);
           processedBatchIds.push(parseInt(batch.id));
-          console.log('✅ Updated batch with all prices');
+          console.log(`✅ Updated existing batch "${batchData.batch_number}" with opening_stock: ${batchData.opening_stock}`);
         } else {
           const insertSql = `
             INSERT INTO batches (
               product_id, batch_number, group_by, mfg_date, exp_date, quantity, opening_stock, 
-              stock_in, stock_out, min_sale_price, selling_price, purchase_price, mrp, batch_price, 
-              barcode, created_at, updated_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+              stock_in, stock_out, cost_price, selling_price, purchase_price, mrp, min_sale_price, 
+              batch_price, barcode, remark, created_at, updated_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
           `;
           const values = [
             productId, batchData.batch_number, batchData.group_by,
             batchData.mfg_date, batchData.exp_date, batchData.quantity,
-            batchData.opening_stock, batchData.stock_in, batchData.stock_out,
-            batchData.min_sale_price, batchData.selling_price, batchData.purchase_price,
-            batchData.mrp, batchData.batch_price, batchData.barcode,
+            batchData.opening_stock, // ✅ This inserts opening_stock in batches
+            batchData.stock_in, batchData.stock_out,
+            batchData.cost_price, batchData.selling_price, batchData.purchase_price,
+            batchData.mrp, batchData.min_sale_price, batchData.batch_price,
+            batchData.barcode, batchData.remark,
             new Date(), batchData.updated_at
           ];
           const [result] = await db.promise().query(insertSql, values);
           processedBatchIds.push(result.insertId);
-          console.log('✅ Inserted new batch with all prices');
+          console.log(`✅ Inserted new batch "${batchData.batch_number}" with opening_stock: ${batchData.opening_stock}`);
         }
       }
 
@@ -840,81 +945,112 @@ router.put('/products/:id', async (req, res) => {
         [productId]
       );
 
+      // Use opening stock from request
+      let openingStock = parseFloat(requestOpeningStock || 0);
+      
+      const stockIn = 0;
+      const stockOut = 0;
+      const quantity = openingStock + stockIn - stockOut;
+
+      console.log('📦 Default batch data:', {
+        openingStock,
+        quantity,
+        selling_price: currentPrice,
+        mrp: currentMRP,
+        purchase_price: currentPurchasePrice
+      });
+
       const batchData = {
         batch_number: 'DEFAULT',
-        group_by: data.group_by || 'Salescatalog',
+        group_by: data.group_by || existing.group_by || 'Salescatalog',
         mfg_date: null,
         exp_date: null,
-        quantity: frontendOpeningStock,
-        opening_stock: frontendOpeningStock, // Opening stock ONLY in batches table
-        stock_in: 0,
-        stock_out: 0,
-        min_sale_price: parseFloat(data.price || 0),
-        selling_price: productSellingPrice, // Also in batches table
-        purchase_price: productPurchasePrice, // Also in batches table
-        mrp: productMRP, // Also in batches table
-        batch_price: productSellingPrice,
+        quantity: quantity,
+        opening_stock: openingStock, // ✅ This updates opening_stock in batches
+        stock_in: stockIn,
+        stock_out: stockOut,
+        cost_price: 0,
+        selling_price: currentPrice,
+        purchase_price: currentPurchasePrice,
+        mrp: currentMRP,
+        min_sale_price: parseFloat(data.min_sale_price || 0),
+        batch_price: currentPrice,
         barcode: 'DEFAULT-123',
+        remark: '',
         updated_at: new Date()
       };
-
-      console.log('🔹 Default Batch Data:', {
-        quantity: batchData.quantity,
-        opening_stock: batchData.opening_stock,
-        selling_price: batchData.selling_price,
-        mrp: batchData.mrp,
-        purchase_price: batchData.purchase_price
-      });
 
       if (existingDefault.length > 0) {
         const updateSql = `
           UPDATE batches SET 
-            quantity = ?, opening_stock = ?, min_sale_price = ?, selling_price = ?, 
-            purchase_price = ?, mrp = ?, batch_price = ?, updated_at = ?
+            quantity = ?, opening_stock = ?, selling_price = ?, purchase_price = ?, 
+            mrp = ?, min_sale_price = ?, batch_price = ?, updated_at = ?
           WHERE product_id = ? AND batch_number = "DEFAULT"
         `;
         const values = [
-          batchData.quantity, batchData.opening_stock,
-          batchData.min_sale_price, batchData.selling_price,
-          batchData.purchase_price, batchData.mrp,
-          batchData.batch_price, batchData.updated_at,
+          batchData.quantity, 
+          batchData.opening_stock, // ✅ This updates opening_stock
+          batchData.selling_price, 
+          batchData.purchase_price,
+          batchData.mrp, 
+          batchData.min_sale_price,
+          batchData.batch_price, 
+          batchData.updated_at,
           productId
         ];
         await db.promise().query(updateSql, values);
-        console.log('🔄 Updated DEFAULT batch with all prices');
+        console.log('🔄 Updated DEFAULT batch with opening_stock:', batchData.opening_stock);
       } else {
         const insertSql = `
           INSERT INTO batches (
             product_id, batch_number, group_by, mfg_date, exp_date, quantity, opening_stock,
-            stock_in, stock_out, min_sale_price, selling_price, purchase_price, mrp, batch_price,
-            barcode, created_at, updated_at
-          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            stock_in, stock_out, cost_price, selling_price, purchase_price, mrp, min_sale_price,
+            batch_price, barcode, remark, created_at, updated_at
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         `;
         const values = [
           productId, batchData.batch_number, batchData.group_by,
           batchData.mfg_date, batchData.exp_date, batchData.quantity,
-          batchData.opening_stock, batchData.stock_in, batchData.stock_out,
-          batchData.min_sale_price, batchData.selling_price, batchData.purchase_price,
-          batchData.mrp, batchData.batch_price, batchData.barcode,
+          batchData.opening_stock, // ✅ This inserts opening_stock
+          batchData.stock_in, batchData.stock_out,
+          batchData.cost_price, batchData.selling_price, batchData.purchase_price,
+          batchData.mrp, batchData.min_sale_price, batchData.batch_price,
+          batchData.barcode, batchData.remark,
           new Date(), batchData.updated_at
         ];
         await db.promise().query(insertSql, values);
-        console.log('✅ Inserted DEFAULT batch with all prices');
+        console.log('✅ Inserted DEFAULT batch with opening_stock:', batchData.opening_stock);
       }
     }
 
     console.log('\n✅ UPDATE COMPLETED SUCCESSFULLY\n');
-    console.log('📊 STORAGE SUMMARY:');
-    console.log('- Products table: purchase_price, selling_price, mrp');
-    console.log('- Batches table: purchase_price, selling_price, mrp, opening_stock, quantity');
     
+    // Fetch and return the updated data
+    const [updatedProduct] = await db.promise().query(
+      'SELECT * FROM products WHERE id = ?',
+      [productId]
+    );
+    
+    const [updatedBatches] = await db.promise().query(
+      'SELECT * FROM batches WHERE product_id = ?',
+      [productId]
+    );
+
+    console.log('📊 Verification - Updated batches:');
+    updatedBatches.forEach(batch => {
+      console.log(`- Batch "${batch.batch_number}" opening_stock: ${batch.opening_stock}`);
+    });
+
     res.json({ 
       success: true, 
       message: 'Product updated successfully', 
       id: productId,
-      purchase_price: productPurchasePrice,
-      selling_price: productSellingPrice,
-      mrp: productMRP
+      price: currentPrice,
+      purchase_price: currentPurchasePrice,
+      mrp: currentMRP,
+      opening_stock: requestOpeningStock,
+      product: updatedProduct[0],
+      batches: updatedBatches
     });
 
   } catch (err) {
@@ -922,7 +1058,8 @@ router.put('/products/:id', async (req, res) => {
     res.status(500).json({ 
       success: false, 
       message: 'Failed to update product', 
-      error: err.message 
+      error: err.message,
+      sql: err.sql
     });
   }
 });
