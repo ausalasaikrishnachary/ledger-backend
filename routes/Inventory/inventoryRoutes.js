@@ -1261,6 +1261,7 @@ router.get('/get-sales-products', async (req, res) => {
         p.category_id,
         p.gst_rate,
         p.inclusive_gst,
+        p.images,
         c.category_name
       FROM products p
       LEFT JOIN categories c 
@@ -1279,7 +1280,8 @@ router.get('/get-sales-products', async (req, res) => {
       category_id: item.category_id,
       category: item.category_name,
       gst_rate: item.gst_rate,
-      inclusive_gst: item.inclusive_gst   // ⭐ added
+      inclusive_gst: item.inclusive_gst,
+      images: item.images   // ⭐ added
     }));
 
     res.json(products);
