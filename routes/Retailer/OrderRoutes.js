@@ -3,6 +3,8 @@ const router = express.Router();
 const db = require('./../../db');
 const { sendMail } = require("../../utils/mailer");
 require("dotenv").config();
+const axios = require("axios");
+
 
 
 // ===================================================
@@ -82,12 +84,13 @@ router.get("/details/:order_number", (req, res) => {
 });
 
 
-router.post("/create-complete-order", (req, res) => {
+
+router.post("/create-complete-order", async (req, res) => {
   console.log("📦 Creating complete order:", req.body);
 
   const { order, orderItems } = req.body;
 
-  if (!order || !orderItems) {
+  if (!order || !orderItems || !Array.isArray(orderItems)) {
     return res.status(400).json({
       error: "Missing order or orderItems data",
     });
@@ -95,14 +98,14 @@ router.post("/create-complete-order", (req, res) => {
 
   db.getConnection((err, connection) => {
     if (err) {
-      console.error("❌ Database connection error:", err);
+      console.error("❌ DB Connection Error:", err);
       return res.status(500).json({ error: "Database connection failed" });
     }
 
     connection.beginTransaction(async (err) => {
       if (err) {
         connection.release();
-        console.error("❌ Transaction start error:", err);
+        console.error("❌ Transaction Error:", err);
         return res.status(500).json({ error: "Failed to start transaction" });
       }
 
@@ -116,8 +119,8 @@ router.post("/create-complete-order", (req, res) => {
             taxable_amount, tax_amount, net_payable, credit_period,
             estimated_delivery_date, order_placed_by, ordered_by,
             staff_id, assigned_staff, staff_incentive,
-            order_mode, approval_status, created_at
-          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW())
+            order_mode, approval_status, retailer_mobile, created_at
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW())
         `;
 
         const orderValues = [
@@ -138,6 +141,7 @@ router.post("/create-complete-order", (req, res) => {
           order.staff_incentive,
           order.order_mode,
           order.approval_status,
+          order.retailer_mobile,
         ];
 
         const orderResult = await new Promise((resolve, reject) => {
@@ -154,10 +158,14 @@ router.post("/create-complete-order", (req, res) => {
         // ---------------------------------------------------
         const orderItemQuery = `
           INSERT INTO order_items (
-            order_number, item_name, product_id, mrp, sale_price, edited_sale_price,credit_charge,customer_sale_price,final_amount,quantity,
-            total_amount, discount_percentage, discount_amount, taxable_amount,
-            tax_percentage, tax_amount, item_total, credit_period, credit_percentage,
-            sgst_percentage, sgst_amount, cgst_percentage, cgst_amount,
+            order_number, item_name, product_id, mrp, sale_price,
+            edited_sale_price, credit_charge, customer_sale_price,
+            final_amount, quantity, total_amount,
+            discount_percentage, discount_amount, taxable_amount,
+            tax_percentage, tax_amount, item_total,
+            credit_period, credit_percentage,
+            sgst_percentage, sgst_amount,
+            cgst_percentage, cgst_amount,
             discount_applied_scheme
           ) VALUES ?
         `;
@@ -190,9 +198,9 @@ router.post("/create-complete-order", (req, res) => {
         ]);
 
         await new Promise((resolve, reject) => {
-          connection.query(orderItemQuery, [orderItemValues], (err, result) => {
+          connection.query(orderItemQuery, [orderItemValues], (err) => {
             if (err) reject(err);
-            else resolve(result);
+            else resolve();
           });
         });
 
@@ -235,10 +243,6 @@ router.post("/create-complete-order", (req, res) => {
         // ---------------------------------------------------
         // 5. SEND EMAILS
         // ---------------------------------------------------
-        const staffEmail = order.staff_email;
-        const retailerEmail = order.retailer_email;
-        const adminEmail = process.env.ADMIN_EMAIL;
-
         try {
           const emailHTML = `
             <h2>Order Placed Successfully</h2>
@@ -246,40 +250,73 @@ router.post("/create-complete-order", (req, res) => {
             <p><strong>Customer:</strong> ${order.customer_name}</p>
             <p><strong>Net Amount:</strong> ₹${order.net_payable}</p>
             <p><strong>Placed By:</strong> ${order.ordered_by}</p>
-            <br/>
-            <p>Thank you.</p>
           `;
 
           await Promise.all([
             sendMail({
-              to: adminEmail,
-              subject: `New Order Placed - ${order.order_number}`,
+              to: process.env.ADMIN_EMAIL,
+              subject: `New Order - ${order.order_number}`,
               html: emailHTML,
             }),
             sendMail({
-              to: staffEmail,
-              subject: `Order Placed Successfully - ${order.order_number}`,
+              to: order.staff_email,
+              subject: `Order Placed - ${order.order_number}`,
               html: emailHTML,
             }),
             sendMail({
-              to: retailerEmail,
-              subject: `Your Order Has Been Placed - ${order.order_number}`,
+              to: order.retailer_email,
+              subject: `Your Order ${order.order_number}`,
               html: emailHTML,
             }),
           ]);
 
-          console.log("📧 Emails sent successfully");
+          console.log("📧 Emails sent");
         } catch (mailErr) {
-          console.error("❌ Email error:", mailErr);
+          console.error("❌ Email failed:", mailErr.message);
         }
 
         // ---------------------------------------------------
-        // 6. RESPONSE
+        // 6. SEND SMS TO RETAILER (SMSJUST)
+        // ---------------------------------------------------
+        try {
+          if (order.retailer_mobile) {
+            const productSummary = orderItems
+              .map((item) => item.item_name)
+              .join(", ");
+
+            const smsText = `Dear Customer, Your Order No. ${order.order_number} for ${productSummary} has been successfully placed. Thank you for choosing - SHREE SHASHWATRAJ AGRO PRIVATE LIMITED`;
+
+            const smsUrl =
+              "https://www.smsjust.com/blank/sms/user/urlsms.php";
+
+            const smsParams = {
+              username: process.env.SMS_USERNAME,
+              pass: process.env.SMS_PASSWORD,
+              senderid: process.env.SMS_SENDERID,
+              dest_mobileno: order.retailer_mobile,
+              message: smsText,
+              dltentityid: process.env.SMS_ENTITYID,
+              dlttempid: process.env.SMS_ORDERTEMPLATEID,
+              response: "y",
+            };
+
+            const smsResponse = await axios.get(smsUrl, {
+              params: smsParams,
+            });
+
+            console.log("📩 SMS sent:", smsResponse.data);
+          }
+        } catch (smsErr) {
+          console.error("❌ SMS failed:", smsErr.message);
+        }
+
+        // ---------------------------------------------------
+        // 7. RESPONSE
         // ---------------------------------------------------
         res.status(201).json({
           success: true,
-          order_number: order.order_number,
           order_id: orderResult.insertId,
+          order_number: order.order_number,
           cart_cleared: clearCartResult.affectedRows,
           message: "Order created successfully",
         });
@@ -296,6 +333,8 @@ router.post("/create-complete-order", (req, res) => {
     });
   });
 });
+
+
 
 module.exports = router;
 
