@@ -158,15 +158,15 @@ router.post('/receipts', upload.single('transaction_proof'), async (req, res) =>
     let assignedStaffNameForReceipt = null;
     let originalInvoiceRow = null; // Store original invoice data
 
-    if (safeInvoiceNumber) {
-      const [transactionRows] = await connection.promise().query(
-        `SELECT staffid, assigned_staff, TotalAmount, balance_amount, status, order_number
-         FROM voucher 
-         WHERE (TransactionType = 'Stock Transfer' OR TransactionType = 'Sales')
-         AND InvoiceNumber = ? 
-         LIMIT 1`,
-        [safeInvoiceNumber]
-      );
+if (safeInvoiceNumber) {
+  const [transactionRows] = await connection.promise().query(
+    `SELECT staffid, assigned_staff, TotalAmount, balance_amount, status, order_number
+     FROM voucher 
+     WHERE TransactionType IN ('Stock Transfer', 'Sales', 'Purchase')
+     AND InvoiceNumber = ? 
+     LIMIT 1`,
+    [safeInvoiceNumber]
+  );
 
       if (transactionRows.length > 0) {
         originalInvoiceRow = transactionRows[0]; // Store the original invoice row
@@ -330,16 +330,15 @@ router.post('/receipts', upload.single('transaction_proof'), async (req, res) =>
         newStatus: newStatus
       });
       
-      // Update the original invoice with new balance and status
-      await connection.promise().query(
-        `UPDATE voucher 
-         SET balance_amount = ?, 
-             status = ?,
-             updated_at = NOW()
-         WHERE InvoiceNumber = ? 
-           AND (TransactionType = 'Stock Transfer' OR TransactionType = 'Sales')`,
-        [newBalance, newStatus, safeInvoiceNumber]
-      );
+ await connection.promise().query(
+  `UPDATE voucher 
+   SET balance_amount = ?, 
+       status = ?,
+       updated_at = NOW()
+   WHERE InvoiceNumber = ? 
+     AND TransactionType IN ('Stock Transfer', 'Sales', 'Purchase')`,
+  [newBalance, newStatus, safeInvoiceNumber]
+);
       
       console.log("✅ Original invoice updated:", {
         invoiceNumber: safeInvoiceNumber,
@@ -1297,69 +1296,173 @@ router.put('/voucher/:id', upload.single('transaction_proof'), async (req, res) 
   let connection;
 
   try {
-    // Get DB connection
+    // ------------------------------
+    // 1️⃣ GET DB CONNECTION
+    // ------------------------------
     connection = await new Promise((resolve, reject) => {
       db.getConnection((err, conn) => (err ? reject(err) : resolve(conn)));
     });
 
-    // Start transaction
     await new Promise((resolve, reject) => {
       connection.beginTransaction(err => (err ? reject(err) : resolve()));
     });
 
-    // Build update dynamically from req.body
-    const updateFields = [];
-    const updateValues = [];
-
-    // Special handling for paid_amount - update both paid_amount and TotalAmount
-    if (req.body.paid_amount !== undefined) {
-      const paidAmount = req.body.paid_amount;
-      
-      // Update both paid_amount and TotalAmount with the same value
-      updateFields.push('paid_amount = ?', 'TotalAmount = ?');
-      updateValues.push(paidAmount, paidAmount);
-      
-      // Calculate balance_amount (should be 0 since both are same)
-      const balanceAmount = 0;
-      updateFields.push('balance_amount = ?');
-      updateValues.push(balanceAmount);
-      
-      // Update status to Paid since full amount is paid
-      updateFields.push('status = ?');
-      updateValues.push('Paid');
-      
-      // Update paid_date to current timestamp
-      updateFields.push('paid_date = ?');
-      updateValues.push(new Date());
-    }
-
-    // Add other fields from req.body (excluding paid_amount since we already handled it)
-    for (const [key, value] of Object.entries(req.body)) {
-      if (key !== 'paid_amount') { // Skip paid_amount as we already handled it
-        updateFields.push(`${key} = ?`);
-        updateValues.push(value === undefined ? null : value);
-      }
-    }
-
-    // Add uploaded file if exists
-    if (req.file) {
-      updateFields.push(`transaction_proof_filename = ?`);
-      updateValues.push(req.file.filename);
-    }
-
-    // Always append voucherId for WHERE
-    updateValues.push(voucherId);
-
-    // Execute update
-    const sql = `UPDATE voucher SET ${updateFields.join(', ')} WHERE VoucherID = ?`;
-
-    await new Promise((resolve, reject) => {
-      connection.execute(sql, updateValues, (err, result) =>
-        err ? reject(err) : resolve(result)
+    // ------------------------------
+    // 2️⃣ FETCH CURRENT VOUCHER (RECEIPT)
+    // ------------------------------
+    const receiptRows = await new Promise((resolve, reject) => {
+      connection.query(
+        `SELECT InvoiceNumber, paid_amount, TransactionType
+         FROM voucher
+         WHERE VoucherID = ?`,
+        [voucherId],
+        (err, results) => (err ? reject(err) : resolve(results))
       );
     });
 
-    // Commit
+    if (!receiptRows || receiptRows.length === 0) {
+      throw new Error('Voucher not found');
+    }
+
+    const receipt = receiptRows[0];
+    const invoiceNumber = receipt.InvoiceNumber;
+    const oldPaidAmount = parseFloat(receipt.paid_amount) || 0;
+    const isReceiptType = receipt.TransactionType === 'Receipt' || 
+                         receipt.TransactionType === 'purchase voucher';
+
+    const newPaidAmount =
+      req.body.paid_amount !== undefined
+        ? parseFloat(req.body.paid_amount) || 0
+        : oldPaidAmount;
+
+    const paidAmountChanged = newPaidAmount !== oldPaidAmount;
+
+    // ------------------------------
+    // 3️⃣ UPDATE RECEIPT ONLY
+    // ------------------------------
+    const updateFields = [];
+    const updateValues = [];
+
+    if (req.body.paid_amount !== undefined) {
+      updateFields.push('paid_amount = ?', 'paid_date = ?');
+      updateValues.push(newPaidAmount, new Date());
+    }
+
+    for (const [key, value] of Object.entries(req.body)) {
+      if (key !== 'paid_amount') {
+        updateFields.push(`${key} = ?`);
+        updateValues.push(value ?? null);
+      }
+    }
+
+    if (req.file) {
+      updateFields.push('transaction_proof = ?');
+      updateValues.push(req.file.filename);
+    }
+
+    if (updateFields.length > 0) {
+      updateValues.push(voucherId);
+
+      await new Promise((resolve, reject) => {
+        connection.query(
+          `UPDATE voucher
+           SET ${updateFields.join(', ')}
+           WHERE VoucherID = ?`,
+          updateValues,
+          err => (err ? reject(err) : resolve())
+        );
+      });
+    }
+
+    // ------------------------------
+    // 4️⃣ RECALCULATE INVOICE BALANCE (UPDATE ONLY THE INVOICE)
+    // ------------------------------
+    if (invoiceNumber && isReceiptType && paidAmountChanged) {
+      // Fetch invoice details
+      const invoiceRows = await new Promise((resolve, reject) => {
+        connection.query(
+          `SELECT VoucherID, TotalAmount, TransactionType, balance_amount
+           FROM voucher
+           WHERE InvoiceNumber = ?
+             AND TransactionType IN ('Purchase', 'Sales', 'Stock Transfer')
+           LIMIT 1`,
+          [invoiceNumber],
+          (err, results) => (err ? reject(err) : resolve(results))
+        );
+      });
+
+      if (invoiceRows.length > 0) {
+        const invoice = invoiceRows[0];
+        const totalAmount = parseFloat(invoice.TotalAmount) || 0;
+        const invoiceTransactionType = invoice.TransactionType;
+        
+        // Determine receipt type based on invoice type
+        let receiptTypeCondition = '';
+        if (invoiceTransactionType === 'Sales' || invoiceTransactionType === 'Stock Transfer') {
+          receiptTypeCondition = "TransactionType = 'Receipt'";
+        } else if (invoiceTransactionType === 'Purchase') {
+          receiptTypeCondition = "TransactionType IN ('Receipt', 'purchase voucher')";
+        }
+
+        // Sum ALL receipts for this invoice
+        const receiptSumRows = await new Promise((resolve, reject) => {
+          connection.query(
+            `SELECT SUM(paid_amount) AS totalReceiptsPaid
+             FROM voucher
+             WHERE InvoiceNumber = ?
+               AND ${receiptTypeCondition}`,
+            [invoiceNumber],
+            (err, results) => (err ? reject(err) : resolve(results))
+          );
+        });
+
+        const totalReceiptsPaid = parseFloat(receiptSumRows[0].totalReceiptsPaid) || 0;
+        
+        // Calculate new balance
+        const newBalance = Math.max(0, totalAmount - totalReceiptsPaid);
+
+        // Determine status for the INVOICE
+        let newStatusForInvoice = 'pending';
+        if (newBalance <= 0) {
+          newStatusForInvoice = 'Paid';
+        } else if (totalReceiptsPaid > 0) {
+          newStatusForInvoice = 'Partial';
+        }
+
+        console.log('📊 Invoice Update Calculation:', {
+          invoiceNumber,
+          totalAmount,
+          totalReceiptsPaid,
+          newBalance,
+          newStatusForInvoice
+        });
+
+        // Update ONLY THE ORIGINAL INVOICE (not purchase vouchers)
+        await new Promise((resolve, reject) => {
+          connection.query(
+            `UPDATE voucher
+             SET balance_amount = ?, status = ?, updated_at = NOW()
+             WHERE VoucherID = ?`,
+            [newBalance, newStatusForInvoice, invoice.VoucherID],
+            err => (err ? reject(err) : resolve())
+          );
+        });
+
+        console.log('✅ Invoice updated:', {
+          invoiceNumber,
+          VoucherID: invoice.VoucherID,
+          newBalance,
+          newStatusForInvoice
+        });
+
+        // DON'T UPDATE PURCHASE VOUCHERS - they should keep their own values
+        // The receipt being edited already has its own balance/status from the update above
+      }
+    }
+
+    // ------------------------------
+    // 5️⃣ COMMIT
+    // ------------------------------
     await new Promise((resolve, reject) => {
       connection.commit(err => (err ? reject(err) : resolve()));
     });
@@ -1369,11 +1472,12 @@ router.put('/voucher/:id', upload.single('transaction_proof'), async (req, res) 
     res.json({
       success: true,
       message: 'Voucher updated successfully',
-      VoucherID: voucherId,
+      VoucherID: voucherId
     });
 
   } catch (error) {
     console.error('Error updating voucher:', error);
+
     if (connection) {
       await new Promise(resolve => connection.rollback(() => resolve()));
       connection.release();
@@ -1381,7 +1485,10 @@ router.put('/voucher/:id', upload.single('transaction_proof'), async (req, res) 
 
     if (req.file) fs.unlinkSync(req.file.path);
 
-    res.status(500).json({ success: false, error: error.message });
+    res.status(500).json({
+      success: false,
+      error: error.message
+    });
   }
 });
 

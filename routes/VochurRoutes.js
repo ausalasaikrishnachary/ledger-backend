@@ -2102,7 +2102,7 @@ router.post("/transaction", (req, res) => {
     transactionType = "stock transfer"; // Keep as stock transfer
   } else if ((normalizedType === "stock transfer" || normalizedType === "stocktransfer") && !orderNumber) {
     console.log("⚠️ Stock Transfer specified but no order number - Reverting to Sales");
-    transactionType = "Sales";
+    transactionType = "stock transfer";
   }
 
   console.log("Processing as:", transactionType);
