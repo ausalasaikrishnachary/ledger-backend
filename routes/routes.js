@@ -1343,10 +1343,19 @@ router.put('/voucher/:id', upload.single('transaction_proof'), async (req, res) 
     const updateFields = [];
     const updateValues = [];
 
-    if (req.body.paid_amount !== undefined) {
-      updateFields.push('paid_amount = ?', 'paid_date = ?');
-      updateValues.push(newPaidAmount, new Date());
-    }
+if (req.body.paid_amount !== undefined) {
+  updateFields.push(
+    'paid_amount = ?',
+    'TotalAmount = ?',
+    'paid_date = ?'
+  );
+  updateValues.push(
+    newPaidAmount,
+    newPaidAmount,
+    new Date()
+  );
+}
+
 
     for (const [key, value] of Object.entries(req.body)) {
       if (key !== 'paid_amount') {
