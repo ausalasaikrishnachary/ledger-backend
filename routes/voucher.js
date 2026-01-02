@@ -891,9 +891,10 @@ router.get('/total-payables', (req, res) => {
   const sqlQuery = `
     SELECT 
       COALESCE(SUM(CASE WHEN TransactionType = 'Purchase' THEN TotalAmount ELSE 0 END), 0) as totalPurchase,
-      COALESCE(SUM(CASE WHEN TransactionType = 'purchase voucher' THEN paid_amount ELSE 0 END), 0) as totalPurchaseVoucher
+      COALESCE(SUM(CASE WHEN TransactionType = 'purchase voucher' THEN paid_amount ELSE 0 END), 0) as totalPurchaseVoucher,
+      COALESCE(SUM(CASE WHEN TransactionType = 'DebitNote' THEN TotalAmount ELSE 0 END), 0) as totalDebitNote
     FROM voucher 
-    WHERE TransactionType IN ('Purchase', 'purchase voucher')
+    WHERE TransactionType IN ('Purchase', 'purchase voucher', 'DebitNote')
   `;
 
   db.query(sqlQuery, (err, results) => {
@@ -908,18 +909,22 @@ router.get('/total-payables', (req, res) => {
 
     const totalPurchase = parseFloat(results[0].totalPurchase) || 0;
     const totalPurchaseVoucher = parseFloat(results[0].totalPurchaseVoucher) || 0;
+    const totalDebitNote = parseFloat(results[0].totalDebitNote) || 0;
+    
+    // Net amount calculation: Purchase - (Purchase Voucher + DebitNote)
+    const netAmount = totalPurchase - (totalPurchaseVoucher + totalDebitNote);
 
     res.json({
       success: true,
       data: {
         totalPurchase: totalPurchase,
         totalPurchaseVoucher: totalPurchaseVoucher,
-        netAmount: totalPurchase - totalPurchaseVoucher
+        totalDebitNote: totalDebitNote,
+        netAmount: netAmount
       }
     });
   });
 });
-
 
 
 

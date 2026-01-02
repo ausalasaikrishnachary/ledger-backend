@@ -526,13 +526,9 @@ router.post('/products', async (req, res) => {
       ...cleanProduct
     } = data;
 
-    // IMPORTANT: Map frontend fields to database columns correctly
-    // Frontend sends 'price' which should go to 'price' column in products table
-    // Frontend sends 'purchase_price' which should go to 'purchase_price' column
-    // Frontend sends 'mrp' which should go to 'mrp' column
     const productData = {
       ...cleanProduct,
-      // Keep price as price (not selling_price)
+     unit: data.unit, 
       price: data.price || 0,
       purchase_price: data.purchase_price || 0,
       mrp: data.mrp || 0,
@@ -752,7 +748,7 @@ router.put('/products/:id', async (req, res) => {
       non_taxable: data.non_taxable || existing.non_taxable,
       net_price: data.net_price || existing.net_price,
       hsn_code: data.hsn_code || existing.hsn_code,
-      unit: data.unit || existing.unit,
+  unit: data.unit || existing.unit_id, 
       cess_rate: data.cess_rate || existing.cess_rate,
       cess_amount: data.cess_amount || existing.cess_amount,
       sku: data.sku || existing.sku,
