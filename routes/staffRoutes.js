@@ -28,7 +28,7 @@ router.post("/staff", (req, res) => {
     panNumber,
     bloodGroup,
     emergencyContact,
-    status = "Active" 
+    status = "Active"
   } = req.body;
 
   // Validate required fields

@@ -1,6 +1,10 @@
 const express = require("express");
 const router = express.Router();
 const db = require('./../../db');
+const { sendMail } = require("../../utils/mailer");
+require("dotenv").config();
+const axios = require("axios");
+
 
 
 // ===================================================
@@ -80,39 +84,43 @@ router.get("/details/:order_number", (req, res) => {
 });
 
 
-router.post('/create-complete-order', (req, res) => {
-  console.log('📦 Creating complete order:', req.body);
+
+router.post("/create-complete-order", async (req, res) => {
+  console.log("📦 Creating complete order:", req.body);
 
   const { order, orderItems } = req.body;
 
-  if (!order || !orderItems) {
+  if (!order || !orderItems || !Array.isArray(orderItems)) {
     return res.status(400).json({
-      error: 'Missing order or orderItems data'
+      error: "Missing order or orderItems data",
     });
   }
 
   db.getConnection((err, connection) => {
     if (err) {
-      console.error('❌ Database connection error:', err);
-      return res.status(500).json({ error: 'Database connection failed' });
+      console.error("❌ DB Connection Error:", err);
+      return res.status(500).json({ error: "Database connection failed" });
     }
 
-    // Start transaction
     connection.beginTransaction(async (err) => {
       if (err) {
         connection.release();
-        console.error('❌ Transaction start error:', err);
-        return res.status(500).json({ error: 'Failed to start transaction' });
+        console.error("❌ Transaction Error:", err);
+        return res.status(500).json({ error: "Failed to start transaction" });
       }
 
       try {
-        // Step 1: Insert into orders table
+        // ---------------------------------------------------
+        // 1. INSERT ORDER
+        // ---------------------------------------------------
         const orderQuery = `
           INSERT INTO orders (
             order_number, customer_id, customer_name, order_total, discount_amount,
             taxable_amount, tax_amount, net_payable, credit_period,
-            estimated_delivery_date, order_placed_by, ordered_by, staff_id , assigned_staff, staff_incentive , order_mode,approval_status, created_at
-          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,?,?,?,?,?, NOW())
+            estimated_delivery_date, order_placed_by, ordered_by,
+            staff_id, assigned_staff, staff_incentive,
+            order_mode, approval_status, retailer_mobile, created_at
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW())
         `;
 
         const orderValues = [
@@ -126,16 +134,15 @@ router.post('/create-complete-order', (req, res) => {
           order.net_payable,
           order.credit_period,
           order.estimated_delivery_date,
-          order.order_placed_by, // This should be the account ID, not name
+          order.order_placed_by,
           order.ordered_by,
           order.staffid,
           order.assigned_staff,
           order.staff_incentive,
           order.order_mode,
           order.approval_status,
+          order.retailer_mobile,
         ];
-
-        console.log('🚀 Inserting order with values:', orderValues);
 
         const orderResult = await new Promise((resolve, reject) => {
           connection.query(orderQuery, orderValues, (err, result) => {
@@ -144,25 +151,35 @@ router.post('/create-complete-order', (req, res) => {
           });
         });
 
-        console.log('✅ Order inserted with ID:', orderResult.insertId);
+        console.log("✅ Order inserted:", orderResult.insertId);
 
-        // Step 2: Insert order items
+        // ---------------------------------------------------
+        // 2. INSERT ORDER ITEMS
+        // ---------------------------------------------------
         const orderItemQuery = `
           INSERT INTO order_items (
-            order_number, item_name, product_id, mrp, sale_price, price, quantity,
-            total_amount, discount_percentage, discount_amount, taxable_amount,
-            tax_percentage, tax_amount, item_total, credit_period, credit_percentage,
-            sgst_percentage, sgst_amount, cgst_percentage, cgst_amount, discount_applied_scheme
+            order_number, item_name, product_id, mrp, sale_price,
+            edited_sale_price, credit_charge, customer_sale_price,
+            final_amount, quantity, total_amount,
+            discount_percentage, discount_amount, taxable_amount,
+            tax_percentage, tax_amount, item_total,
+            credit_period, credit_percentage,
+            sgst_percentage, sgst_amount,
+            cgst_percentage, cgst_amount,
+            discount_applied_scheme
           ) VALUES ?
         `;
 
-        const orderItemValues = orderItems.map(item => [
+        const orderItemValues = orderItems.map((item) => [
           order.order_number,
           item.item_name,
           item.product_id,
           item.mrp,
           item.sale_price,
-          item.price,
+          item.edited_sale_price,
+          item.credit_charge,
+          item.customer_sale_price,
+          item.final_amount,
           item.quantity,
           item.total_amount,
           item.discount_percentage,
@@ -177,45 +194,42 @@ router.post('/create-complete-order', (req, res) => {
           item.sgst_amount,
           item.cgst_percentage,
           item.cgst_amount,
-          item.discount_applied_scheme
+          item.discount_applied_scheme,
         ]);
 
-        console.log('🚀 Inserting order items:', orderItemValues.length);
-
-        const orderItemsResult = await new Promise((resolve, reject) => {
-          connection.query(orderItemQuery, [orderItemValues], (err, result) => {
+        await new Promise((resolve, reject) => {
+          connection.query(orderItemQuery, [orderItemValues], (err) => {
             if (err) reject(err);
-            else resolve(result);
+            else resolve();
           });
         });
 
-        console.log('✅ Order items inserted:', orderItemsResult.affectedRows);
+        console.log("✅ Order items inserted");
 
-        // Step 3: Clear cart items for this customer and staff
-        // Assuming the cart table is named 'cart_items' based on your data structure
+        // ---------------------------------------------------
+        // 3. CLEAR CART
+        // ---------------------------------------------------
         const clearCartQuery = `
-          DELETE FROM cart_items 
+          DELETE FROM cart_items
           WHERE customer_id = ? AND staff_id = ?
         `;
 
-        const clearCartValues = [
-          order.customer_id,
-          order.order_placed_by // staff_id is stored here
-        ];
-
-        console.log('🛒 Clearing cart for customer:', order.customer_id, 'and staff:', order.order_placed_by);
-
         const clearCartResult = await new Promise((resolve, reject) => {
-          connection.query(clearCartQuery, clearCartValues, (err, result) => {
-            if (err) reject(err);
-            else {
-              console.log('✅ Cart cleared, affected rows:', result.affectedRows);
-              resolve(result);
+          connection.query(
+            clearCartQuery,
+            [order.customer_id, order.order_placed_by],
+            (err, result) => {
+              if (err) reject(err);
+              else resolve(result);
             }
-          });
+          );
         });
 
-        // Commit transaction
+        console.log("🛒 Cart cleared:", clearCartResult.affectedRows);
+
+        // ---------------------------------------------------
+        // 4. COMMIT TRANSACTION
+        // ---------------------------------------------------
         await new Promise((resolve, reject) => {
           connection.commit((err) => {
             if (err) reject(err);
@@ -223,33 +237,107 @@ router.post('/create-complete-order', (req, res) => {
           });
         });
 
-        console.log('✅ Transaction committed successfully');
-
         connection.release();
+        console.log("✅ Transaction committed");
 
+        // ---------------------------------------------------
+        // 5. SEND EMAILS
+        // ---------------------------------------------------
+        try {
+          const emailHTML = `
+            <h2>Order Placed Successfully</h2>
+            <p><strong>Order Number:</strong> ${order.order_number}</p>
+            <p><strong>Customer:</strong> ${order.customer_name}</p>
+            <p><strong>Net Amount:</strong> ₹${order.net_payable}</p>
+            <p><strong>Placed By:</strong> ${order.ordered_by}</p>
+          `;
+
+          await Promise.all([
+            sendMail({
+              to: process.env.ADMIN_EMAIL,
+              subject: `New Order - ${order.order_number}`,
+              html: emailHTML,
+            }),
+            sendMail({
+              to: order.staff_email,
+              subject: `Order Placed - ${order.order_number}`,
+              html: emailHTML,
+            }),
+            sendMail({
+              to: order.retailer_email,
+              subject: `Your Order ${order.order_number}`,
+              html: emailHTML,
+            }),
+          ]);
+
+          console.log("📧 Emails sent");
+        } catch (mailErr) {
+          console.error("❌ Email failed:", mailErr.message);
+        }
+
+        // ---------------------------------------------------
+        // 6. SEND SMS TO RETAILER (SMSJUST)
+        // ---------------------------------------------------
+        try {
+          if (order.retailer_mobile) {
+            const productSummary = orderItems
+              .map((item) => item.item_name)
+              .join(", ");
+
+            const smsText = `Dear Customer, Your Order No. ${order.order_number} for ${productSummary} has been successfully placed. Thank you for choosing - SHREE SHASHWATRAJ AGRO PRIVATE LIMITED`;
+
+            const smsUrl =
+              "https://www.smsjust.com/blank/sms/user/urlsms.php";
+
+            const smsParams = {
+              username: process.env.SMS_USERNAME,
+              pass: process.env.SMS_PASSWORD,
+              senderid: process.env.SMS_SENDERID,
+              dest_mobileno: order.retailer_mobile,
+              message: smsText,
+              dltentityid: process.env.SMS_ENTITYID,
+              dlttempid: process.env.SMS_ORDERTEMPLATEID,
+              response: "y",
+            };
+
+            const smsResponse = await axios.get(smsUrl, {
+              params: smsParams,
+            });
+
+            console.log("📩 SMS sent:", smsResponse.data);
+          }
+        } catch (smsErr) {
+          console.error("❌ SMS failed:", smsErr.message);
+        }
+
+        // ---------------------------------------------------
+        // 7. RESPONSE
+        // ---------------------------------------------------
         res.status(201).json({
           success: true,
-          order_number: order.order_number,
           order_id: orderResult.insertId,
+          order_number: order.order_number,
           cart_cleared: clearCartResult.affectedRows,
-          message: 'Order created successfully and cart cleared'
+          message: "Order created successfully",
         });
-
       } catch (error) {
-        // Rollback transaction on error
         connection.rollback(() => {
           connection.release();
-          console.error('❌ Transaction error, rolled back:', error);
+          console.error("❌ Transaction failed:", error);
           res.status(500).json({
-            error: 'Failed to create order',
+            error: "Failed to create order",
             details: error.message,
-            sqlMessage: error.sqlMessage
           });
         });
       }
     });
   });
 });
+
+
+
+module.exports = router;
+
 
 
 router.get("/orders-placed-by/:order_placed_by", (req, res) => {
@@ -513,6 +601,122 @@ function updateOrderApprovalStatus(orderNumber) {
     }
   );
 }
+
+
+
+router.put("/items/:item_id/approve", async (req, res) => {
+  const { item_id } = req.params;
+  const { approval_status } = req.body;
+
+  console.log(`📝 Updating item approval status: ${item_id} -> ${approval_status}`);
+
+  // Validate approval_status
+  if (!approval_status || !["approved", "rejected", "pending"].includes(approval_status)) {
+    return res.status(400).json({
+      error: "Invalid approval_status. Must be 'approved', 'rejected', or 'pending'",
+    });
+  }
+
+  try {
+    // First, check if item exists
+    const [itemRows] = await db.promise().query(
+      "SELECT * FROM order_items WHERE id = ?",
+      [item_id]
+    );
+
+    if (itemRows.length === 0) {
+      return res.status(404).json({
+        error: "Order item not found",
+      });
+    }
+
+    const item = itemRows[0];
+    const order_number = item.order_number;
+
+    // Update the item's approval status
+    const updateQuery = `
+      UPDATE order_items 
+      SET approval_status = ?, updated_at = NOW()
+      WHERE id = ?
+    `;
+
+    const [result] = await db.promise().query(updateQuery, [
+      approval_status,
+      item_id,
+    ]);
+
+    if (result.affectedRows === 0) {
+      return res.status(404).json({
+        error: "Item not found or no changes made",
+      });
+    }
+
+    console.log(`✅ Item approval status updated for item ID: ${item_id}`);
+
+    // Get updated item details
+    const [updatedItemRows] = await db.promise().query(
+      "SELECT * FROM order_items WHERE id = ?",
+      [item_id]
+    );
+
+    // Check if all items in the order have the same approval status
+    const [allItems] = await db.promise().query(
+      "SELECT approval_status FROM order_items WHERE order_number = ?",
+      [order_number]
+    );
+
+    // Determine if we should update the parent order's approval status
+    let orderApprovalStatus = null;
+    
+    if (allItems.length > 0) {
+      const allApproved = allItems.every(item => item.approval_status === "approved");
+      const allRejected = allItems.every(item => item.approval_status === "rejected");
+      const anyPending = allItems.some(item => item.approval_status === "pending" || !item.approval_status);
+      const mixedStatus = allItems.some(item => item.approval_status === "approved") && 
+                         allItems.some(item => item.approval_status === "rejected");
+
+      if (allApproved) {
+        orderApprovalStatus = "approved";
+      } else if (allRejected) {
+        orderApprovalStatus = "rejected";
+      } else if (mixedStatus) {
+        orderApprovalStatus = "partially_approved";
+      } else if (anyPending) {
+        orderApprovalStatus = "pending";
+      }
+    }
+
+    // Update parent order's approval status if needed
+    if (orderApprovalStatus) {
+      await db.promise().query(
+        "UPDATE orders SET approval_status = ?, updated_at = NOW() WHERE order_number = ?",
+        [orderApprovalStatus, order_number]
+      );
+      
+      console.log(`📦 Parent order ${order_number} approval status updated to: ${orderApprovalStatus}`);
+    }
+
+    res.json({
+      success: true,
+      message: `Item ${approval_status} successfully`,
+      data: {
+        item_id,
+        approval_status,
+        order_number,
+        updated_item: updatedItemRows[0],
+        order_approval_status: orderApprovalStatus
+      }
+    });
+
+  } catch (err) {
+    console.error("❌ Error updating item approval status:", err);
+    
+    res.status(500).json({
+      error: "Failed to update item approval status",
+      details: err.message,
+    });
+  }
+});
 
 
 

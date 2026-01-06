@@ -4,7 +4,7 @@ const db = require('../../db');
 
 // GET all credit periods
 router.get('/credit', (req, res) => {
-  console.log('Fetching credit periods from database...');
+  
   
   db.query(
     'SELECT * FROM credit_periods ORDER BY created_at DESC',
@@ -18,9 +18,7 @@ router.get('/credit', (req, res) => {
         });
       }
       
-      console.log('Database results:', results);
-      console.log('Data length:', results.length);
-      
+
       res.json({
         success: true,
         data: results,

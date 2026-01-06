@@ -130,14 +130,15 @@ router.post('/receipts', upload.single('transaction_proof'), async (req, res) =>
       igst,
       cess,
       total,
-      TransactionType
+      TransactionType,
+        data_type 
     } = req.body;
 
     let safeTransactionType =
       TransactionType === "purchase voucher"
         ? "purchase voucher"
         : "Receipt";
-
+ const safeDataType = data_type || null;
     const receiptAmount = parseFloat(amount || 0);
     const currentDate = new Date();
     const safeInvoiceNumber = invoice_number || null;
@@ -145,16 +146,39 @@ router.post('/receipts', upload.single('transaction_proof'), async (req, res) =>
     // IMPORTANT: Get the uploaded file from req.file
     let transaction_proof_filename = null;
     if (req.file) {
-      transaction_proof_filename = req.file.filename; // This should be the uploaded file name
+      transaction_proof_filename = req.file.filename;
       console.log("📁 Uploaded transaction proof file:", transaction_proof_filename);
-      console.log("📁 File details:", {
-        originalname: req.file.originalname,
-        filename: req.file.filename,
-        path: req.file.path,
-        size: req.file.size
-      });
     } else {
       console.log("⚠️ No transaction proof file uploaded");
+    }
+
+    // -------------------------------------------
+    // GET STAFF INFORMATION FROM ORIGINAL TRANSACTION
+    // -------------------------------------------
+    let staffIdForReceipt = null;
+    let assignedStaffNameForReceipt = null;
+    let originalInvoiceRow = null; // Store original invoice data
+
+if (safeInvoiceNumber) {
+  const [transactionRows] = await connection.promise().query(
+    `SELECT staffid, assigned_staff, TotalAmount, balance_amount, status, order_number
+     FROM voucher 
+     WHERE TransactionType IN ('Stock Transfer', 'Sales', 'Purchase')
+     AND InvoiceNumber = ? 
+     LIMIT 1`,
+    [safeInvoiceNumber]
+  );
+
+      if (transactionRows.length > 0) {
+        originalInvoiceRow = transactionRows[0]; // Store the original invoice row
+        staffIdForReceipt = transactionRows[0].staffid;
+        assignedStaffNameForReceipt = transactionRows[0].assigned_staff;
+        
+        console.log("👤 Staff info for receipt:", {
+          staffIdForReceipt,
+          assignedStaffNameForReceipt
+        });
+      }
     }
 
     // -------------------------------------------
@@ -186,7 +210,7 @@ router.post('/receipts', upload.single('transaction_proof'), async (req, res) =>
     console.log("Transaction Type:", safeTransactionType);
 
     // -------------------------------------------
-    // 2️⃣ INSERT RECEIPT INTO VOUCHER TABLE
+    // 2️⃣ INSERT RECEIPT INTO VOUCHER TABLE (WITH STAFF INFO)
     // -------------------------------------------
     const [receiptInsert] = await connection.promise().execute(
       `INSERT INTO voucher (
@@ -196,10 +220,11 @@ router.post('/receipts', upload.single('transaction_proof'), async (req, res) =>
         PartyID, PartyName, BasicAmount, ValueOfGoods, EntryDate, SGSTPercentage, 
         CGSTPercentage, IGSTPercentage, SGSTAmount, CGSTAmount, IGSTAmount, 
         TaxSystem, paid_amount, created_at, balance_amount, status, paid_date, 
-        pdf_data, DC, pdf_file_name, pdf_created_at, transaction_proof
+        pdf_data, DC, pdf_file_name, pdf_created_at, transaction_proof,
+        staffid, assigned_staff,data_type  
       )
       VALUES (?, ?, ?, ?, ?, ?, 'Immediate', 0, 0, 0, ?, 0, ?, NULL, NULL, ?, ?, ?, ?, ?, ?, ?, ?, 0, 0, 0, 0, 0, 0,
-              'GST', ?, ?, 0, 'Paid', ?, ?, 'C', ?, ?, ?)`,
+              'GST', ?, ?, 0, 'Paid', ?, ?, 'C', ?, ?, ?, ?, ?, ?)`,
       [
         safeTransactionType,
         nextReceipt,
@@ -221,9 +246,12 @@ router.post('/receipts', upload.single('transaction_proof'), async (req, res) =>
         currentDate,
         currentDate,
         null,
-        null, // pdf_file_name - changed from transaction_proof_filename
+        null, // pdf_file_name
         currentDate,
-        transaction_proof_filename // This is where transaction_proof goes
+        transaction_proof_filename, // transaction_proof
+        staffIdForReceipt, // staffid
+        assignedStaffNameForReceipt,
+         safeDataType  
       ]
     );
 
@@ -270,91 +298,252 @@ router.post('/receipts', upload.single('transaction_proof'), async (req, res) =>
     );
 
     // ---------------------------------------------------
-    // 4️⃣ STAFF INCENTIVE CALCULATION AND UPDATION
+    // 4️⃣ UPDATE BALANCE_AMOUNT AND STATUS IN ORIGINAL INVOICE
     // ---------------------------------------------------
-    if (safeTransactionType === "Receipt" && safeInvoiceNumber) {
-      console.log("🔍 Looking for matching Sales with InvoiceNumber:", safeInvoiceNumber);
+    if (safeInvoiceNumber && originalInvoiceRow) {
+      console.log("🔄 Updating balance_amount and status for original invoice:", safeInvoiceNumber);
       
-      const [salesRows] = await connection.promise().query(
-        `SELECT staffid, staff_incentive 
-         FROM voucher 
-         WHERE TransactionType = 'Sales' 
-         AND InvoiceNumber = ? 
-         LIMIT 1`,
-        [safeInvoiceNumber]
+      const totalAmount = parseFloat(originalInvoiceRow.TotalAmount) || 0;
+      const currentBalance = parseFloat(originalInvoiceRow.balance_amount) || totalAmount;
+      const newBalance = currentBalance - receiptAmount;
+      const orderNumber = originalInvoiceRow.order_number;
+      
+      console.log("📊 Invoice Balance Calculation:", {
+        invoiceNumber: safeInvoiceNumber,
+        totalAmount: totalAmount,
+        currentBalance: currentBalance,
+        receiptAmount: receiptAmount,
+        newBalance: newBalance,
+        orderNumber: orderNumber
+      });
+      
+      // Determine status based on new balance
+      let newStatus = "pending";
+      if (newBalance <= 0) {
+        newStatus = "Paid";
+      } else if (newBalance > 0 && newBalance < totalAmount) {
+        newStatus = "Partial";
+      } else {
+        newStatus = "pending";
+      }
+      
+      console.log("📊 Status Calculation:", {
+        newBalance: newBalance,
+        newStatus: newStatus
+      });
+      
+ await connection.promise().query(
+  `UPDATE voucher 
+   SET balance_amount = ?, 
+       status = ?,
+       updated_at = NOW()
+   WHERE InvoiceNumber = ? 
+     AND TransactionType IN ('Stock Transfer', 'Sales', 'Purchase')`,
+  [newBalance, newStatus, safeInvoiceNumber]
+);
+      
+      console.log("✅ Original invoice updated:", {
+        invoiceNumber: safeInvoiceNumber,
+        newBalance: newBalance,
+        newStatus: newStatus,
+        orderNumber: orderNumber
+      });
+    } else {
+      console.log("ℹ️ No original invoice found for InvoiceNumber:", safeInvoiceNumber);
+    }
+
+  // ---------------------------------------------------
+// 5️⃣ UNPAID AMOUNT DEDUCTION (Only for transactions with order_number)
+// ---------------------------------------------------
+if (safeTransactionType === "Receipt" && retailer_id) {
+  console.log(`🔍 Checking if unpaid amount deduction is applicable...`);
+  
+  try {
+    // Use the stored originalInvoiceRow to check order_number
+    if (originalInvoiceRow && originalInvoiceRow.order_number) {
+      const orderNumber = originalInvoiceRow.order_number;
+      
+      
+      // Check if required columns exist
+      const tableCheck = await connection.promise().query(
+        "SHOW COLUMNS FROM accounts LIKE 'unpaid_amount'"
       );
-
-      if (salesRows.length > 0) {
-        const salesRow = salesRows[0];
-        const staffIdFromSales = salesRow.staffid;
+      
+      if (tableCheck[0].length === 0) {
+        console.warn("⚠️ 'unpaid_amount' column not found in accounts table.");
+      } else {
+        // First, check if credit_limit column exists
+        const creditLimitCheck = await connection.promise().query(
+          "SHOW COLUMNS FROM accounts LIKE 'credit_limit'"
+        );
         
-        console.log("📊 Sales Row Found:", {
-          invoiceNumber: safeInvoiceNumber,
-          staff_id_from_sales: staffIdFromSales,
-          staff_incentive_percentage: salesRow.staff_incentive,
-          receipt_paid_amount: receiptAmount
-        });
-
-        if (staffIdFromSales) {
-          let staffIncentivePercentage = 0;
+        // Get current account data
+        const [currentAccount] = await connection.promise().query(
+          "SELECT unpaid_amount, credit_limit FROM accounts WHERE id = ?",
+          [retailer_id]
+        );
+        
+        if (currentAccount.length === 0) {
+          console.warn(`⚠️ Account with id ${retailer_id} not found in accounts table.`);
+        } else {
+          const currentUnpaid = parseFloat(currentAccount[0].unpaid_amount) || 0;
+          const creditLimit = parseFloat(currentAccount[0].credit_limit) || 0;
+          const newUnpaid = currentUnpaid - receiptAmount;
           
-          if (salesRow.staff_incentive !== null && salesRow.staff_incentive !== undefined) {
-            staffIncentivePercentage = parseFloat(salesRow.staff_incentive);
+          // Calculate new balance_amount (credit_limit - unpaid_amount)
+          const newBalanceAmount = creditLimit - newUnpaid;
+          
+          // Prepare update query based on whether balance_amount column exists
+          let updateQuery, updateParams;
+          
+          // Check if balance_amount column exists
+          const balanceCheck = await connection.promise().query(
+            "SHOW COLUMNS FROM accounts LIKE 'balance_amount'"
+          );
+          
+          if (balanceCheck[0].length > 0) {
+            // Column exists, include it in update
+            updateQuery = `
+            UPDATE accounts 
+            SET unpaid_amount = ?,
+                balance_amount = ?,
+                updated_at = NOW()
+            WHERE id = ?
+            `;
+            updateParams = [newUnpaid, newBalanceAmount, retailer_id];
+          } else {
+            // Column doesn't exist, update only unpaid_amount
+            updateQuery = `
+            UPDATE accounts 
+            SET unpaid_amount = ?,
+                updated_at = NOW()
+            WHERE id = ?
+            `;
+            updateParams = [newUnpaid, retailer_id];
+            console.log("⚠️ 'balance_amount' column not found. Only updating unpaid_amount.");
           }
           
-          console.log("ℹ️ Staff Incentive Percentage from Sales:", staffIncentivePercentage);
+          await connection.promise().query(updateQuery, updateParams);
+          
+          // Log detailed information
+          console.log(`✅ UNPAID AMOUNT UPDATED - Old: ${currentUnpaid}, New: ${newUnpaid}, Difference: -${receiptAmount}`);
+          
+          if (balanceCheck[0].length > 0) {
+            const oldBalanceAmount = creditLimit - currentUnpaid;
+            console.log(`✅ BALANCE AMOUNT UPDATED - Old: ${oldBalanceAmount}, New: ${newBalanceAmount}, Difference: ${receiptAmount}`);
+          }
+        }
+      }
+    } else {
+      console.log(`❌ Order number is NULL/empty. UNPAID AMOUNT DEDUCTION SKIPPED.`);
+      console.log(`ℹ️ Only transactions with order_number qualify for unpaid amount updates`);
+    }
+  } catch (error) {
+    console.error(`❌ ERROR in unpaid amount deduction check:`, error.message);
+  }
+}
 
-          if (staffIncentivePercentage > 0) {
-            const calculatedIncentive = (receiptAmount * staffIncentivePercentage) / 100;
-            const roundedIncentive = parseFloat(calculatedIncentive.toFixed(2));
+    // ---------------------------------------------------
+    // 6️⃣ STAFF INCENTIVE CALCULATION (Only for transactions with order_number)
+    // ---------------------------------------------------
+if (safeTransactionType === "Receipt" && safeInvoiceNumber) {
+  console.log("🔍 Looking for matching transaction with InvoiceNumber:", safeInvoiceNumber);
+  
+  // Find transaction with order_number
+  const [transactionRows] = await connection.promise().query(
+    `SELECT staffid, staff_incentive, TransactionType, order_number 
+     FROM voucher 
+     WHERE (TransactionType = 'Stock Transfer' OR TransactionType = 'Sales')
+     AND InvoiceNumber = ? 
+     LIMIT 1`,
+    [safeInvoiceNumber]
+  );
+
+  if (transactionRows.length > 0) {
+    const transactionRow = transactionRows[0];
+    const staffIdFromTransfer = transactionRow.staffid;
+    const transactionType = transactionRow.TransactionType;
+    const orderNumber = transactionRow.order_number;
+    
+    console.log("📊 Transaction Row Found:", {
+      invoiceNumber: safeInvoiceNumber,
+      transactionType: transactionType,
+      order_number: orderNumber,
+      staff_id_from_transfer: staffIdFromTransfer,
+      staff_incentive_percentage: transactionRow.staff_incentive,
+      receipt_paid_amount: receiptAmount
+    });
+
+    // IMPORTANT: Only proceed if order_number exists
+    if (orderNumber) {
+      console.log("✅ Order number exists, proceeding with staff incentive calculation");
+      
+      if (staffIdFromTransfer) {
+        let staffIncentivePercentage = 0;
+        
+        if (transactionRow.staff_incentive !== null && transactionRow.staff_incentive !== undefined) {
+          staffIncentivePercentage = parseFloat(transactionRow.staff_incentive);
+        }
+        
+        console.log("ℹ️ Staff Incentive Percentage from transaction:", staffIncentivePercentage);
+
+        if (staffIncentivePercentage > 0) {
+          const calculatedIncentive = (receiptAmount * staffIncentivePercentage) / 100;
+          const roundedIncentive = parseFloat(calculatedIncentive.toFixed(2));
+          
+          console.log("💰 Incentive Calculation:", {
+            receiptAmount: receiptAmount,
+            staffIncentivePercentage: staffIncentivePercentage + "%",
+            calculatedIncentive: roundedIncentive
+          });
+
+          const [accountExists] = await connection.promise().query(
+            `SELECT id, staff_incentive, name FROM accounts WHERE id = ?`,
+            [staffIdFromTransfer]
+          );
+
+          console.log("🔍 Looking for staff in accounts table with ID:", staffIdFromTransfer);
+          console.log("🔍 Account found:", accountExists.length > 0 ? accountExists[0] : "No account found");
+
+          if (accountExists.length > 0) {
+            const currentIncentive = accountExists[0].staff_incentive !== null 
+              ? parseFloat(accountExists[0].staff_incentive) || 0 
+              : 0;
             
-            console.log("💰 Incentive Calculation:", {
-              receiptAmount: receiptAmount,
-              staffIncentivePercentage: staffIncentivePercentage + "%",
-              calculatedIncentive: roundedIncentive
-            });
-
-            const [accountExists] = await connection.promise().query(
-              `SELECT id, staff_incentive, name FROM accounts WHERE id = ?`,
-              [staffIdFromSales]
+            const newTotalIncentive = currentIncentive + roundedIncentive;
+            const staffName = accountExists[0].name || "Unknown";
+            
+            await connection.promise().execute(
+              `UPDATE accounts SET staff_incentive = ? WHERE id = ?`,
+              [newTotalIncentive, staffIdFromTransfer]
             );
-
-            console.log("🔍 Looking for staff in accounts table with ID:", staffIdFromSales);
-            console.log("🔍 Account found:", accountExists.length > 0 ? accountExists[0] : "No account found");
-
-            if (accountExists.length > 0) {
-              const currentIncentive = accountExists[0].staff_incentive !== null 
-                ? parseFloat(accountExists[0].staff_incentive) || 0 
-                : 0;
-              
-              const newTotalIncentive = currentIncentive + roundedIncentive;
-              const staffName = accountExists[0].name || "Unknown";
-              
-              await connection.promise().execute(
-                `UPDATE accounts SET staff_incentive = ? WHERE id = ?`,
-                [newTotalIncentive, staffIdFromSales]
-              );
-              
-              console.log("✅ Incentive added to staff account:", {
-                accounts_id: staffIdFromSales,
-                staff_name: staffName,
-                previous_incentive: currentIncentive,
-                added_incentive: roundedIncentive,
-                new_total_incentive: newTotalIncentive
-              });
-            } else {
-              console.log("❌ Staff not found in accounts table with ID:", staffIdFromSales);
-            }
+            
+            console.log("✅ Incentive added to staff account:", {
+              accounts_id: staffIdFromTransfer,
+              staff_name: staffName,
+              transaction_type: transactionType,
+              order_number: orderNumber,
+              previous_incentive: currentIncentive,
+              added_incentive: roundedIncentive,
+              new_total_incentive: newTotalIncentive
+            });
           } else {
-            console.log("ℹ️ No staff_incentive percentage found or it's 0 in sales row");
+            console.log("❌ Staff not found in accounts table with ID:", staffIdFromTransfer);
           }
         } else {
-          console.log("⚠️ No staffid found in sales row");
+          console.log("ℹ️ No staff_incentive percentage found or it's 0 in transaction row");
         }
       } else {
-        console.log("⚠️ No matching Sales found for InvoiceNumber:", safeInvoiceNumber);
+        console.log("⚠️ No staffid found in transaction row");
       }
+    } else {
+      console.log("❌ Order number is NULL/empty. Staff incentive calculation SKIPPED.");
+      console.log("ℹ️ Only transactions with order_number qualify for staff incentives");
     }
+  } else {
+    console.log("⚠️ No matching Stock Transfer or Sales found for InvoiceNumber:", safeInvoiceNumber);
+  }
+}
 
     await connection.promise().commit();
 
@@ -363,10 +552,28 @@ router.post('/receipts', upload.single('transaction_proof'), async (req, res) =>
       message: `${safeTransactionType} created successfully`,
       receipt_no: nextReceipt,
       voucherId: receiptVoucherId,
-      transaction_proof: transaction_proof_filename, // Include this in response
+      transaction_proof: transaction_proof_filename,
       transactionType: safeTransactionType,
+       data_type: safeDataType, 
       stored_batch_id: batch_id,
-      stored_batch_number: batch
+      stored_batch_number: batch,
+      staffid: staffIdForReceipt,
+      assigned_staff: assignedStaffNameForReceipt,
+      // Include invoice update info in response
+      invoice_update: safeInvoiceNumber ? {
+        invoiceNumber: safeInvoiceNumber,
+        new_balance: originalInvoiceRow ? (parseFloat(originalInvoiceRow.balance_amount || originalInvoiceRow.TotalAmount) - receiptAmount) : null,
+        new_status: (() => {
+          if (!originalInvoiceRow) return null;
+          const totalAmount = parseFloat(originalInvoiceRow.TotalAmount) || 0;
+          const currentBalance = parseFloat(originalInvoiceRow.balance_amount) || totalAmount;
+          const newBalance = currentBalance - receiptAmount;
+          
+          if (newBalance <= 0) return "Paid";
+          if (newBalance > 0 && newBalance < totalAmount) return "Partial";
+          return "pending";
+        })()
+      } : null
     });
 
   } catch (error) {
@@ -381,7 +588,6 @@ router.post('/receipts', upload.single('transaction_proof'), async (req, res) =>
     if (connection) connection.release();
   }
 });
-
 
 router.get('/receipts-with-vouchers', async (req, res) => {
   try {
@@ -501,7 +707,7 @@ router.get('/receipts', async (req, res) => {
           WHERE 
             v.PartyID = r.PartyID
             AND v.InvoiceNumber = r.InvoiceNumber
-            AND v.TransactionType IN ('Sales', 'Purchase')
+            AND v.TransactionType IN ('Sales', 'stock transfer','Purchase')
         ) AS invoice_numbers,
 
         (
@@ -510,7 +716,7 @@ router.get('/receipts', async (req, res) => {
           WHERE 
             v.PartyID = r.PartyID
             AND v.InvoiceNumber = r.InvoiceNumber
-            AND v.TransactionType IN ('Sales', 'Purchase')
+            AND v.TransactionType IN ('Sales', 'stock transfer','Purchase')
         ) AS total_invoice_amount,
 
         (
@@ -519,7 +725,7 @@ router.get('/receipts', async (req, res) => {
           WHERE 
             v.PartyID = r.PartyID
             AND v.InvoiceNumber = r.InvoiceNumber
-            AND v.TransactionType IN ('Sales', 'Purchase')
+            AND v.TransactionType IN ('Sales', 'stock transfer','Purchase')
         ) AS total_paid_amount,
 
         (
@@ -528,7 +734,7 @@ router.get('/receipts', async (req, res) => {
           WHERE 
             v.PartyID = r.PartyID
             AND v.InvoiceNumber = r.InvoiceNumber
-            AND v.TransactionType IN ('Sales', 'Purchase')
+            AND v.TransactionType IN ('Sales', 'stock transfer','Purchase')
         ) AS total_balance_amount
 
       FROM voucher r
@@ -580,7 +786,7 @@ router.get('/receipts/:id', async (req, res) => {
           WHERE 
             v.PartyID = r.PartyID
             AND v.InvoiceNumber = r.InvoiceNumber
-            AND v.TransactionType IN ('Sales', 'Purchase')
+            AND v.TransactionType IN ('Sales', 'stock transfer','Purchase')
         ) AS invoice_numbers,
 
         (
@@ -589,7 +795,7 @@ router.get('/receipts/:id', async (req, res) => {
           WHERE 
             v.PartyID = r.PartyID
             AND v.InvoiceNumber = r.InvoiceNumber
-            AND v.TransactionType IN ('Sales', 'Purchase')
+            AND v.TransactionType IN ('Sales', 'stock transfer','Purchase')
         ) AS total_invoice_amount,
 
         (
@@ -598,7 +804,7 @@ router.get('/receipts/:id', async (req, res) => {
           WHERE 
             v.PartyID = r.PartyID
             AND v.InvoiceNumber = r.InvoiceNumber
-            AND v.TransactionType IN ('Sales', 'Purchase')
+            AND v.TransactionType IN ('Sales', 'stock transfer','Purchase')
         ) AS total_paid_amount,
 
         (
@@ -607,7 +813,7 @@ router.get('/receipts/:id', async (req, res) => {
           WHERE 
             v.PartyID = r.PartyID
             AND v.InvoiceNumber = r.InvoiceNumber
-            AND v.TransactionType IN ('Sales', 'Purchase')
+            AND v.TransactionType IN ('Sales', 'stock transfer','Purchase')
         ) AS total_balance_amount
 
       FROM voucher r
@@ -644,400 +850,405 @@ router.get('/receipts/:id', async (req, res) => {
 });
 
 
+// ------------------------------
+// Get all purchase vouchers
+// ------------------------------
 router.get('/voucher', async (req, res) => {
   try {
-    db.execute(
-      `SELECT 
-         v.*, 
-         a.business_name, 
-         a.name AS payee_name,
-         (
-           SELECT GROUP_CONCAT(DISTINCT v2.InvoiceNumber)
-           FROM voucher v2
-           WHERE v2.VchNo = v.VchNo  -- Use VchNo instead of receipt_number
-           AND v2.TransactionType IN ('Purchase', 'purchase voucher')
-           AND v2.InvoiceNumber IS NOT NULL
-           AND v2.InvoiceNumber != ''
-         ) AS invoice_numbers
-       FROM voucher v
-       LEFT JOIN accounts a ON v.PartyID = a.id
-       WHERE v.TransactionType = 'purchase voucher'
-       ORDER BY v.created_at DESC`,
-      (error, results) => {
-        if (error) {
-          console.error('Database error fetching vouchers (receipts):', error);
-          return res.status(500).json({ error: 'Failed to fetch receipts' });
-        }
+    const query = `
+      SELECT 
+        v.*, 
+        a.business_name, 
+        a.name AS payee_name,
+        (
+          SELECT GROUP_CONCAT(DISTINCT v2.InvoiceNumber)
+          FROM voucher v2
+          WHERE v2.VchNo = v.VchNo
+            AND v2.TransactionType IN ('Purchase', 'purchase voucher')
+            AND v2.InvoiceNumber IS NOT NULL
+            AND v2.InvoiceNumber != ''
+        ) AS invoice_numbers,
 
-        // Convert invoice_numbers string to array
-        const processedResults = results.map(voucher => ({
-          ...voucher,
-          invoice_numbers: voucher.invoice_numbers ? voucher.invoice_numbers.split(',') : []
-        }));
+        COALESCE((
+          SELECT SUM(p.TotalAmount)
+          FROM voucher p
+          WHERE p.PartyID = v.PartyID
+            AND p.TransactionType = 'Purchase'
+            AND p.InvoiceNumber IS NOT NULL
+            AND p.InvoiceNumber != ''
+            AND FIND_IN_SET(p.InvoiceNumber, 
+              COALESCE((
+                SELECT GROUP_CONCAT(DISTINCT v3.InvoiceNumber)
+                FROM voucher v3
+                WHERE v3.VchNo = v.VchNo
+                  AND v3.TransactionType IN ('Purchase', 'purchase voucher')
+                  AND v3.InvoiceNumber IS NOT NULL
+                  AND v3.InvoiceNumber != ''
+              ), '')
+            ) > 0
+        ), 0) AS total_invoice_amount,
 
-        console.log('Receipts fetched from voucher table:', processedResults.length);
-        res.json(processedResults || []);
+        COALESCE((
+          SELECT SUM(p.paid_amount)
+          FROM voucher p
+          WHERE p.PartyID = v.PartyID
+            AND p.TransactionType = 'Purchase'
+            AND p.InvoiceNumber IS NOT NULL
+            AND p.InvoiceNumber != ''
+            AND FIND_IN_SET(p.InvoiceNumber, 
+              COALESCE((
+                SELECT GROUP_CONCAT(DISTINCT v3.InvoiceNumber)
+                FROM voucher v3
+                WHERE v3.VchNo = v.VchNo
+                  AND v3.TransactionType IN ('Purchase', 'purchase voucher')
+                  AND v3.InvoiceNumber IS NOT NULL
+                  AND v3.InvoiceNumber != ''
+              ), '')
+            ) > 0
+        ), 0) AS total_paid_amount,
+
+        COALESCE((
+          SELECT SUM(p.balance_amount)
+          FROM voucher p
+          WHERE p.PartyID = v.PartyID
+            AND p.TransactionType = 'Purchase'
+            AND p.InvoiceNumber IS NOT NULL
+            AND p.InvoiceNumber != ''
+            AND FIND_IN_SET(p.InvoiceNumber, 
+              COALESCE((
+                SELECT GROUP_CONCAT(DISTINCT v3.InvoiceNumber)
+                FROM voucher v3
+                WHERE v3.VchNo = v.VchNo
+                  AND v3.TransactionType IN ('Purchase', 'purchase voucher')
+                  AND v3.InvoiceNumber IS NOT NULL
+                  AND v3.InvoiceNumber != ''
+              ), '')
+            ) > 0
+        ), 0) AS total_balance_amount
+
+      FROM voucher v
+      LEFT JOIN accounts a ON v.PartyID = a.id
+      WHERE v.TransactionType = 'purchase voucher'
+      ORDER BY v.created_at DESC`;
+
+    db.execute(query, (error, results) => {
+      if (error) {
+        console.error('Database error fetching vouchers:', error);
+        return res.status(500).json({ error: 'Failed to fetch vouchers' });
       }
-    );
+
+      const processedResults = results.map(voucher => ({
+        ...voucher,
+        invoice_numbers: voucher.invoice_numbers ? voucher.invoice_numbers.split(',') : [],
+        total_invoice_amount: parseFloat(voucher.total_invoice_amount) || 0,
+        total_paid_amount: parseFloat(voucher.total_paid_amount) || 0,
+        total_balance_amount: parseFloat(voucher.total_balance_amount) || 0
+      }));
+
+      res.json(processedResults || []);
+    });
   } catch (error) {
-    console.error('Error in /receipts route:', error);
-    res.status(500).json({ error: 'Failed to fetch receipts' });
+    console.error('Error in /voucher route:', error);
+    res.status(500).json({ error: 'Server error' });
   }
 });
 
 // ------------------------------
-// Get receipt by ID
+// Get single purchase voucher by ID
 // ------------------------------
 router.get('/voucher/:id', async (req, res) => {
   try {
-    db.execute(
-      `SELECT 
-         v.*, 
-         a.business_name, 
-         a.name AS payee_name,
-         (
-           SELECT GROUP_CONCAT(DISTINCT v2.InvoiceNumber)
-           FROM voucher v2
-           WHERE v2.VchNo = v.VchNo  -- Use VchNo instead of receipt_number
-           AND v2.TransactionType IN ('Purchase', 'purchase voucher')
-           AND v2.InvoiceNumber IS NOT NULL
-           AND v2.InvoiceNumber != ''
-         ) AS invoice_numbers
-       FROM voucher v
-       LEFT JOIN accounts a ON v.PartyID = a.id
-       WHERE v.VoucherID = ? 
-       AND v.TransactionType = 'purchase voucher'`,
-      [req.params.id],
-      (error, results) => {
-        if (error) {
-          console.error('Database error fetching receipt from voucher:', error);
-          return res.status(500).json({ error: 'Failed to fetch receipt' });
-        }
+    const query = `
+      SELECT 
+        v.*, 
+        a.business_name, 
+        a.name AS payee_name,
+        (
+          SELECT GROUP_CONCAT(DISTINCT v2.InvoiceNumber)
+          FROM voucher v2
+          WHERE v2.VchNo = v.VchNo
+            AND v2.TransactionType IN ('Purchase', 'purchase voucher')
+            AND v2.InvoiceNumber IS NOT NULL
+            AND v2.InvoiceNumber != ''
+        ) AS invoice_numbers,
 
-        if (!results || results.length === 0) {
-          return res.status(404).json({ error: 'Receipt not found' });
-        }
+        COALESCE((
+          SELECT SUM(p.TotalAmount)
+          FROM voucher p
+          WHERE p.PartyID = v.PartyID
+            AND p.TransactionType = 'Purchase'
+            AND p.InvoiceNumber IS NOT NULL
+            AND p.InvoiceNumber != ''
+            AND FIND_IN_SET(p.InvoiceNumber, 
+              COALESCE((
+                SELECT GROUP_CONCAT(DISTINCT v3.InvoiceNumber)
+                FROM voucher v3
+                WHERE v3.VchNo = v.VchNo
+                  AND v3.TransactionType IN ('Purchase', 'purchase voucher')
+                  AND v3.InvoiceNumber IS NOT NULL
+                  AND v3.InvoiceNumber != ''
+              ), '')
+            ) > 0
+        ), 0) AS total_invoice_amount,
 
-        // Convert invoice_numbers to array
-        const receipt = {
-          ...results[0],
-          invoice_numbers: results[0].invoice_numbers
-            ? results[0].invoice_numbers.split(',')
-            : []
-        };
+        COALESCE((
+          SELECT SUM(p.paid_amount)
+          FROM voucher p
+          WHERE p.PartyID = v.PartyID
+            AND p.TransactionType = 'Purchase'
+            AND p.InvoiceNumber IS NOT NULL
+            AND p.InvoiceNumber != ''
+            AND FIND_IN_SET(p.InvoiceNumber, 
+              COALESCE((
+                SELECT GROUP_CONCAT(DISTINCT v3.InvoiceNumber)
+                FROM voucher v3
+                WHERE v3.VchNo = v.VchNo
+                  AND v3.TransactionType IN ('Purchase', 'purchase voucher')
+                  AND v3.InvoiceNumber IS NOT NULL
+                  AND v3.InvoiceNumber != ''
+              ), '')
+            ) > 0
+        ), 0) AS total_paid_amount,
 
-        console.log('Receipt fetched from voucher table:', receipt);
-        res.json(receipt);
+        COALESCE((
+          SELECT SUM(p.balance_amount)
+          FROM voucher p
+          WHERE p.PartyID = v.PartyID
+            AND p.TransactionType = 'Purchase'
+            AND p.InvoiceNumber IS NOT NULL
+            AND p.InvoiceNumber != ''
+            AND FIND_IN_SET(p.InvoiceNumber, 
+              COALESCE((
+                SELECT GROUP_CONCAT(DISTINCT v3.InvoiceNumber)
+                FROM voucher v3
+                WHERE v3.VchNo = v.VchNo
+                  AND v3.TransactionType IN ('Purchase', 'purchase voucher')
+                  AND v3.InvoiceNumber IS NOT NULL
+                  AND v3.InvoiceNumber != ''
+              ), '')
+            ) > 0
+        ), 0) AS total_balance_amount
+
+      FROM voucher v
+      LEFT JOIN accounts a ON v.PartyID = a.id
+      WHERE v.VoucherID = ?
+        AND v.TransactionType = 'purchase voucher'`;
+
+    db.execute(query, [req.params.id], (error, results) => {
+      if (error) {
+        console.error('Database error fetching voucher by ID:', error);
+        return res.status(500).json({ error: 'Failed to fetch voucher' });
       }
-    );
+
+      if (!results || results.length === 0) {
+        return res.status(404).json({ error: 'Voucher not found' });
+      }
+
+      const voucher = {
+        ...results[0],
+        invoice_numbers: results[0].invoice_numbers ? results[0].invoice_numbers.split(',') : [],
+        total_invoice_amount: parseFloat(results[0].total_invoice_amount) || 0,
+        total_paid_amount: parseFloat(results[0].total_paid_amount) || 0,
+        total_balance_amount: parseFloat(results[0].total_balance_amount) || 0
+      };
+
+      res.json(voucher);
+    });
   } catch (error) {
-    console.error('Error in /receipts/:id route:', error);
-    res.status(500).json({ error: 'Failed to fetch receipt' });
+    console.error('Error in /voucher/:id route:', error);
+    res.status(500).json({ error: 'Server error' });
   }
 });
 
 
-// router.put('/voucher/:id', upload.single('transaction_proof'), async (req, res) => {
-//   const voucherId = req.params.id;
-//   console.log("voucherId",voucherId)
-//   let connection;
 
-//   try {
-//     // 🔹 Get DB connection
-//     connection = await new Promise((resolve, reject) => {
-//       db.getConnection((err, conn) => {
-//         if (err) reject(err);
-//         else resolve(conn);
-//       });
-//     });
-
-//     // 🔹 Start transaction
-//     await new Promise((resolve, reject) => {
-//       connection.beginTransaction(err => (err ? reject(err) : resolve()));
-//     });
-
-//     // 🔹 Destructure body safely
-//     const {
-//       TransactionType,
-//       VchNo,
-//       product_id,
-//       batch_id,
-//       InvoiceNumber,
-//       Date: voucherDate,
-//       PaymentTerms,
-//       Freight,
-//       TotalQty,
-//       TotalPacks,
-//       TotalQty1,
-//       TaxAmount,
-//       Subtotal,
-//       BillSundryAmount,
-//       TotalAmount,
-//       ChequeNo,
-//       ChequeDate,
-//       BankName,
-//       AccountID,
-//       AccountName,
-//       PartyID,
-//       PartyName,
-//       BasicAmount,
-//       ValueOfGoods,
-//       EntryDate,
-//       SGSTPercentage,
-//       CGSTPercentage,
-//       IGSTPercentage,
-//       SGSTAmount,
-//       CGSTAmount,
-//       IGSTAmount,
-//       TaxSystem,
-//       BatchDetails,
-//       paid_amount,
-//       balance_amount,
-//       receipt_number,
-//       status,
-//       paid_date,
-//       pdf_data,
-//       DC,
-//       pdf_file_name,
-//     } = req.body;
-// console.log(req.body)
-//     // 🔹 Current timestamp
-//     const pdf_created_at = new Date();
-
-//     // 🔹 Handle uploaded proof file (optional)
-//     let transaction_proof_filename = null;
-//     if (req.file) transaction_proof_filename = req.file.filename;
-
-//     // 🔹 Verify voucher existence
-//     const [existingVoucher] = await new Promise((resolve, reject) => {
-//       connection.execute(
-//         'SELECT * FROM voucher WHERE VoucherID = ?',
-//         [voucherId],
-//         (error, results) => (error ? reject(error) : resolve(results))
-//       );
-//     });
-
-//     if (!existingVoucher) {
-//       connection.release();
-//       return res.status(404).json({ error: 'Voucher not found' });
-//     }
-
-//     // 🔹 Build dynamic update
-//     const updateFields = [
-//       'TransactionType = ?',
-//       'VchNo = ?',
-//       'product_id = ?',
-//       'batch_id = ?',
-//       'InvoiceNumber = ?',
-//       'Date = ?',
-//       'PaymentTerms = ?',
-//       'Freight = ?',
-//       'TotalQty = ?',
-//       'TotalPacks = ?',
-//       'TotalQty1 = ?',
-//       'TaxAmount = ?',
-//       'Subtotal = ?',
-//       'BillSundryAmount = ?',
-//       'TotalAmount = ?',
-//       'ChequeNo = ?',
-//       'ChequeDate = ?',
-//       'BankName = ?',
-//       'AccountID = ?',
-//       'AccountName = ?',
-//       'PartyID = ?',
-//       'PartyName = ?',
-//       'BasicAmount = ?',
-//       'ValueOfGoods = ?',
-//       'EntryDate = ?',
-//       'SGSTPercentage = ?',
-//       'CGSTPercentage = ?',
-//       'IGSTPercentage = ?',
-//       'SGSTAmount = ?',
-//       'CGSTAmount = ?',
-//       'IGSTAmount = ?',
-//       'TaxSystem = ?',
-//       'BatchDetails = ?',
-//       'paid_amount = ?',
-//       'balance_amount = ?',
-//       'receipt_number = ?',
-//       'status = ?',
-//       'paid_date = ?',
-//       'pdf_data = ?',
-//       'DC = ?',
-//       'pdf_file_name = ?',
-//       'pdf_created_at = ?'
-//     ];
-
-//     const updateValues = [
-//       TransactionType,
-//       VchNo,
-//       product_id,
-//       batch_id,
-//       InvoiceNumber,
-//       voucherDate,
-//       PaymentTerms,
-//       Freight,
-//       TotalQty,
-//       TotalPacks,
-//       TotalQty1,
-//       TaxAmount,
-//       Subtotal,
-//       BillSundryAmount,
-//       TotalAmount,
-//       ChequeNo,
-//       ChequeDate,
-//       BankName,
-//       AccountID,
-//       AccountName,
-//       PartyID,
-//       PartyName,
-//       BasicAmount,
-//       ValueOfGoods,
-//       EntryDate,
-//       SGSTPercentage,
-//       CGSTPercentage,
-//       IGSTPercentage,
-//       SGSTAmount,
-//       CGSTAmount,
-//       IGSTAmount,
-//       TaxSystem,
-//       BatchDetails,
-//       paid_amount,
-//       balance_amount,
-//       receipt_number,
-//       status,
-//       paid_date,
-//       pdf_data,
-//       DC,
-//       pdf_file_name || null,
-//       pdf_created_at
-//     ];
-
-//     // Add proof if uploaded
-//     if (transaction_proof_filename) {
-//       updateFields.push('transaction_proof_filename = ?');
-//       updateValues.push(transaction_proof_filename);
-//     }
-
-//     // Always append VoucherID last for WHERE
-//     updateValues.push(voucherId);
-
-//     // 🔹 Sanitize undefined → null
-//     const sanitizedValues = updateValues.map(v => (v === undefined ? null : v));
-
-//     // 🔹 Execute update
-//     await new Promise((resolve, reject) => {
-//       connection.execute(
-//         `UPDATE voucher SET ${updateFields.join(', ')} WHERE VoucherID = ?`,
-//         sanitizedValues,
-//         (error, results) => (error ? reject(error) : resolve(results))
-//       );
-//     });
-
-//     // 🔹 Delete old proof if replaced
-//     if (transaction_proof_filename && existingVoucher.transaction_proof_filename) {
-//       const oldFilePath = path.join(__dirname, '../uploads/vouchers', existingVoucher.transaction_proof_filename);
-//       if (fs.existsSync(oldFilePath)) fs.unlinkSync(oldFilePath);
-//     }
-
-//     // 🔹 Commit changes
-//     await new Promise((resolve, reject) => {
-//       connection.commit(err => (err ? reject(err) : resolve()));
-//     });
-
-//     connection.release();
-//     res.json({
-//       success: true,
-//       message: 'Voucher updated successfully',
-//       VoucherID: voucherId,
-//       transaction_proof_filename
-//     });
-
-//   } catch (error) {
-//     console.error('Error updating voucher:', error);
-
-//     if (connection) {
-//       await new Promise(resolve => connection.rollback(() => resolve()));
-//       connection.release();
-//     }
-
-//     if (req.file) fs.unlinkSync(req.file.path);
-
-//     res.status(500).json({
-//       success: false,
-//       error: error.message || 'Failed to update voucher'
-//     });
-//   }
-// });
 
 router.put('/voucher/:id', upload.single('transaction_proof'), async (req, res) => {
   const voucherId = req.params.id;
   let connection;
 
   try {
-    // Get DB connection
+    // ------------------------------
+    // 1️⃣ GET DB CONNECTION
+    // ------------------------------
     connection = await new Promise((resolve, reject) => {
       db.getConnection((err, conn) => (err ? reject(err) : resolve(conn)));
     });
 
-    // Start transaction
     await new Promise((resolve, reject) => {
       connection.beginTransaction(err => (err ? reject(err) : resolve()));
     });
 
-    // Build update dynamically from req.body
-    const updateFields = [];
-    const updateValues = [];
-
-    // Special handling for paid_amount - update both paid_amount and TotalAmount
-    if (req.body.paid_amount !== undefined) {
-      const paidAmount = req.body.paid_amount;
-      
-      // Update both paid_amount and TotalAmount with the same value
-      updateFields.push('paid_amount = ?', 'TotalAmount = ?');
-      updateValues.push(paidAmount, paidAmount);
-      
-      // Calculate balance_amount (should be 0 since both are same)
-      const balanceAmount = 0;
-      updateFields.push('balance_amount = ?');
-      updateValues.push(balanceAmount);
-      
-      // Update status to Paid since full amount is paid
-      updateFields.push('status = ?');
-      updateValues.push('Paid');
-      
-      // Update paid_date to current timestamp
-      updateFields.push('paid_date = ?');
-      updateValues.push(new Date());
-    }
-
-    // Add other fields from req.body (excluding paid_amount since we already handled it)
-    for (const [key, value] of Object.entries(req.body)) {
-      if (key !== 'paid_amount') { // Skip paid_amount as we already handled it
-        updateFields.push(`${key} = ?`);
-        updateValues.push(value === undefined ? null : value);
-      }
-    }
-
-    // Add uploaded file if exists
-    if (req.file) {
-      updateFields.push(`transaction_proof_filename = ?`);
-      updateValues.push(req.file.filename);
-    }
-
-    // Always append voucherId for WHERE
-    updateValues.push(voucherId);
-
-    // Execute update
-    const sql = `UPDATE voucher SET ${updateFields.join(', ')} WHERE VoucherID = ?`;
-
-    await new Promise((resolve, reject) => {
-      connection.execute(sql, updateValues, (err, result) =>
-        err ? reject(err) : resolve(result)
+    // ------------------------------
+    // 2️⃣ FETCH CURRENT VOUCHER (RECEIPT)
+    // ------------------------------
+    const receiptRows = await new Promise((resolve, reject) => {
+      connection.query(
+        `SELECT InvoiceNumber, paid_amount, TransactionType
+         FROM voucher
+         WHERE VoucherID = ?`,
+        [voucherId],
+        (err, results) => (err ? reject(err) : resolve(results))
       );
     });
 
-    // Commit
+    if (!receiptRows || receiptRows.length === 0) {
+      throw new Error('Voucher not found');
+    }
+
+    const receipt = receiptRows[0];
+    const invoiceNumber = receipt.InvoiceNumber;
+    const oldPaidAmount = parseFloat(receipt.paid_amount) || 0;
+    const isReceiptType = receipt.TransactionType === 'Receipt' || 
+                         receipt.TransactionType === 'purchase voucher';
+
+    const newPaidAmount =
+      req.body.paid_amount !== undefined
+        ? parseFloat(req.body.paid_amount) || 0
+        : oldPaidAmount;
+
+    const paidAmountChanged = newPaidAmount !== oldPaidAmount;
+
+    // ------------------------------
+    // 3️⃣ UPDATE RECEIPT ONLY
+    // ------------------------------
+    const updateFields = [];
+    const updateValues = [];
+
+    if (req.body.paid_amount !== undefined) {
+      updateFields.push(
+        'paid_amount = ?',
+        'TotalAmount = ?',
+        'paid_date = ?'
+      );
+      updateValues.push(
+        newPaidAmount,
+        newPaidAmount,
+        new Date()
+      );
+    }
+
+    for (const [key, value] of Object.entries(req.body)) {
+      if (key !== 'paid_amount') {
+        updateFields.push(`${key} = ?`);
+        updateValues.push(value ?? null);
+      }
+    }
+
+    if (req.file) {
+      updateFields.push('transaction_proof = ?');
+      updateValues.push(req.file.filename);
+    }
+
+    if (updateFields.length > 0) {
+      updateValues.push(voucherId);
+
+      await new Promise((resolve, reject) => {
+        connection.query(
+          `UPDATE voucher
+           SET ${updateFields.join(', ')}
+           WHERE VoucherID = ?`,
+          updateValues,
+          err => (err ? reject(err) : resolve())
+        );
+      });
+    }
+
+    // ------------------------------
+    // 4️⃣ RECALCULATE INVOICE BALANCE (UPDATE ONLY THE INVOICE)
+    // ------------------------------
+    if (invoiceNumber && isReceiptType && paidAmountChanged) {
+      // Fetch invoice details
+      const invoiceRows = await new Promise((resolve, reject) => {
+        connection.query(
+          `SELECT VoucherID, TotalAmount, TransactionType, balance_amount
+           FROM voucher
+           WHERE InvoiceNumber = ?
+             AND TransactionType IN ('Purchase', 'Sales', 'Stock Transfer')
+           LIMIT 1`,
+          [invoiceNumber],
+          (err, results) => (err ? reject(err) : resolve(results))
+        );
+      });
+
+      if (invoiceRows.length > 0) {
+        const invoice = invoiceRows[0];
+        const totalAmount = parseFloat(invoice.TotalAmount) || 0;
+        const invoiceTransactionType = invoice.TransactionType;
+        
+        // Determine receipt type condition based on invoice type
+        let receiptTypeCondition = '';
+        let conditionQuery = '';
+        
+        if (invoiceTransactionType === 'Sales' || invoiceTransactionType === 'Stock Transfer') {
+          receiptTypeCondition = "TransactionType = 'Receipt'";
+        } else if (invoiceTransactionType === 'Purchase') {
+          receiptTypeCondition = "TransactionType IN ('Receipt', 'purchase voucher')";
+        }
+        
+        // FIX: Build the complete WHERE clause
+        if (receiptTypeCondition) {
+          conditionQuery = `WHERE InvoiceNumber = ? AND ${receiptTypeCondition}`;
+        } else {
+          conditionQuery = `WHERE InvoiceNumber = ?`;
+        }
+
+        // Sum ALL receipts for this invoice
+        const receiptSumRows = await new Promise((resolve, reject) => {
+          connection.query(
+            `SELECT SUM(paid_amount) AS totalReceiptsPaid
+             FROM voucher
+             ${conditionQuery}`,
+            [invoiceNumber],
+            (err, results) => (err ? reject(err) : resolve(results))
+          );
+        });
+
+        const totalReceiptsPaid = parseFloat(receiptSumRows[0].totalReceiptsPaid) || 0;
+        
+        // Calculate new balance
+        const newBalance = Math.max(0, totalAmount - totalReceiptsPaid);
+
+        // Determine status for the INVOICE
+        let newStatusForInvoice = 'pending';
+        if (newBalance <= 0) {
+          newStatusForInvoice = 'Paid';
+        } else if (totalReceiptsPaid > 0) {
+          newStatusForInvoice = 'Partial';
+        }
+
+        console.log('📊 Invoice Update Calculation:', {
+          invoiceNumber,
+          totalAmount,
+          totalReceiptsPaid,
+          newBalance,
+          newStatusForInvoice,
+          receiptTypeCondition
+        });
+
+        // Update ONLY THE ORIGINAL INVOICE (not purchase vouchers)
+        await new Promise((resolve, reject) => {
+          connection.query(
+            `UPDATE voucher
+             SET balance_amount = ?, status = ?, updated_at = NOW()
+             WHERE VoucherID = ?`,
+            [newBalance, newStatusForInvoice, invoice.VoucherID],
+            err => (err ? reject(err) : resolve())
+          );
+        });
+
+        console.log('✅ Invoice updated:', {
+          invoiceNumber,
+          VoucherID: invoice.VoucherID,
+          newBalance,
+          newStatusForInvoice
+        });
+      }
+    }
+
+    // ------------------------------
+    // 5️⃣ COMMIT
+    // ------------------------------
     await new Promise((resolve, reject) => {
       connection.commit(err => (err ? reject(err) : resolve()));
     });
@@ -1047,11 +1258,12 @@ router.put('/voucher/:id', upload.single('transaction_proof'), async (req, res) 
     res.json({
       success: true,
       message: 'Voucher updated successfully',
-      VoucherID: voucherId,
+      VoucherID: voucherId
     });
 
   } catch (error) {
     console.error('Error updating voucher:', error);
+
     if (connection) {
       await new Promise(resolve => connection.rollback(() => resolve()));
       connection.release();
@@ -1059,80 +1271,14 @@ router.put('/voucher/:id', upload.single('transaction_proof'), async (req, res) 
 
     if (req.file) fs.unlinkSync(req.file.path);
 
-    res.status(500).json({ success: false, error: error.message });
+    res.status(500).json({
+      success: false,
+      error: error.message
+    });
   }
 });
 
-// router.put('/voucher/:id', upload.single('transaction_proof'), async (req, res) => {
-//   const voucherId = req.params.id;
-//   let connection;
 
-//   try {
-//     // Get DB connection
-//     connection = await new Promise((resolve, reject) => {
-//       db.getConnection((err, conn) => (err ? reject(err) : resolve(conn)));
-//     });
-
-//     // Start transaction
-//     await new Promise((resolve, reject) => {
-//       connection.beginTransaction(err => (err ? reject(err) : resolve()));
-//     });
-
-//     // Build update dynamically from req.body
-//     const updateFields = [];
-//     const updateValues = [];
-
-//     for (const [key, value] of Object.entries(req.body)) {
-//       updateFields.push(`${key} = ?`);
-//       updateValues.push(value === undefined ? null : value);
-//     }
-
-//     // Add uploaded file if exists
-//     if (req.file) {
-//       updateFields.push(`transaction_proof_filename = ?`);
-//       updateValues.push(req.file.filename);
-//     }
-
-//     // Always append voucherId for WHERE
-//     updateValues.push(voucherId);
-
-//     // Execute update
-//     const sql = `UPDATE voucher SET ${updateFields.join(', ')} WHERE VoucherID = ?`;
-
-//     await new Promise((resolve, reject) => {
-//       connection.execute(sql, updateValues, (err, result) =>
-//         err ? reject(err) : resolve(result)
-//       );
-//     });
-
-//     // Commit
-//     await new Promise((resolve, reject) => {
-//       connection.commit(err => (err ? reject(err) : resolve()));
-//     });
-
-//     connection.release();
-
-//     res.json({
-//       success: true,
-//       message: 'Voucher updated successfully',
-//       VoucherID: voucherId,
-//     });
-
-//   } catch (error) {
-//     console.error('Error updating voucher:', error);
-//     if (connection) {
-//       await new Promise(resolve => connection.rollback(() => resolve()));
-//       connection.release();
-//     }
-
-//     if (req.file) fs.unlinkSync(req.file.path);
-
-//     res.status(500).json({ success: false, error: error.message });
-//   }
-// });
-
-
-// ✅ DELETE Receipt (without touching ledger table)
 
 router.delete('/receipts/:id', async (req, res) => {
   let connection;
@@ -1173,7 +1319,6 @@ router.delete('/receipts/:id', async (req, res) => {
     const receiptNumber = receipt.receipt_number;
     const retailerId = receipt.PartyID;
 
-    // 🔥 CRITICAL FIX: Delete from voucherdetails FIRST
     console.log('Deleting voucher details for VoucherID:', req.params.id);
     await new Promise((resolve, reject) => {
       connection.execute(

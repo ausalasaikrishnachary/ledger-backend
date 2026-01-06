@@ -879,6 +879,413 @@ router.post('/receipts', upload.single('transaction_proof'), async (req, res) =>
 
 
 
+
+router.post('/receipts', upload.single('transaction_proof'), async (req, res) => {
+  let connection;
+
+  try {
+    connection = await new Promise((resolve, reject) => {
+      db.getConnection((err, conn) => {
+        if (err) reject(err);
+        else resolve(conn);
+      });
+    });
+
+    await connection.promise().beginTransaction();
+
+    const {
+      retailer_id,
+      retailer_name,
+      amount,
+      bank_name,
+      invoice_number,
+      product_id,
+      batch_id,
+      batch,
+      quantity,
+      price,
+      discount,
+      gst,
+      cgst,
+      sgst,
+      igst,
+      cess,
+      total,
+      TransactionType
+    } = req.body;
+
+    let safeTransactionType =
+      TransactionType === "purchase voucher"
+        ? "purchase voucher"
+        : "Receipt";
+
+    const receiptAmount = parseFloat(amount || 0);
+    const currentDate = new Date();
+    const safeInvoiceNumber = invoice_number || null;
+
+    // IMPORTANT: Get the uploaded file from req.file
+    let transaction_proof_filename = null;
+    if (req.file) {
+      transaction_proof_filename = req.file.filename; // This should be the uploaded file name
+      console.log("📁 Uploaded transaction proof file:", transaction_proof_filename);
+      console.log("📁 File details:", {
+        originalname: req.file.originalname,
+        filename: req.file.filename,
+        path: req.file.path,
+        size: req.file.size
+      });
+    } else {
+      console.log("⚠️ No transaction proof file uploaded");
+    }
+
+    // -------------------------------------------
+    // GET STAFF INFORMATION FROM ORIGINAL TRANSACTION
+    // -------------------------------------------
+    let staffIdForReceipt = null;
+    let assignedStaffNameForReceipt = null;
+
+    if (safeInvoiceNumber) {
+      const [transactionRows] = await connection.promise().query(
+        `SELECT staffid, assigned_staff 
+         FROM voucher 
+         WHERE (TransactionType = 'Stock Transfer' OR TransactionType = 'Sales')
+         AND InvoiceNumber = ? 
+         LIMIT 1`,
+        [safeInvoiceNumber]
+      );
+
+      if (transactionRows.length > 0) {
+        staffIdForReceipt = transactionRows[0].staffid;
+        assignedStaffNameForReceipt = transactionRows[0].assigned_staff;
+        
+        console.log("👤 Staff info for receipt:", {
+          staffIdForReceipt,
+          assignedStaffNameForReceipt
+        });
+      }
+    }
+
+    // -------------------------------------------
+    // 1️⃣ Generate NEXT receipt number
+    // -------------------------------------------
+    let queryCondition =
+      safeTransactionType === "purchase voucher"
+        ? "TransactionType = 'purchase voucher'"
+        : "TransactionType = 'Receipt'";
+
+    const [recRows] = await connection.promise().query(
+      `SELECT VchNo 
+       FROM voucher 
+       WHERE ${queryCondition}
+       ORDER BY VoucherID DESC
+       LIMIT 1`
+    );
+
+    let nextReceipt = "REC001";
+    if (recRows.length > 0) {
+      const match = recRows[0].VchNo?.match(/REC(\d+)/);
+      if (match) {
+        const nextNum = parseInt(match[1], 10) + 1;
+        nextReceipt = "REC" + nextNum.toString().padStart(3, "0");
+      }
+    }
+
+    console.log("Generated Receipt No:", nextReceipt);
+    console.log("Transaction Type:", safeTransactionType);
+
+    // -------------------------------------------
+    // 2️⃣ INSERT RECEIPT INTO VOUCHER TABLE (WITH STAFF INFO)
+    // -------------------------------------------
+    const [receiptInsert] = await connection.promise().execute(
+      `INSERT INTO voucher (
+        TransactionType, VchNo, product_id, batch_id, InvoiceNumber, Date,
+        PaymentTerms, Freight, TotalPacks, TaxAmount, Subtotal, BillSundryAmount,
+        TotalAmount, ChequeNo, ChequeDate, BankName, AccountID, AccountName, 
+        PartyID, PartyName, BasicAmount, ValueOfGoods, EntryDate, SGSTPercentage, 
+        CGSTPercentage, IGSTPercentage, SGSTAmount, CGSTAmount, IGSTAmount, 
+        TaxSystem, paid_amount, created_at, balance_amount, status, paid_date, 
+        pdf_data, DC, pdf_file_name, pdf_created_at, transaction_proof,
+        staffid, assigned_staff
+      )
+      VALUES (?, ?, ?, ?, ?, ?, 'Immediate', 0, 0, 0, ?, 0, ?, NULL, NULL, ?, ?, ?, ?, ?, ?, ?, ?, 0, 0, 0, 0, 0, 0,
+              'GST', ?, ?, 0, 'Paid', ?, ?, 'C', ?, ?, ?, ?, ?)`,
+      [
+        safeTransactionType,
+        nextReceipt,
+        product_id || null,
+        batch_id || null,
+        safeInvoiceNumber,
+        currentDate,
+        receiptAmount,
+        receiptAmount,
+        bank_name || null,
+        retailer_id || null,
+        retailer_name || "",
+        retailer_id || null,
+        retailer_name || "",
+        receiptAmount,
+        receiptAmount,
+        currentDate,
+        receiptAmount,
+        currentDate,
+        currentDate,
+        null,
+        null, // pdf_file_name
+        currentDate,
+        transaction_proof_filename, // transaction_proof
+        staffIdForReceipt, // staffid
+        assignedStaffNameForReceipt // assigned_staff
+      ]
+    );
+
+    const receiptVoucherId = receiptInsert.insertId;
+
+    // ---------------------------------------------------
+    // 3️⃣ INSERT INTO VOUCHERDETAILS TABLE
+    // ---------------------------------------------------
+    await connection.promise().execute(
+      `INSERT INTO voucherdetails (
+        voucher_id,
+        product,
+        product_id,
+        InvoiceNumber,
+        batch,
+        quantity,
+        price,
+        discount,
+        gst,
+        cgst,
+        sgst,
+        igst,
+        cess,
+        total,
+        created_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      [
+        receiptVoucherId,
+        retailer_name || "",
+        product_id || null,
+        safeInvoiceNumber,
+        batch || null,
+        quantity || 0,
+        price || 0,
+        discount || 0,
+        gst || 0,
+        cgst || 0,
+        sgst || 0,
+        igst || 0,
+        cess || 0,
+        total || receiptAmount,
+        currentDate
+      ]
+    );
+
+    // ---------------------------------------------------
+    // 4️⃣ UNPAID AMOUNT DEDUCTION (Only for transactions with order_number)
+    // ---------------------------------------------------
+    if (safeTransactionType === "Receipt" && retailer_id) {
+      console.log(`🔍 Checking if unpaid amount deduction is applicable...`);
+      
+      try {
+        // First, find the transaction to check if it has order_number
+        const [transactionRows] = await connection.promise().query(
+          `SELECT TransactionType, order_number, TotalAmount 
+           FROM voucher 
+           WHERE (TransactionType = 'Stock Transfer' OR TransactionType = 'Sales')
+           AND InvoiceNumber = ? 
+           LIMIT 1`,
+          [safeInvoiceNumber]
+        );
+
+        if (transactionRows.length > 0) {
+          const transactionRow = transactionRows[0];
+          const transactionType = transactionRow.TransactionType;
+          const orderNumber = transactionRow.order_number;
+          
+          console.log("📊 Transaction Found for unpaid deduction check:", {
+            invoiceNumber: safeInvoiceNumber,
+            transactionType: transactionType,
+            order_number: orderNumber,
+            retailer_id: retailer_id
+          });
+
+          // ONLY proceed with unpaid amount deduction if order_number exists
+          if (orderNumber) {
+            console.log(`✅ Order number found (${orderNumber}), proceeding with unpaid amount deduction`);
+            console.log(`💰 UNPAID AMOUNT DEDUCTION - PartyID: ${retailer_id}, Amount: ${receiptAmount}`);
+            
+            const tableCheck = await connection.promise().query(
+              "SHOW COLUMNS FROM accounts LIKE 'unpaid_amount'"
+            );
+            
+            if (tableCheck[0].length === 0) {
+              console.warn("⚠️ 'unpaid_amount' column not found in accounts table.");
+            } else {
+              const [currentAccount] = await connection.promise().query(
+                "SELECT unpaid_amount FROM accounts WHERE id = ?",
+                [retailer_id]
+              );
+              
+              if (currentAccount.length === 0) {
+                console.warn(`⚠️ Account with id ${retailer_id} not found in accounts table.`);
+              } else {
+                const currentUnpaid = parseFloat(currentAccount[0].unpaid_amount) || 0;
+                const newUnpaid = currentUnpaid - receiptAmount;
+                
+                await connection.promise().query(
+                  `
+                  UPDATE accounts 
+                  SET unpaid_amount = ?,
+                      updated_at = NOW()
+                  WHERE id = ?
+                  `,
+                  [newUnpaid, retailer_id]
+                );
+                
+                console.log(`✅ UNPAID AMOUNT UPDATED - Old: ${currentUnpaid}, New: ${newUnpaid}, Difference: -${receiptAmount}`);
+              }
+            }
+          } else {
+            console.log(`❌ Order number is NULL/empty. UNPAID AMOUNT DEDUCTION SKIPPED.`);
+            console.log(`ℹ️ Only transactions with order_number qualify for unpaid amount updates`);
+          }
+        } else {
+          console.log(`⚠️ No matching Stock Transfer or Sales found for InvoiceNumber: ${safeInvoiceNumber}`);
+          console.log(`ℹ️ Unpaid amount deduction requires matching transaction`);
+        }
+      } catch (error) {
+        console.error(`❌ ERROR in unpaid amount deduction check:`, error.message);
+      }
+    }
+
+    if (safeTransactionType === "Receipt" && safeInvoiceNumber) {
+      console.log("🔍 Looking for matching transaction with InvoiceNumber:", safeInvoiceNumber);
+      
+      // Find transaction with order_number
+      const [transactionRows] = await connection.promise().query(
+        `SELECT staffid, staff_incentive, TransactionType, order_number 
+         FROM voucher 
+         WHERE (TransactionType = 'Stock Transfer' OR TransactionType = 'Sales')
+         AND InvoiceNumber = ? 
+         LIMIT 1`,
+        [safeInvoiceNumber]
+      );
+
+      if (transactionRows.length > 0) {
+        const transactionRow = transactionRows[0];
+        const staffIdFromTransfer = transactionRow.staffid;
+        const transactionType = transactionRow.TransactionType;
+        const orderNumber = transactionRow.order_number;
+        
+        console.log("📊 Transaction Row Found:", {
+          invoiceNumber: safeInvoiceNumber,
+          transactionType: transactionType,
+          order_number: orderNumber,
+          staff_id_from_transfer: staffIdFromTransfer,
+          staff_incentive_percentage: transactionRow.staff_incentive,
+          receipt_paid_amount: receiptAmount
+        });
+
+        // IMPORTANT: Only proceed if order_number exists
+        if (orderNumber) {
+          console.log("✅ Order number exists, proceeding with staff incentive calculation");
+          
+          if (staffIdFromTransfer) {
+            let staffIncentivePercentage = 0;
+            
+            if (transactionRow.staff_incentive !== null && transactionRow.staff_incentive !== undefined) {
+              staffIncentivePercentage = parseFloat(transactionRow.staff_incentive);
+            }
+            
+            console.log("ℹ️ Staff Incentive Percentage from transaction:", staffIncentivePercentage);
+
+            if (staffIncentivePercentage > 0) {
+              const calculatedIncentive = (receiptAmount * staffIncentivePercentage) / 100;
+              const roundedIncentive = parseFloat(calculatedIncentive.toFixed(2));
+              
+              console.log("💰 Incentive Calculation:", {
+                receiptAmount: receiptAmount,
+                staffIncentivePercentage: staffIncentivePercentage + "%",
+                calculatedIncentive: roundedIncentive
+              });
+
+              const [accountExists] = await connection.promise().query(
+                `SELECT id, staff_incentive, name FROM accounts WHERE id = ?`,
+                [staffIdFromTransfer]
+              );
+
+              console.log("🔍 Looking for staff in accounts table with ID:", staffIdFromTransfer);
+              console.log("🔍 Account found:", accountExists.length > 0 ? accountExists[0] : "No account found");
+
+              if (accountExists.length > 0) {
+                const currentIncentive = accountExists[0].staff_incentive !== null 
+                  ? parseFloat(accountExists[0].staff_incentive) || 0 
+                  : 0;
+                
+                const newTotalIncentive = currentIncentive + roundedIncentive;
+                const staffName = accountExists[0].name || "Unknown";
+                
+                await connection.promise().execute(
+                  `UPDATE accounts SET staff_incentive = ? WHERE id = ?`,
+                  [newTotalIncentive, staffIdFromTransfer]
+                );
+                
+                console.log("✅ Incentive added to staff account:", {
+                  accounts_id: staffIdFromTransfer,
+                  staff_name: staffName,
+                  transaction_type: transactionType,
+                  order_number: orderNumber,
+                  previous_incentive: currentIncentive,
+                  added_incentive: roundedIncentive,
+                  new_total_incentive: newTotalIncentive
+                });
+              } else {
+                console.log("❌ Staff not found in accounts table with ID:", staffIdFromTransfer);
+              }
+            } else {
+              console.log("ℹ️ No staff_incentive percentage found or it's 0 in transaction row");
+            }
+          } else {
+            console.log("⚠️ No staffid found in transaction row");
+          }
+        } else {
+          console.log("❌ Order number is NULL/empty. Staff incentive calculation SKIPPED.");
+          console.log("ℹ️ Only transactions with order_number qualify for staff incentives");
+        }
+      } else {
+        console.log("⚠️ No matching Stock Transfer or Sales found for InvoiceNumber:", safeInvoiceNumber);
+      }
+    }
+
+    await connection.promise().commit();
+
+    res.json({
+      success: true,
+      message: `${safeTransactionType} created successfully`,
+      receipt_no: nextReceipt,
+      voucherId: receiptVoucherId,
+      transaction_proof: transaction_proof_filename,
+      transactionType: safeTransactionType,
+      stored_batch_id: batch_id,
+      stored_batch_number: batch,
+      staffid: staffIdForReceipt, // Include in response
+      assigned_staff: assignedStaffNameForReceipt // Include in response
+    });
+
+  } catch (error) {
+    if (connection) await connection.promise().rollback();
+    console.error("Error creating receipt:", error);
+
+    res.status(500).json({
+      success: false,
+      error: error.message
+    });
+  } finally {
+    if (connection) connection.release();
+  }
+});
+
+
 router.get('/invoices/:invoiceNumber', async (req, res) => {
   let connection;
   try {

@@ -3,6 +3,15 @@ const router = express.Router();
 const db = require('../db');
 const nodemailer = require('nodemailer');
 
+// utils / helpers (keep at top of file)
+const toMySQLDateTime = (value) => {
+  if (!value) return null;
+  return new Date(value)
+    .toISOString()
+    .slice(0, 19)
+    .replace("T", " ");
+};
+
 // --------------------- CREATE ACCOUNT ---------------------
 router.post("/accounts", async (req, res) => {
   // Clean the request body first - handle case inconsistencies
@@ -231,27 +240,63 @@ router.get("/accounts/:id", (req, res) => {
   });
 });
 
-
-// --------------------- UPDATE ACCOUNT ---------------------
+// ================= UPDATE ACCOUNT =================
 router.put("/accounts/:id", (req, res) => {
   const { id } = req.params;
-  const updates = req.body;
 
-  // Remove id to avoid updating primary key
+  console.log("🔥 RAW BODY:", req.body);
+
+  const updates = { ...req.body };
+
+  // ❌ Block system-controlled fields
   delete updates.id;
+  delete updates.created_at;
+  delete updates.updated_at;
 
-  const fields = Object.keys(updates);
-  if (fields.length === 0) return res.status(400).send({ error: 'No fields to update' });
+  // ✅ Fix DATETIME fields (VERY IMPORTANT)
+  const datetimeFields = [
+    "last_score_calculated",
+    "otp_expires_at"
+  ];
 
-  const setClause = fields.map(key => `\`${key}\` = ?`).join(', ');
-  const values = fields.map(field => updates[field] === '' ? null : updates[field]);
+  datetimeFields.forEach((field) => {
+    if (updates[field]) {
+      updates[field] = toMySQLDateTime(updates[field]);
+    }
+  });
 
-  const query = `UPDATE accounts SET ${setClause} WHERE id = ?`;
+  const fields = [];
+  const values = [];
 
-  db.query(query, [...values, id], (err, results) => {
-    if (err) return res.status(500).send({ error: 'Database update failed', details: err.message });
-    if (results.affectedRows === 0) return res.status(404).send({ error: 'Account not found or no changes made' });
-    res.send({ message: 'Account updated successfully', affectedRows: results.affectedRows });
+  for (const key in updates) {
+    fields.push(`\`${key}\` = ?`);
+    values.push(updates[key] === "" ? null : updates[key]);
+  }
+
+  // ❌ Safety check
+  if (fields.length === 0) {
+    return res.status(400).json({ message: "No valid fields to update" });
+  }
+
+  const sql = `UPDATE accounts SET ${fields.join(", ")} WHERE id = ?`;
+
+  console.log("🔥 SQL:", sql);
+  console.log("🔥 VALUES:", [...values, id]);
+
+  db.query(sql, [...values, id], (err, result) => {
+    if (err) {
+      console.error("❌ FULL SQL ERROR:", err);
+      return res.status(500).json({
+        message: "SQL ERROR",
+        code: err.code,
+        sqlMessage: err.sqlMessage
+      });
+    }
+
+    res.json({
+      success: true,
+      affectedRows: result.affectedRows
+    });
   });
 });
 
@@ -291,6 +336,41 @@ router.get("/get-sales-retailers/:id", (req, res) => {
     });
   });
 });
+
+
+
+
+// UPDATE retailer personal info
+router.put("/update-retailer-info/:id", (req, res) => {
+  const { id } = req.params;
+  const { name, email, mobile_number } = req.body;
+
+  if (!name || !email || !mobile_number) {
+    return res.status(400).json({ error: "All fields are required" });
+  }
+
+  const sql = `
+    UPDATE accounts 
+    SET name = ?, email = ?, mobile_number = ?
+    WHERE id = ? AND role = 'retailer'
+  `;
+
+  db.query(sql, [name, email, mobile_number, id], (err, result) => {
+    if (err) {
+      console.error("❌ DB UPDATE ERROR:", err);
+      return res.status(500).json({ error: "Database error" });
+    }
+
+    if (result.affectedRows === 0) {
+      return res.status(404).json({ error: "Retailer not found" });
+    }
+
+    res.json({ success: true, message: "Profile updated successfully" });
+  });
+});
+
+module.exports = router;
+
 
 
 
