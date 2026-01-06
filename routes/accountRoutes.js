@@ -5,7 +5,37 @@ const nodemailer = require('nodemailer');
 
 // --------------------- CREATE ACCOUNT ---------------------
 router.post("/accounts", async (req, res) => {
-  // Destructure request body with defaults
+  // Clean the request body first - handle case inconsistencies
+  const cleanRequestBody = {};
+  const processedKeys = new Set();
+  
+  // Process all keys in request body, handling case inconsistencies
+  Object.keys(req.body).forEach(key => {
+    const lowerKey = key.toLowerCase();
+    
+    // If we haven't processed this key yet (case-insensitive)
+    if (!processedKeys.has(lowerKey)) {
+      processedKeys.add(lowerKey);
+      
+      // Handle target field specifically
+      if (lowerKey === 'target') {
+        // Use the value from 'target' if it exists, otherwise use 'Target'
+        const targetValue = req.body.target !== undefined ? req.body.target : 
+                           req.body.Target !== undefined ? req.body.Target : 100000;
+        cleanRequestBody['target'] = targetValue;
+      } else {
+        // For other fields, keep the original key
+        cleanRequestBody[key] = req.body[key];
+      }
+    }
+  });
+  
+  // Remove any uppercase Target if it exists
+  if (cleanRequestBody.Target) {
+    delete cleanRequestBody.Target;
+  }
+
+  // Now destructure from cleaned request body
   let {
     name,
     email,
@@ -17,9 +47,9 @@ router.post("/accounts", async (req, res) => {
     entity_type,
     group,
     discount = 0,    // default 0
-    Target = 100000, // default 100000
+    target = 100000, // Now lowercase, default 100000
     ...otherData
-  } = req.body;
+  } = cleanRequestBody;
 
   // Supplier-specific adjustments
   if (group === 'SUPPLIERS') {
@@ -30,6 +60,7 @@ router.post("/accounts", async (req, res) => {
   }
 
   // Prepare data object for DB insertion
+  // Use 'Target' (uppercase) for database column since that's what your table expects
   const data = {
     name,
     email,
@@ -41,13 +72,19 @@ router.post("/accounts", async (req, res) => {
     entity_type,
     group,
     discount,
-    Target,
+    Target: target, // Map lowercase target to uppercase Target for DB
     ...otherData
   };
+  
   // Replace undefined or empty strings with null
   Object.keys(data).forEach(key => {
     if (data[key] === undefined || data[key] === '') data[key] = null;
   });
+
+  // Remove any lowercase target from data since we're using uppercase Target
+  if (data.target) {
+    delete data.target;
+  }
 
   const sql = "INSERT INTO accounts SET ?";
 
@@ -89,7 +126,7 @@ Please keep this information secure.
           id: result.insertId,
           ...data,
         });
-   } catch (mailErr) {
+      } catch (mailErr) {
         console.error("Email Error:", mailErr);
         res.status(201).json({
           message: "Retailer added but failed to send email",
