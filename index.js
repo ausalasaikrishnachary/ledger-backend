@@ -46,6 +46,7 @@ const retailerScoreRoutes = require('./routes/retailerScore');
 // Add this line with your other route imports
 const creditPeriodFixRoutes = require('./routes/CreditPeriod/CreditPeriodRoutes');
 const inventory = require('./routes/Retailer/InventoryRoutes');
+const { baseurl } = require('./baseUrl');
 
 const port = 5000;
 
@@ -110,7 +111,7 @@ cron.schedule('47 18 * * *', async () => {
     // Use node-fetch for making HTTP requests
     const fetch = require('node-fetch');
 
-    const response = await fetch('http://localhost:5000/api/calculate-retailer-scores', {
+    const response = await fetch(`${baseurl}//api/calculate-retailer-scores`, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json'
@@ -164,7 +165,7 @@ cron.schedule('18 19 * * *', async () => {
   try {
     const fetch = require('node-fetch');
     
-    const response = await fetch('http://localhost:5000/api/calculate-salesperson-scores', {
+    const response = await fetch(`${baseurl}/api/calculate-salesperson-scores`, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json'
