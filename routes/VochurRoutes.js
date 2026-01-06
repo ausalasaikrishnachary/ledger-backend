@@ -2086,21 +2086,15 @@ function recalculateRunningBalances(transactions) {
       const amount = parseFloat(transaction.Amount) || 0;
       const trantype = transaction.trantype;
       
-      // CORRECTED LOGIC FOR ACCOUNTING RULES:
-      // For Supplier/Vendor Ledger (Party Ledger):
-      // 1. Purchase (you buy goods) → CREDIT (you owe money) → Balance increases
-      // 2. Purchase Voucher (you pay) → DEBIT (you reduce debt) → Balance decreases
-      // 3. Debit Note (return goods) → DEBIT (you reduce debt) → Balance decreases
+  
       
       if (trantype === 'Purchase') {
-        // Purchase is a Credit to supplier (you owe them)
-        runningBalance += amount; // Increase balance (credit)
+        runningBalance += amount; 
         transaction.DC = 'C'; // Ensure DC is 'C' for Purchase
       } 
       else if (trantype === 'purchase voucher' || trantype === 'DebitNote') {
-        // Payment or Return is a Debit to supplier (you pay/return)
-        runningBalance -= amount; // Decrease balance (debit)
-        transaction.DC = 'D'; // Ensure DC is 'D' for payments/returns
+        runningBalance -= amount; 
+        transaction.DC = 'D'; 
       }
       else {
         // For other transaction types, use the DC from database
@@ -2311,8 +2305,8 @@ totalCreditCharge += creditCharge; // DON'T multiply by quantity
           discount_amount: discountAmount,
       credit_charge: creditCharge,
       gst: gstPercentage,
-      cgst: cgstToStore,  // NEW: Stores 5.00 (2.5 × 2)
-      sgst: sgstToStore,  // NEW: Stores 5.00 (2.5 × 2)
+      cgst: cgstToStore, 
+      sgst: sgstToStore,  
       igst: parseFloat(i.igst) || 0,
       cess: parseFloat(i.cess) || 0,
       total: parseFloat(i.total) || (quantity * parseFloat(i.price)),
@@ -2330,7 +2324,6 @@ totalCreditCharge += creditCharge; // DON'T multiply by quantity
   
   console.log("📋 Has item selection:", hasItemSelection ? `Yes (${selectedItemIds.length} items)` : "No");
 
-  // ORDER STATUS UPDATE (for both Sales and stock transfer when there's order number)
   if (orderNumber && (transactionType === "Sales" || transactionType === "stock transfer")) {
     console.log("✅ This is an order conversion. Updating order items and order status...");
     
@@ -2608,7 +2601,6 @@ total_discount: totalDiscount,
     AccountName: accountName,
     PartyID: partyID,
     PartyName: partyName,
-
     BasicAmount: taxableAmount,
     ValueOfGoods: taxableAmount,
     EntryDate: new Date(),

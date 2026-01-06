@@ -130,14 +130,15 @@ router.post('/receipts', upload.single('transaction_proof'), async (req, res) =>
       igst,
       cess,
       total,
-      TransactionType
+      TransactionType,
+        data_type 
     } = req.body;
 
     let safeTransactionType =
       TransactionType === "purchase voucher"
         ? "purchase voucher"
         : "Receipt";
-
+ const safeDataType = data_type || null;
     const receiptAmount = parseFloat(amount || 0);
     const currentDate = new Date();
     const safeInvoiceNumber = invoice_number || null;
@@ -220,10 +221,10 @@ if (safeInvoiceNumber) {
         CGSTPercentage, IGSTPercentage, SGSTAmount, CGSTAmount, IGSTAmount, 
         TaxSystem, paid_amount, created_at, balance_amount, status, paid_date, 
         pdf_data, DC, pdf_file_name, pdf_created_at, transaction_proof,
-        staffid, assigned_staff
+        staffid, assigned_staff,data_type  
       )
       VALUES (?, ?, ?, ?, ?, ?, 'Immediate', 0, 0, 0, ?, 0, ?, NULL, NULL, ?, ?, ?, ?, ?, ?, ?, ?, 0, 0, 0, 0, 0, 0,
-              'GST', ?, ?, 0, 'Paid', ?, ?, 'C', ?, ?, ?, ?, ?)`,
+              'GST', ?, ?, 0, 'Paid', ?, ?, 'C', ?, ?, ?, ?, ?, ?)`,
       [
         safeTransactionType,
         nextReceipt,
@@ -249,7 +250,8 @@ if (safeInvoiceNumber) {
         currentDate,
         transaction_proof_filename, // transaction_proof
         staffIdForReceipt, // staffid
-        assignedStaffNameForReceipt // assigned_staff
+        assignedStaffNameForReceipt,
+         safeDataType  
       ]
     );
 
@@ -552,6 +554,7 @@ if (safeTransactionType === "Receipt" && safeInvoiceNumber) {
       voucherId: receiptVoucherId,
       transaction_proof: transaction_proof_filename,
       transactionType: safeTransactionType,
+       data_type: safeDataType, 
       stored_batch_id: batch_id,
       stored_batch_number: batch,
       staffid: staffIdForReceipt,
@@ -1058,238 +1061,7 @@ router.get('/voucher/:id', async (req, res) => {
 });
 
 
-// router.put('/voucher/:id', upload.single('transaction_proof'), async (req, res) => {
-//   const voucherId = req.params.id;
-//   console.log("voucherId",voucherId)
-//   let connection;
 
-//   try {
-//     // 🔹 Get DB connection
-//     connection = await new Promise((resolve, reject) => {
-//       db.getConnection((err, conn) => {
-//         if (err) reject(err);
-//         else resolve(conn);
-//       });
-//     });
-
-//     // 🔹 Start transaction
-//     await new Promise((resolve, reject) => {
-//       connection.beginTransaction(err => (err ? reject(err) : resolve()));
-//     });
-
-//     // 🔹 Destructure body safely
-//     const {
-//       TransactionType,
-//       VchNo,
-//       product_id,
-//       batch_id,
-//       InvoiceNumber,
-//       Date: voucherDate,
-//       PaymentTerms,
-//       Freight,
-//       TotalQty,
-//       TotalPacks,
-//       TotalQty1,
-//       TaxAmount,
-//       Subtotal,
-//       BillSundryAmount,
-//       TotalAmount,
-//       ChequeNo,
-//       ChequeDate,
-//       BankName,
-//       AccountID,
-//       AccountName,
-//       PartyID,
-//       PartyName,
-//       BasicAmount,
-//       ValueOfGoods,
-//       EntryDate,
-//       SGSTPercentage,
-//       CGSTPercentage,
-//       IGSTPercentage,
-//       SGSTAmount,
-//       CGSTAmount,
-//       IGSTAmount,
-//       TaxSystem,
-//       BatchDetails,
-//       paid_amount,
-//       balance_amount,
-//       receipt_number,
-//       status,
-//       paid_date,
-//       pdf_data,
-//       DC,
-//       pdf_file_name,
-//     } = req.body;
-// console.log(req.body)
-//     // 🔹 Current timestamp
-//     const pdf_created_at = new Date();
-
-//     // 🔹 Handle uploaded proof file (optional)
-//     let transaction_proof_filename = null;
-//     if (req.file) transaction_proof_filename = req.file.filename;
-
-//     // 🔹 Verify voucher existence
-//     const [existingVoucher] = await new Promise((resolve, reject) => {
-//       connection.execute(
-//         'SELECT * FROM voucher WHERE VoucherID = ?',
-//         [voucherId],
-//         (error, results) => (error ? reject(error) : resolve(results))
-//       );
-//     });
-
-//     if (!existingVoucher) {
-//       connection.release();
-//       return res.status(404).json({ error: 'Voucher not found' });
-//     }
-
-//     // 🔹 Build dynamic update
-//     const updateFields = [
-//       'TransactionType = ?',
-//       'VchNo = ?',
-//       'product_id = ?',
-//       'batch_id = ?',
-//       'InvoiceNumber = ?',
-//       'Date = ?',
-//       'PaymentTerms = ?',
-//       'Freight = ?',
-//       'TotalQty = ?',
-//       'TotalPacks = ?',
-//       'TotalQty1 = ?',
-//       'TaxAmount = ?',
-//       'Subtotal = ?',
-//       'BillSundryAmount = ?',
-//       'TotalAmount = ?',
-//       'ChequeNo = ?',
-//       'ChequeDate = ?',
-//       'BankName = ?',
-//       'AccountID = ?',
-//       'AccountName = ?',
-//       'PartyID = ?',
-//       'PartyName = ?',
-//       'BasicAmount = ?',
-//       'ValueOfGoods = ?',
-//       'EntryDate = ?',
-//       'SGSTPercentage = ?',
-//       'CGSTPercentage = ?',
-//       'IGSTPercentage = ?',
-//       'SGSTAmount = ?',
-//       'CGSTAmount = ?',
-//       'IGSTAmount = ?',
-//       'TaxSystem = ?',
-//       'BatchDetails = ?',
-//       'paid_amount = ?',
-//       'balance_amount = ?',
-//       'receipt_number = ?',
-//       'status = ?',
-//       'paid_date = ?',
-//       'pdf_data = ?',
-//       'DC = ?',
-//       'pdf_file_name = ?',
-//       'pdf_created_at = ?'
-//     ];
-
-//     const updateValues = [
-//       TransactionType,
-//       VchNo,
-//       product_id,
-//       batch_id,
-//       InvoiceNumber,
-//       voucherDate,
-//       PaymentTerms,
-//       Freight,
-//       TotalQty,
-//       TotalPacks,
-//       TotalQty1,
-//       TaxAmount,
-//       Subtotal,
-//       BillSundryAmount,
-//       TotalAmount,
-//       ChequeNo,
-//       ChequeDate,
-//       BankName,
-//       AccountID,
-//       AccountName,
-//       PartyID,
-//       PartyName,
-//       BasicAmount,
-//       ValueOfGoods,
-//       EntryDate,
-//       SGSTPercentage,
-//       CGSTPercentage,
-//       IGSTPercentage,
-//       SGSTAmount,
-//       CGSTAmount,
-//       IGSTAmount,
-//       TaxSystem,
-//       BatchDetails,
-//       paid_amount,
-//       balance_amount,
-//       receipt_number,
-//       status,
-//       paid_date,
-//       pdf_data,
-//       DC,
-//       pdf_file_name || null,
-//       pdf_created_at
-//     ];
-
-//     // Add proof if uploaded
-//     if (transaction_proof_filename) {
-//       updateFields.push('transaction_proof_filename = ?');
-//       updateValues.push(transaction_proof_filename);
-//     }
-
-//     // Always append VoucherID last for WHERE
-//     updateValues.push(voucherId);
-
-//     // 🔹 Sanitize undefined → null
-//     const sanitizedValues = updateValues.map(v => (v === undefined ? null : v));
-
-//     // 🔹 Execute update
-//     await new Promise((resolve, reject) => {
-//       connection.execute(
-//         `UPDATE voucher SET ${updateFields.join(', ')} WHERE VoucherID = ?`,
-//         sanitizedValues,
-//         (error, results) => (error ? reject(error) : resolve(results))
-//       );
-//     });
-
-//     // 🔹 Delete old proof if replaced
-//     if (transaction_proof_filename && existingVoucher.transaction_proof_filename) {
-//       const oldFilePath = path.join(__dirname, '../uploads/vouchers', existingVoucher.transaction_proof_filename);
-//       if (fs.existsSync(oldFilePath)) fs.unlinkSync(oldFilePath);
-//     }
-
-//     // 🔹 Commit changes
-//     await new Promise((resolve, reject) => {
-//       connection.commit(err => (err ? reject(err) : resolve()));
-//     });
-
-//     connection.release();
-//     res.json({
-//       success: true,
-//       message: 'Voucher updated successfully',
-//       VoucherID: voucherId,
-//       transaction_proof_filename
-//     });
-
-//   } catch (error) {
-//     console.error('Error updating voucher:', error);
-
-//     if (connection) {
-//       await new Promise(resolve => connection.rollback(() => resolve()));
-//       connection.release();
-//     }
-
-//     if (req.file) fs.unlinkSync(req.file.path);
-
-//     res.status(500).json({
-//       success: false,
-//       error: error.message || 'Failed to update voucher'
-//     });
-//   }
-// });
 
 router.put('/voucher/:id', upload.single('transaction_proof'), async (req, res) => {
   const voucherId = req.params.id;
@@ -1343,19 +1115,18 @@ router.put('/voucher/:id', upload.single('transaction_proof'), async (req, res) 
     const updateFields = [];
     const updateValues = [];
 
-if (req.body.paid_amount !== undefined) {
-  updateFields.push(
-    'paid_amount = ?',
-    'TotalAmount = ?',
-    'paid_date = ?'
-  );
-  updateValues.push(
-    newPaidAmount,
-    newPaidAmount,
-    new Date()
-  );
-}
-
+    if (req.body.paid_amount !== undefined) {
+      updateFields.push(
+        'paid_amount = ?',
+        'TotalAmount = ?',
+        'paid_date = ?'
+      );
+      updateValues.push(
+        newPaidAmount,
+        newPaidAmount,
+        new Date()
+      );
+    }
 
     for (const [key, value] of Object.entries(req.body)) {
       if (key !== 'paid_amount') {
@@ -1405,12 +1176,21 @@ if (req.body.paid_amount !== undefined) {
         const totalAmount = parseFloat(invoice.TotalAmount) || 0;
         const invoiceTransactionType = invoice.TransactionType;
         
-        // Determine receipt type based on invoice type
+        // Determine receipt type condition based on invoice type
         let receiptTypeCondition = '';
+        let conditionQuery = '';
+        
         if (invoiceTransactionType === 'Sales' || invoiceTransactionType === 'Stock Transfer') {
           receiptTypeCondition = "TransactionType = 'Receipt'";
         } else if (invoiceTransactionType === 'Purchase') {
           receiptTypeCondition = "TransactionType IN ('Receipt', 'purchase voucher')";
+        }
+        
+        // FIX: Build the complete WHERE clause
+        if (receiptTypeCondition) {
+          conditionQuery = `WHERE InvoiceNumber = ? AND ${receiptTypeCondition}`;
+        } else {
+          conditionQuery = `WHERE InvoiceNumber = ?`;
         }
 
         // Sum ALL receipts for this invoice
@@ -1418,8 +1198,7 @@ if (req.body.paid_amount !== undefined) {
           connection.query(
             `SELECT SUM(paid_amount) AS totalReceiptsPaid
              FROM voucher
-             WHERE InvoiceNumber = ?
-               AND ${receiptTypeCondition}`,
+             ${conditionQuery}`,
             [invoiceNumber],
             (err, results) => (err ? reject(err) : resolve(results))
           );
@@ -1443,7 +1222,8 @@ if (req.body.paid_amount !== undefined) {
           totalAmount,
           totalReceiptsPaid,
           newBalance,
-          newStatusForInvoice
+          newStatusForInvoice,
+          receiptTypeCondition
         });
 
         // Update ONLY THE ORIGINAL INVOICE (not purchase vouchers)
@@ -1463,9 +1243,6 @@ if (req.body.paid_amount !== undefined) {
           newBalance,
           newStatusForInvoice
         });
-
-        // DON'T UPDATE PURCHASE VOUCHERS - they should keep their own values
-        // The receipt being edited already has its own balance/status from the update above
       }
     }
 
@@ -1501,76 +1278,7 @@ if (req.body.paid_amount !== undefined) {
   }
 });
 
-// router.put('/voucher/:id', upload.single('transaction_proof'), async (req, res) => {
-//   const voucherId = req.params.id;
-//   let connection;
 
-//   try {
-//     // Get DB connection
-//     connection = await new Promise((resolve, reject) => {
-//       db.getConnection((err, conn) => (err ? reject(err) : resolve(conn)));
-//     });
-
-//     // Start transaction
-//     await new Promise((resolve, reject) => {
-//       connection.beginTransaction(err => (err ? reject(err) : resolve()));
-//     });
-
-//     // Build update dynamically from req.body
-//     const updateFields = [];
-//     const updateValues = [];
-
-//     for (const [key, value] of Object.entries(req.body)) {
-//       updateFields.push(`${key} = ?`);
-//       updateValues.push(value === undefined ? null : value);
-//     }
-
-//     // Add uploaded file if exists
-//     if (req.file) {
-//       updateFields.push(`transaction_proof_filename = ?`);
-//       updateValues.push(req.file.filename);
-//     }
-
-//     // Always append voucherId for WHERE
-//     updateValues.push(voucherId);
-
-//     // Execute update
-//     const sql = `UPDATE voucher SET ${updateFields.join(', ')} WHERE VoucherID = ?`;
-
-//     await new Promise((resolve, reject) => {
-//       connection.execute(sql, updateValues, (err, result) =>
-//         err ? reject(err) : resolve(result)
-//       );
-//     });
-
-//     // Commit
-//     await new Promise((resolve, reject) => {
-//       connection.commit(err => (err ? reject(err) : resolve()));
-//     });
-
-//     connection.release();
-
-//     res.json({
-//       success: true,
-//       message: 'Voucher updated successfully',
-//       VoucherID: voucherId,
-//     });
-
-//   } catch (error) {
-//     console.error('Error updating voucher:', error);
-//     if (connection) {
-//       await new Promise(resolve => connection.rollback(() => resolve()));
-//       connection.release();
-//     }
-
-//     if (req.file) fs.unlinkSync(req.file.path);
-
-//     res.status(500).json({ success: false, error: error.message });
-//   }
-// });
-
-
-// ✅ DELETE Receipt (without touching ledger table)
 
 router.delete('/receipts/:id', async (req, res) => {
   let connection;
@@ -1611,7 +1319,6 @@ router.delete('/receipts/:id', async (req, res) => {
     const receiptNumber = receipt.receipt_number;
     const retailerId = receipt.PartyID;
 
-    // 🔥 CRITICAL FIX: Delete from voucherdetails FIRST
     console.log('Deleting voucher details for VoucherID:', req.params.id);
     await new Promise((resolve, reject) => {
       connection.execute(

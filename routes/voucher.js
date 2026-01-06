@@ -931,14 +931,32 @@ router.get('/total-payables', (req, res) => {
 
 
 
+// Single endpoint that accepts transaction type as query parameter
 router.get('/vouchersnumber', (req, res) => {
-  const query = `
-    SELECT VoucherID, TransactionType, VchNo 
-    FROM voucher 
-    WHERE TransactionType = 'Sales'
-    ORDER BY VoucherID DESC
-  `;
-  db.query(query, (err, results) => {
+  const transactionType = req.query.type; // Get type from query params
+  
+  let query;
+  let queryParams = [];
+  
+  if (transactionType) {
+    // If specific type is requested
+    query = `
+      SELECT VoucherID, TransactionType, VchNo 
+      FROM voucher 
+      WHERE TransactionType = ?
+      ORDER BY VoucherID DESC
+    `;
+    queryParams = [transactionType];
+  } else {
+    query = `
+      SELECT VoucherID, TransactionType, VchNo 
+      FROM voucher 
+      WHERE TransactionType IN ('Sales', 'stock transfer')
+      ORDER BY VoucherID DESC
+    `;
+  }
+  
+  db.query(query, queryParams, (err, results) => {
     if (err) {
       console.error(err);
       return res.status(500).json({ error: 'Database query failed' });
@@ -946,15 +964,31 @@ router.get('/vouchersnumber', (req, res) => {
     res.json(results);
   });
 });
-
 router.get('/purchasevouchersnumber', (req, res) => {
-  const query = `
-    SELECT VoucherID, TransactionType, VchNo 
-    FROM voucher 
-    WHERE TransactionType = 'Purchase'
-    ORDER BY VoucherID DESC
-  `;
-  db.query(query, (err, results) => {
+  const transactionType = req.query.type; // Get type from query params
+  
+  let query;
+  let queryParams = [];
+  
+  if (transactionType) {
+    // If specific type is requested
+    query = `
+      SELECT VoucherID, TransactionType, VchNo 
+      FROM voucher 
+      WHERE TransactionType = ?
+      ORDER BY VoucherID DESC
+    `;
+    queryParams = [transactionType];
+  } else {
+    query = `
+      SELECT VoucherID, TransactionType, VchNo 
+      FROM voucher 
+      WHERE TransactionType IN ('Purchase', 'stock inward')
+      ORDER BY VoucherID DESC
+    `;
+  }
+  
+  db.query(query, queryParams, (err, results) => {
     if (err) {
       console.error(err);
       return res.status(500).json({ error: 'Database query failed' });
