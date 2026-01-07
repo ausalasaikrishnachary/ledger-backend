@@ -2568,11 +2568,19 @@ totalCreditCharge += creditCharge; // DON'T multiply by quantity
     transactionData.PartyName ||
     "";
 
-  const accountName =
-    supplier.business_name ||
-    customer.business_name ||
-    transactionData.AccountName ||
-    "";
+const account_name = transactionData.account_name ||  
+                   supplier.account_name ||          
+                   customer.account_name ||          
+                   transactionData.AccountName ||     
+                   "";
+
+const business_name = transactionData.business_name || 
+                     supplier.business_name ||         
+                     customer.business_name ||        
+                     transactionData.businessName ||  
+                    
+                     "";
+
 
   // VOUCHER DATA
   const voucherData = {
@@ -2598,7 +2606,8 @@ totalCreditCharge += creditCharge; // DON'T multiply by quantity
 total_discount: totalDiscount,
     total_credit_charge: totalCreditCharge,
     AccountID: accountID,
-    AccountName: accountName,
+    AccountName: account_name,      
+  business_name: business_name,   
     PartyID: partyID,
     PartyName: partyName,
     BasicAmount: taxableAmount,

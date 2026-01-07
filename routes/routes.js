@@ -99,7 +99,9 @@ router.get('/next-receipt-number', async (req, res) => {
 
 
 
-router.post('/receipts', upload.single('transaction_proof'), async (req, res) => {
+router.post('/receipts', upload.single('transaction_proof'),
+ async (req, res) => {
+    console.log('📌 Body:', req.body);
   let connection;
 
   try {
@@ -115,6 +117,8 @@ router.post('/receipts', upload.single('transaction_proof'), async (req, res) =>
     const {
       retailer_id,
       retailer_name,
+      account_name,
+      business_name,
       amount,
       bank_name,
       invoice_number,
@@ -131,7 +135,7 @@ router.post('/receipts', upload.single('transaction_proof'), async (req, res) =>
       cess,
       total,
       TransactionType,
-        data_type 
+      data_type 
     } = req.body;
 
     let safeTransactionType =
@@ -221,10 +225,10 @@ if (safeInvoiceNumber) {
         CGSTPercentage, IGSTPercentage, SGSTAmount, CGSTAmount, IGSTAmount, 
         TaxSystem, paid_amount, created_at, balance_amount, status, paid_date, 
         pdf_data, DC, pdf_file_name, pdf_created_at, transaction_proof,
-        staffid, assigned_staff,data_type  
+        staffid, assigned_staff, data_type, business_name
       )
       VALUES (?, ?, ?, ?, ?, ?, 'Immediate', 0, 0, 0, ?, 0, ?, NULL, NULL, ?, ?, ?, ?, ?, ?, ?, ?, 0, 0, 0, 0, 0, 0,
-              'GST', ?, ?, 0, 'Paid', ?, ?, 'C', ?, ?, ?, ?, ?, ?)`,
+              'GST', ?, ?, 0, 'Paid', ?, ?, 'C', ?, ?, ?, ?, ?, ?, ?)`,
       [
         safeTransactionType,
         nextReceipt,
@@ -236,9 +240,9 @@ if (safeInvoiceNumber) {
         receiptAmount,
         bank_name || null,
         retailer_id || null,
-        retailer_name || "",
+        account_name || "",        // AccountName
         retailer_id || null,
-        retailer_name || "",
+        retailer_name || "",       // PartyName
         receiptAmount,
         receiptAmount,
         currentDate,
@@ -250,8 +254,9 @@ if (safeInvoiceNumber) {
         currentDate,
         transaction_proof_filename, // transaction_proof
         staffIdForReceipt, // staffid
-        assignedStaffNameForReceipt,
-         safeDataType  
+        assignedStaffNameForReceipt, // assigned_staff
+        safeDataType, // data_type
+        business_name || null // business_name
       ]
     );
 
@@ -353,8 +358,8 @@ if (safeInvoiceNumber) {
     }
 
   // ---------------------------------------------------
-// 5️⃣ UNPAID AMOUNT DEDUCTION (Only for transactions with order_number)
-// ---------------------------------------------------
+  // 5️⃣ UNPAID AMOUNT DEDUCTION (Only for transactions with order_number)
+  // ---------------------------------------------------
 if (safeTransactionType === "Receipt" && retailer_id) {
   console.log(`🔍 Checking if unpaid amount deduction is applicable...`);
   
