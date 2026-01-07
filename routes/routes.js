@@ -1073,9 +1073,6 @@ router.put('/voucher/:id', upload.single('transaction_proof'), async (req, res) 
   let connection;
 
   try {
-    // ------------------------------
-    // 1️⃣ GET DB CONNECTION
-    // ------------------------------
     connection = await new Promise((resolve, reject) => {
       db.getConnection((err, conn) => (err ? reject(err) : resolve(conn)));
     });

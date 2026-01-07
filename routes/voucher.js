@@ -784,6 +784,7 @@ router.delete('/purchase-vouchers/:id', async (req, res) => {
           BankName,
           AccountID,
           AccountName,
+          business_name,
           PartyID,
           PartyName,
           BasicAmount,

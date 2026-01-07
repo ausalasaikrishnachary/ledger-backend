@@ -1551,6 +1551,7 @@ router.get('/invoices/:invoiceNumber', async (req, res) => {
         v.BankName,
         v.AccountID,
         v.AccountName,
+        v.business_name,
         v.PartyID,
         a.name AS PartyName,
         v.BasicAmount,
