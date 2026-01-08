@@ -147,7 +147,6 @@ router.post('/receipts', upload.single('transaction_proof'),
     const currentDate = new Date();
     const safeInvoiceNumber = invoice_number || null;
 
-    // IMPORTANT: Get the uploaded file from req.file
     let transaction_proof_filename = null;
     if (req.file) {
       transaction_proof_filename = req.file.filename;
@@ -240,9 +239,9 @@ if (safeInvoiceNumber) {
         receiptAmount,
         bank_name || null,
         retailer_id || null,
-        account_name || "",        // AccountName
+        account_name || "",       
         retailer_id || null,
-        retailer_name || "",       // PartyName
+        retailer_name || "",       
         receiptAmount,
         receiptAmount,
         currentDate,
@@ -250,13 +249,13 @@ if (safeInvoiceNumber) {
         currentDate,
         currentDate,
         null,
-        null, // pdf_file_name
+        null, 
         currentDate,
-        transaction_proof_filename, // transaction_proof
-        staffIdForReceipt, // staffid
-        assignedStaffNameForReceipt, // assigned_staff
-        safeDataType, // data_type
-        business_name || null // business_name
+        transaction_proof_filename, 
+        staffIdForReceipt, 
+        assignedStaffNameForReceipt, 
+        safeDataType, 
+        business_name || null 
       ]
     );
 
@@ -343,7 +342,7 @@ if (safeInvoiceNumber) {
        status = ?,
        updated_at = NOW()
    WHERE InvoiceNumber = ? 
-     AND TransactionType IN ('Stock Transfer', 'Sales', 'Purchase')`,
+     AND TransactionType IN ('stock transfer', 'Sales', 'Purchase')`,
   [newBalance, newStatus, safeInvoiceNumber]
 );
       
@@ -395,13 +394,10 @@ if (safeTransactionType === "Receipt" && retailer_id) {
           const creditLimit = parseFloat(currentAccount[0].credit_limit) || 0;
           const newUnpaid = currentUnpaid - receiptAmount;
           
-          // Calculate new balance_amount (credit_limit - unpaid_amount)
           const newBalanceAmount = creditLimit - newUnpaid;
           
-          // Prepare update query based on whether balance_amount column exists
           let updateQuery, updateParams;
           
-          // Check if balance_amount column exists
           const balanceCheck = await connection.promise().query(
             "SHOW COLUMNS FROM accounts LIKE 'balance_amount'"
           );
@@ -1070,6 +1066,7 @@ router.get('/voucher/:id', async (req, res) => {
 
 router.put('/voucher/:id', upload.single('transaction_proof'), async (req, res) => {
   const voucherId = req.params.id;
+  console.log("📌 PUT Request Body:", req.body);
   let connection;
 
   try {
@@ -1077,63 +1074,151 @@ router.put('/voucher/:id', upload.single('transaction_proof'), async (req, res) 
       db.getConnection((err, conn) => (err ? reject(err) : resolve(conn)));
     });
 
-    await new Promise((resolve, reject) => {
-      connection.beginTransaction(err => (err ? reject(err) : resolve()));
-    });
+    await connection.promise().beginTransaction();
 
     // ------------------------------
-    // 2️⃣ FETCH CURRENT VOUCHER (RECEIPT)
+    // 1️⃣ FETCH CURRENT VOUCHER (RECEIPT) DETAILS
     // ------------------------------
-    const receiptRows = await new Promise((resolve, reject) => {
-      connection.query(
-        `SELECT InvoiceNumber, paid_amount, TransactionType
-         FROM voucher
-         WHERE VoucherID = ?`,
-        [voucherId],
-        (err, results) => (err ? reject(err) : resolve(results))
-      );
-    });
+    const [receiptRows] = await connection.promise().query(
+      `SELECT InvoiceNumber, paid_amount, TransactionType, TotalAmount,
+              PartyID, PartyName, AccountName
+       FROM voucher
+       WHERE VoucherID = ?`,
+      [voucherId]
+    );
 
-    if (!receiptRows || receiptRows.length === 0) {
+    if (receiptRows.length === 0) {
       throw new Error('Voucher not found');
     }
 
     const receipt = receiptRows[0];
-    const invoiceNumber = receipt.InvoiceNumber;
+    const oldInvoiceNumber = receipt.InvoiceNumber;
+    const newInvoiceNumber = req.body.invoice_number || req.body.invoiceNumber || oldInvoiceNumber;
     const oldPaidAmount = parseFloat(receipt.paid_amount) || 0;
     const isReceiptType = receipt.TransactionType === 'Receipt' || 
-                         receipt.TransactionType === 'purchase voucher';
+                          receipt.TransactionType === 'purchase voucher';
+    const retailerId = receipt.PartyID; // Using PartyID as retailer ID
 
-    const newPaidAmount =
-      req.body.paid_amount !== undefined
-        ? parseFloat(req.body.paid_amount) || 0
-        : oldPaidAmount;
+    const newPaidAmount = req.body.paid_amount !== undefined
+      ? parseFloat(req.body.paid_amount) || 0
+      : oldPaidAmount;
 
     const paidAmountChanged = newPaidAmount !== oldPaidAmount;
+    const invoiceNumberChanged = newInvoiceNumber !== oldInvoiceNumber;
+
+    console.log("📊 Receipt Details:", {
+      voucherId,
+      oldInvoiceNumber,
+      newInvoiceNumber,
+      oldPaidAmount,
+      newPaidAmount,
+      paidAmountChanged,
+      invoiceNumberChanged,
+      isReceiptType,
+      retailerId
+    });
 
     // ------------------------------
-    // 3️⃣ UPDATE RECEIPT ONLY
+    // 2️⃣ HANDLE OLD INVOICE IF INVOICE NUMBER IS CHANGING
+    // ------------------------------
+    if (invoiceNumberChanged && oldInvoiceNumber && isReceiptType) {
+      console.log(`🔄 Invoice number changing from "${oldInvoiceNumber}" to "${newInvoiceNumber}"`);
+      
+      // Remove this receipt's amount from old invoice calculation
+      const [oldInvoiceReceipts] = await connection.promise().query(
+        `SELECT SUM(paid_amount) as totalReceiptsPaid
+         FROM voucher
+         WHERE InvoiceNumber = ? 
+           AND TransactionType IN ('Receipt', 'purchase voucher')
+           AND VoucherID != ?`, 
+        [oldInvoiceNumber, voucherId]
+      );
+
+      const oldInvoiceTotalReceiptsPaid = parseFloat(oldInvoiceReceipts[0].totalReceiptsPaid) || 0;
+      
+      // Find the OLD invoice
+      const [oldInvoiceRows] = await connection.promise().query(
+        `SELECT VoucherID, TotalAmount, balance_amount, status, TransactionType, order_number
+         FROM voucher
+         WHERE InvoiceNumber = ?
+           AND TransactionType IN ('Purchase', 'Sales', 'stock transfer')
+         LIMIT 1`,
+        [oldInvoiceNumber]
+      );
+
+      if (oldInvoiceRows.length > 0) {
+        const oldInvoice = oldInvoiceRows[0];
+        const oldInvoiceTotalAmount = parseFloat(oldInvoice.TotalAmount) || 0;
+        
+        // Recalculate balance for OLD invoice (excluding current receipt)
+        const newBalanceForOldInvoice = Math.max(0, oldInvoiceTotalAmount - oldInvoiceTotalReceiptsPaid);
+        
+        // Determine new status for OLD invoice
+        let newStatusForOldInvoice = 'pending';
+        if (newBalanceForOldInvoice <= 0) {
+          newStatusForOldInvoice = 'Paid';
+        } else if (oldInvoiceTotalReceiptsPaid > 0) {
+          newStatusForOldInvoice = 'Partial';
+        }
+
+        console.log('🔄 Updating OLD invoice after removing receipt:', {
+          oldInvoiceNumber,
+          totalAmount: oldInvoiceTotalAmount,
+          receiptsPaidWithoutCurrent: oldInvoiceTotalReceiptsPaid,
+          newBalance: newBalanceForOldInvoice,
+          newStatus: newStatusForOldInvoice
+        });
+
+        await connection.promise().query(
+          `UPDATE voucher
+           SET balance_amount = ?, status = ?, updated_at = NOW()
+           WHERE VoucherID = ?`,
+          [newBalanceForOldInvoice, newStatusForOldInvoice, oldInvoice.VoucherID]
+        );
+      }
+    }
+
+    // ------------------------------
+    // 3️⃣ UPDATE THE RECEIPT VOUCHER WITH NEW DATA
     // ------------------------------
     const updateFields = [];
     const updateValues = [];
 
+    // Always update paid_amount if provided
     if (req.body.paid_amount !== undefined) {
-      updateFields.push(
-        'paid_amount = ?',
-        'TotalAmount = ?',
-        'paid_date = ?'
-      );
-      updateValues.push(
-        newPaidAmount,
-        newPaidAmount,
-        new Date()
-      );
+      updateFields.push('paid_amount = ?', 'TotalAmount = ?');
+      updateValues.push(newPaidAmount, newPaidAmount);
+      
+      // Only update paid_date if paid_amount > 0
+      if (newPaidAmount > 0) {
+        updateFields.push('paid_date = ?');
+        updateValues.push(new Date());
+      }
     }
 
+    // Update invoice_number if provided
+    if (req.body.invoice_number !== undefined || req.body.invoiceNumber !== undefined) {
+      updateFields.push('InvoiceNumber = ?');
+      updateValues.push(newInvoiceNumber);
+    }
+
+    // Map other fields
+    const fieldMapping = {
+      retailer_name: 'PartyName',
+      account_name: 'AccountName',
+      business_name: 'business_name',
+      bank_name: 'BankName',
+      data_type: 'data_type',
+    };
+
     for (const [key, value] of Object.entries(req.body)) {
-      if (key !== 'paid_amount') {
-        updateFields.push(`${key} = ?`);
-        updateValues.push(value ?? null);
+      if (key === 'paid_amount' || key === 'invoice_number' || key === 'invoiceNumber') continue;
+
+      const dbColumn = fieldMapping[key] || key;
+
+      if (value !== undefined) {
+        updateFields.push(`${dbColumn} = ?`);
+        updateValues.push(value !== '' ? value : null);
       }
     }
 
@@ -1144,143 +1229,246 @@ router.put('/voucher/:id', upload.single('transaction_proof'), async (req, res) 
 
     if (updateFields.length > 0) {
       updateValues.push(voucherId);
-
-      await new Promise((resolve, reject) => {
-        connection.query(
-          `UPDATE voucher
-           SET ${updateFields.join(', ')}
-           WHERE VoucherID = ?`,
-          updateValues,
-          err => (err ? reject(err) : resolve())
-        );
-      });
+      
+      const updateQuery = `UPDATE voucher SET ${updateFields.join(', ')}, updated_at = NOW() WHERE VoucherID = ?`;
+      console.log("📝 Update Query:", updateQuery);
+      console.log("📝 Update Values:", updateValues);
+      
+      await connection.promise().query(updateQuery, updateValues);
     }
 
     // ------------------------------
-    // 4️⃣ RECALCULATE INVOICE BALANCE (UPDATE ONLY THE INVOICE)
+    // 4️⃣ HANDLE NEW INVOICE - MATCH AND UPDATE BALANCE & STATUS
     // ------------------------------
-    if (invoiceNumber && isReceiptType && paidAmountChanged) {
-      // Fetch invoice details
-      const invoiceRows = await new Promise((resolve, reject) => {
-        connection.query(
-          `SELECT VoucherID, TotalAmount, TransactionType, balance_amount
-           FROM voucher
-           WHERE InvoiceNumber = ?
-             AND TransactionType IN ('Purchase', 'Sales', 'Stock Transfer')
-           LIMIT 1`,
-          [invoiceNumber],
-          (err, results) => (err ? reject(err) : resolve(results))
-        );
-      });
+    let newBalance = null;
+    let newStatusForInvoice = null;
+    let matchedInvoiceDetails = null;
+
+    if (newInvoiceNumber && isReceiptType) {
+      console.log(`🔍 Looking for invoice with number: ${newInvoiceNumber}`);
+      
+      // Find the invoice in voucher table
+      const [invoiceRows] = await connection.promise().query(
+        `SELECT VoucherID, InvoiceNumber, TotalAmount, balance_amount, status, 
+                TransactionType, order_number, PartyName, created_at
+         FROM voucher
+         WHERE InvoiceNumber = ?
+           AND TransactionType IN ('Purchase', 'Sales', 'stock transfer')
+         LIMIT 1`,
+        [newInvoiceNumber]
+      );
 
       if (invoiceRows.length > 0) {
         const invoice = invoiceRows[0];
-        const totalAmount = parseFloat(invoice.TotalAmount) || 0;
+        matchedInvoiceDetails = {
+          voucherId: invoice.VoucherID,
+          invoiceNumber: invoice.InvoiceNumber,
+          totalAmount: invoice.TotalAmount,
+          currentBalance: invoice.balance_amount,
+          currentStatus: invoice.status,
+          transactionType: invoice.TransactionType,
+          partyName: invoice.PartyName,
+          orderNumber: invoice.order_number,
+          createdDate: invoice.created_at
+        };
+
+        console.log("✅ Invoice Found:", matchedInvoiceDetails);
+
+        const invoiceTotalAmount = parseFloat(invoice.TotalAmount) || 0;
         const invoiceTransactionType = invoice.TransactionType;
-        
-        // Determine receipt type condition based on invoice type
+
+        // Get ALL receipts linked to this invoice (including this one after update)
         let receiptTypeCondition = '';
-        let conditionQuery = '';
-        
-        if (invoiceTransactionType === 'Sales' || invoiceTransactionType === 'Stock Transfer') {
+        if (invoiceTransactionType === 'Sales' || invoiceTransactionType === 'stock transfer') {
           receiptTypeCondition = "TransactionType = 'Receipt'";
         } else if (invoiceTransactionType === 'Purchase') {
           receiptTypeCondition = "TransactionType IN ('Receipt', 'purchase voucher')";
         }
-        
-        // FIX: Build the complete WHERE clause
-        if (receiptTypeCondition) {
-          conditionQuery = `WHERE InvoiceNumber = ? AND ${receiptTypeCondition}`;
-        } else {
-          conditionQuery = `WHERE InvoiceNumber = ?`;
-        }
 
-        // Sum ALL receipts for this invoice
-        const receiptSumRows = await new Promise((resolve, reject) => {
-          connection.query(
-            `SELECT SUM(paid_amount) AS totalReceiptsPaid
-             FROM voucher
-             ${conditionQuery}`,
-            [invoiceNumber],
-            (err, results) => (err ? reject(err) : resolve(results))
-          );
-        });
+        const [receiptSumRows] = await connection.promise().query(
+          `SELECT SUM(paid_amount) AS totalReceiptsPaid
+           FROM voucher
+           WHERE InvoiceNumber = ? 
+             AND ${receiptTypeCondition}`,
+          [newInvoiceNumber]
+        );
 
         const totalReceiptsPaid = parseFloat(receiptSumRows[0].totalReceiptsPaid) || 0;
         
-        // Calculate new balance
-        const newBalance = Math.max(0, totalAmount - totalReceiptsPaid);
-
-        // Determine status for the INVOICE
-        let newStatusForInvoice = 'pending';
+        // Calculate new balance: Total Amount - Sum of all receipts
+        newBalance = Math.max(0, invoiceTotalAmount - totalReceiptsPaid);
+        
+        // Determine new status
         if (newBalance <= 0) {
           newStatusForInvoice = 'Paid';
-        } else if (totalReceiptsPaid > 0) {
+        } else if (totalReceiptsPaid > 0 && totalReceiptsPaid < invoiceTotalAmount) {
           newStatusForInvoice = 'Partial';
+        } else {
+          newStatusForInvoice = 'pending';
         }
 
-        console.log('📊 Invoice Update Calculation:', {
-          invoiceNumber,
-          totalAmount,
-          totalReceiptsPaid,
-          newBalance,
-          newStatusForInvoice,
-          receiptTypeCondition
+        console.log("📊 Invoice Calculation:", {
+          invoiceNumber: newInvoiceNumber,
+          totalAmount: invoiceTotalAmount,
+          totalReceiptsPaid: totalReceiptsPaid,
+          calculatedBalance: newBalance,
+          calculatedStatus: newStatusForInvoice
         });
 
-        // Update ONLY THE ORIGINAL INVOICE (not purchase vouchers)
-        await new Promise((resolve, reject) => {
-          connection.query(
-            `UPDATE voucher
-             SET balance_amount = ?, status = ?, updated_at = NOW()
-             WHERE VoucherID = ?`,
-            [newBalance, newStatusForInvoice, invoice.VoucherID],
-            err => (err ? reject(err) : resolve())
+        // Update the invoice with new balance and status
+        await connection.promise().query(
+          `UPDATE voucher
+           SET balance_amount = ?, 
+               status = ?, 
+               updated_at = NOW()
+           WHERE VoucherID = ?`,
+          [newBalance, newStatusForInvoice, invoice.VoucherID]
+        );
+
+        console.log("✅ Invoice Updated Successfully:", {
+          invoiceNumber: newInvoiceNumber,
+          voucherId: invoice.VoucherID,
+          newBalance: newBalance,
+          newStatus: newStatusForInvoice
+        });
+
+        // ------------------------------
+        // 5️⃣ UPDATE UNPAID AMOUNT FOR RETAILER (if Sales/Stock Transfer)
+        // ------------------------------
+        const currentRetailerId = req.body.retailer_id || retailerId; // Use either from request or existing
+        if (currentRetailerId && invoice.order_number && 
+            (invoiceTransactionType === 'Sales' || invoiceTransactionType === 'stock transfer')) {
+          
+          console.log(`💰 Updating unpaid amount for retailer: ${currentRetailerId}`);
+          
+          try {
+            // Check if accounts table has unpaid_amount column
+            const tableCheck = await connection.promise().query(
+              "SHOW COLUMNS FROM accounts LIKE 'unpaid_amount'"
+            );
+
+            if (tableCheck[0].length > 0) {
+              // Calculate unpaid amount (remaining balance)
+              const unpaidAmount = newBalance;
+              
+              // Get current account data
+              const [currentAccount] = await connection.promise().query(
+                "SELECT unpaid_amount, credit_limit, name FROM accounts WHERE id = ?",
+                [currentRetailerId]
+              );
+
+              if (currentAccount.length > 0) {
+                const accountName = currentAccount[0].name;
+                const creditLimit = parseFloat(currentAccount[0].credit_limit) || 0;
+                
+                // Check if balance_amount column exists
+                const balanceCheck = await connection.promise().query(
+                  "SHOW COLUMNS FROM accounts LIKE 'balance_amount'"
+                );
+
+                const newBalanceAmount = creditLimit - unpaidAmount;
+
+                if (balanceCheck[0].length > 0) {
+                  await connection.promise().query(
+                    `UPDATE accounts 
+                     SET unpaid_amount = ?,
+                         balance_amount = ?,
+                         updated_at = NOW()
+                     WHERE id = ?`,
+                    [unpaidAmount, newBalanceAmount, currentRetailerId]
+                  );
+                } else {
+                  await connection.promise().query(
+                    `UPDATE accounts 
+                     SET unpaid_amount = ?,
+                         updated_at = NOW()
+                     WHERE id = ?`,
+                    [unpaidAmount, currentRetailerId]
+                  );
+                }
+
+                console.log(`✅ Account Updated:`, {
+                  retailerId: currentRetailerId,
+                  retailerName: accountName,
+                  unpaidAmount,
+                  availableBalance: newBalanceAmount
+                });
+              }
+            }
+          } catch (error) {
+            console.error(`❌ Error updating unpaid amount:`, error.message);
+            // Don't throw error, continue with transaction
+          }
+        }
+      } else {
+        console.log(`⚠️ No invoice found with number: ${newInvoiceNumber}`);
+        // If no invoice found, you might want to clear the invoice_number from receipt
+        if (invoiceNumberChanged) {
+          await connection.promise().query(
+            `UPDATE voucher SET InvoiceNumber = NULL WHERE VoucherID = ?`,
+            [voucherId]
           );
-        });
-
-        console.log('✅ Invoice updated:', {
-          invoiceNumber,
-          VoucherID: invoice.VoucherID,
-          newBalance,
-          newStatusForInvoice
-        });
+          console.log(`🔄 Cleared invoice number from receipt ${voucherId}`);
+        }
       }
     }
 
     // ------------------------------
-    // 5️⃣ COMMIT
+    // 6️⃣ COMMIT TRANSACTION
     // ------------------------------
-    await new Promise((resolve, reject) => {
-      connection.commit(err => (err ? reject(err) : resolve()));
-    });
-
-    connection.release();
+    await connection.promise().commit();
 
     res.json({
       success: true,
       message: 'Voucher updated successfully',
-      VoucherID: voucherId
+      VoucherID: voucherId,
+      receipt_details: {
+        paid_amount: newPaidAmount,
+        invoice_number: newInvoiceNumber
+      },
+      invoice_update: newInvoiceNumber && matchedInvoiceDetails ? {
+        invoice_found: true,
+        invoice_number: newInvoiceNumber,
+        voucher_id: matchedInvoiceDetails.voucherId,
+        total_amount: matchedInvoiceDetails.totalAmount,
+        previous_balance: matchedInvoiceDetails.currentBalance,
+        previous_status: matchedInvoiceDetails.currentStatus,
+        new_balance: newBalance,
+        new_status: newStatusForInvoice,
+        transaction_type: matchedInvoiceDetails.transactionType,
+        party_name: matchedInvoiceDetails.partyName,
+        order_number: matchedInvoiceDetails.orderNumber
+      } : {
+        invoice_found: false,
+        message: newInvoiceNumber ? 'Invoice not found' : 'No invoice selected'
+      },
+      updated_fields: updateFields.length > 0 ? updateFields : 'none'
     });
 
   } catch (error) {
-    console.error('Error updating voucher:', error);
-
     if (connection) {
-      await new Promise(resolve => connection.rollback(() => resolve()));
-      connection.release();
+      await connection.promise().rollback();
     }
+    console.error('❌ Error updating voucher:', error);
 
-    if (req.file) fs.unlinkSync(req.file.path);
+    // Delete uploaded file if transaction failed
+    if (req.file) {
+      try {
+        fs.unlinkSync(req.file.path);
+        console.log(`🗑️ Deleted uploaded file: ${req.file.filename}`);
+      } catch (unlinkErr) {
+        console.error('Failed to delete uploaded file:', unlinkErr);
+      }
+    }
 
     res.status(500).json({
       success: false,
-      error: error.message
+      error: error.message || 'Failed to update voucher'
     });
+  } finally {
+    if (connection) connection.release();
   }
 });
-
-
 
 router.delete('/receipts/:id', async (req, res) => {
   let connection;
