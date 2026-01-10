@@ -2291,8 +2291,8 @@ totalCreditCharge += creditCharge; // DON'T multiply by quantity
     const sgstPercentageFromFrontend = parseFloat(i.sgst) || 0;
     
     // NEW: Multiply percentages by quantity for storage
-    const cgstToStore = cgstPercentageFromFrontend * quantity;  // 2.5 × 2 = 5.00
-    const sgstToStore = sgstPercentageFromFrontend * quantity;  // 2.5 × 2 = 5.00
+    const cgstToStore = cgstPercentageFromFrontend * quantity;  
+    const sgstToStore = sgstPercentageFromFrontend * quantity;  
     
     console.log(`📊 Item ${i.product}: Storing CGST=${cgstToStore}, SGST=${sgstToStore} (${cgstPercentageFromFrontend} × ${quantity})`);
     
