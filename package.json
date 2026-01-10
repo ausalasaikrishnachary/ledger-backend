@@ -10,7 +10,7 @@
   "author": "",
   "license": "ISC",
   "dependencies": {
-    "axios": "^1.10.0",
+    "axios": "^1.13.2",
     "bcryptjs": "^3.0.2",
     "buffers": "^0.1.1",
     "cors": "^2.8.5",

@@ -1551,6 +1551,7 @@ router.get('/invoices/:invoiceNumber', async (req, res) => {
         v.BankName,
         v.AccountID,
         v.AccountName,
+        v.business_name,
         v.PartyID,
         a.name AS PartyName,
         v.BasicAmount,
@@ -2004,28 +2005,27 @@ router.put("/transactions/:id", async (req, res) => {
     });
   });
 });
-
 router.get("/ledger", (req, res) => {
-  // Fetch all vouchers ordered by AccountID and Date
+  // Fetch all vouchers ordered by PartyID and Date
   const query = `
-  SELECT 
-    VoucherID AS id,
-    VchNo AS voucherID,
-    Date AS date,
-    TransactionType AS trantype,
-    AccountID,
-    AccountName,
-    PartyID,
-    PartyName,
-    paid_amount AS Pamount,
-    TotalAmount AS Amount,
-    DC,
-    balance_amount,
-    created_at
-  FROM voucher
-  ORDER BY PartyID, Date ASC, VoucherID ASC
-`;
-
+    SELECT 
+      VoucherID AS id,
+      VchNo AS voucherID,
+      Date AS date,
+      TransactionType AS trantype,
+      AccountID,
+      AccountName,
+      PartyID,
+      PartyName,
+      paid_amount AS Pamount,
+      TotalAmount AS Amount,
+      DC,
+      balance_amount,
+      created_at
+    FROM voucher
+    WHERE PartyID IS NOT NULL
+    ORDER BY PartyID, Date ASC, VoucherID ASC
+  `;
 
   db.query(query, (err, results) => {
     if (err) {
@@ -2033,39 +2033,77 @@ router.get("/ledger", (req, res) => {
       return res.status(500).json({ message: "Database error", error: err });
     }
 
-    // Recalculate running balances for all accounts
+    // For debugging: Log transaction types and DC values
+    console.log("Transaction types found:", [...new Set(results.map(r => r.trantype))]);
+    
+    // Recalculate running balances for all parties
     const dataWithRecalculatedBalances = recalculateRunningBalances(results);
 
     res.status(200).json(dataWithRecalculatedBalances);
   });
 });
 
-
 // Function to recalculate running balances
 function recalculateRunningBalances(transactions) {
-  const accounts = {};
+  const parties = {};
 
-  // Group transactions by AccountID
+  // Group transactions by PartyID
   transactions.forEach(transaction => {
-    if (!accounts[transaction.AccountID]) {
-      accounts[transaction.AccountID] = [];
+    const partyId = transaction.PartyID;
+    
+    if (!partyId) return; // Skip if no PartyID
+    
+    if (!parties[partyId]) {
+      parties[partyId] = {
+        PartyID: partyId,
+        PartyName: transaction.PartyName,
+        transactions: []
+      };
     }
-    accounts[transaction.AccountID].push(transaction);
+    
+    parties[partyId].transactions.push(transaction);
   });
 
   const results = [];
 
-  // Calculate running balance for each account
-  Object.keys(accounts).forEach(accountId => {
+  // Calculate running balance for each party
+  Object.keys(parties).forEach(partyId => {
     let runningBalance = 0;
-    const accountTransactions = accounts[accountId];
+    const partyData = parties[partyId];
+    const partyTransactions = partyData.transactions;
 
-    accountTransactions.forEach(transaction => {
-      // Calculate based on DC type
-      if (transaction.DC === 'D') {
-        runningBalance += parseFloat(transaction.Amount);
-      } else if (transaction.DC === 'C') {
-        runningBalance -= parseFloat(transaction.Amount);
+    // Sort transactions by date and voucher ID
+    partyTransactions.sort((a, b) => {
+      const dateA = new Date(a.date);
+      const dateB = new Date(b.date);
+      if (dateA.getTime() !== dateB.getTime()) {
+        return dateA.getTime() - dateB.getTime();
+      }
+      return a.id - b.id;
+    });
+
+    // Process each transaction for this party
+    partyTransactions.forEach(transaction => {
+      const amount = parseFloat(transaction.Amount) || 0;
+      const trantype = transaction.trantype;
+      
+  
+      
+      if (trantype === 'Purchase') {
+        runningBalance += amount; 
+        transaction.DC = 'C'; // Ensure DC is 'C' for Purchase
+      } 
+      else if (trantype === 'purchase voucher' || trantype === 'DebitNote') {
+        runningBalance -= amount; 
+        transaction.DC = 'D'; 
+      }
+      else {
+        // For other transaction types, use the DC from database
+        if (transaction.DC === 'D') {
+          runningBalance -= amount;
+        } else if (transaction.DC === 'C') {
+          runningBalance += amount;
+        }
       }
 
       // Add to results with recalculated balance
@@ -2076,12 +2114,19 @@ function recalculateRunningBalances(transactions) {
     });
   });
 
-  // Sort by AccountID and ID DESC for final output (to show latest first)
+  // Sort final results by PartyID and date
   return results.sort((a, b) => {
-    if (a.AccountID !== b.AccountID) {
-      return a.AccountID - b.AccountID;
+    if (a.PartyID !== b.PartyID) {
+      return a.PartyID - b.PartyID;
     }
-    return b.id - a.id;
+    
+    const dateA = new Date(a.date);
+    const dateB = new Date(b.date);
+    if (dateA.getTime() !== dateB.getTime()) {
+      return dateA.getTime() - dateB.getTime();
+    }
+    
+    return a.id - b.id;
   });
 }
 
@@ -2246,8 +2291,8 @@ totalCreditCharge += creditCharge; // DON'T multiply by quantity
     const sgstPercentageFromFrontend = parseFloat(i.sgst) || 0;
     
     // NEW: Multiply percentages by quantity for storage
-    const cgstToStore = cgstPercentageFromFrontend * quantity;  // 2.5 × 2 = 5.00
-    const sgstToStore = sgstPercentageFromFrontend * quantity;  // 2.5 × 2 = 5.00
+    const cgstToStore = cgstPercentageFromFrontend * quantity;  
+    const sgstToStore = sgstPercentageFromFrontend * quantity;  
     
     console.log(`📊 Item ${i.product}: Storing CGST=${cgstToStore}, SGST=${sgstToStore} (${cgstPercentageFromFrontend} × ${quantity})`);
     
@@ -2261,8 +2306,8 @@ totalCreditCharge += creditCharge; // DON'T multiply by quantity
           discount_amount: discountAmount,
       credit_charge: creditCharge,
       gst: gstPercentage,
-      cgst: cgstToStore,  // NEW: Stores 5.00 (2.5 × 2)
-      sgst: sgstToStore,  // NEW: Stores 5.00 (2.5 × 2)
+      cgst: cgstToStore, 
+      sgst: sgstToStore,  
       igst: parseFloat(i.igst) || 0,
       cess: parseFloat(i.cess) || 0,
       total: parseFloat(i.total) || (quantity * parseFloat(i.price)),
@@ -2280,7 +2325,6 @@ totalCreditCharge += creditCharge; // DON'T multiply by quantity
   
   console.log("📋 Has item selection:", hasItemSelection ? `Yes (${selectedItemIds.length} items)` : "No");
 
-  // ORDER STATUS UPDATE (for both Sales and stock transfer when there's order number)
   if (orderNumber && (transactionType === "Sales" || transactionType === "stock transfer")) {
     console.log("✅ This is an order conversion. Updating order items and order status...");
     
@@ -2525,11 +2569,19 @@ totalCreditCharge += creditCharge; // DON'T multiply by quantity
     transactionData.PartyName ||
     "";
 
-  const accountName =
-    supplier.business_name ||
-    customer.business_name ||
-    transactionData.AccountName ||
-    "";
+const account_name = transactionData.account_name ||  
+                   supplier.account_name ||          
+                   customer.account_name ||          
+                   transactionData.AccountName ||     
+                   "";
+
+const business_name = transactionData.business_name || 
+                     supplier.business_name ||         
+                     customer.business_name ||        
+                     transactionData.businessName ||  
+                    
+                     "";
+
 
   // VOUCHER DATA
   const voucherData = {
@@ -2555,10 +2607,10 @@ totalCreditCharge += creditCharge; // DON'T multiply by quantity
 total_discount: totalDiscount,
     total_credit_charge: totalCreditCharge,
     AccountID: accountID,
-    AccountName: accountName,
+    AccountName: account_name,      
+  business_name: business_name,   
     PartyID: partyID,
     PartyName: partyName,
-
     BasicAmount: taxableAmount,
     ValueOfGoods: taxableAmount,
     EntryDate: new Date(),

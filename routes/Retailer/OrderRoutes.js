@@ -477,6 +477,132 @@ router.put('/update-approval-status/:order_number', async (req, res) => {
 });
 
 
+// ===================================================
+// 📌 UPDATE ITEM APPROVAL STATUS
+// ===================================================
+router.put("/items/:itemId/approve", (req, res) => {
+  const { itemId } = req.params;
+  const { approval_status } = req.body;
+
+  console.log(`📝 Updating approval status for item ${itemId} to: ${approval_status}`);
+
+  // Validate input
+  if (!approval_status) {
+    return res.status(400).json({
+      error: "approval_status is required",
+    });
+  }
+
+  // Optional: Validate that approval_status is one of allowed values
+  const allowedStatuses = ["pending", "approved", "rejected"];
+  if (!allowedStatuses.includes(approval_status)) {
+    return res.status(400).json({
+      error: "Invalid approval_status. Allowed values: pending, approved, rejected",
+    });
+  }
+
+  // First, check if the item exists
+  db.query(
+    "SELECT id, order_number FROM order_items WHERE id = ?",
+    [itemId],
+    (err, rows) => {
+      if (err) {
+        console.error("❌ Database error:", err);
+        return res.status(500).json({ error: "Database error", details: err.message });
+      }
+
+      if (rows.length === 0) {
+        return res.status(404).json({ error: "Item not found" });
+      }
+
+      const item = rows[0];
+      
+      // Update the approval_status
+      db.query(
+        "UPDATE order_items SET approval_status = ?, updated_at = NOW() WHERE id = ?",
+        [approval_status, itemId],
+        (err, result) => {
+          if (err) {
+            console.error("❌ Error updating approval status:", err);
+            return res.status(500).json({ 
+              error: "Failed to update approval status", 
+              details: err.message 
+            });
+          }
+
+          if (result.affectedRows === 0) {
+            return res.status(404).json({ error: "Item not found" });
+          }
+
+          console.log(`✅ Item ${itemId} approval status updated to: ${approval_status}`);
+
+          // Optional: Update order status based on all items' approval status
+          // You can add this logic if needed
+          updateOrderApprovalStatus(item.order_number);
+
+          res.json({
+            success: true,
+            message: "Item approval status updated successfully",
+            item_id: itemId,
+            approval_status: approval_status,
+            order_number: item.order_number
+          });
+        }
+      );
+    }
+  );
+});
+
+// Helper function to update order's overall approval status (optional)
+function updateOrderApprovalStatus(orderNumber) {
+  // Check if all items in the order are approved
+  db.query(
+    `SELECT 
+      COUNT(*) as total_items,
+      SUM(CASE WHEN approval_status = 'approved' THEN 1 ELSE 0 END) as approved_items,
+      SUM(CASE WHEN approval_status = 'rejected' THEN 1 ELSE 0 END) as rejected_items,
+      SUM(CASE WHEN approval_status = 'pending' THEN 1 ELSE 0 END) as pending_items
+    FROM order_items 
+    WHERE order_number = ?`,
+    [orderNumber],
+    (err, rows) => {
+      if (err) {
+        console.error("❌ Error checking order approval status:", err);
+        return;
+      }
+
+      if (rows.length > 0) {
+        const stats = rows[0];
+        let overallStatus = 'pending';
+
+        if (stats.pending_items === 0) {
+          if (stats.rejected_items > 0) {
+            overallStatus = 'partially_rejected';
+          } else if (stats.approved_items === stats.total_items) {
+            overallStatus = 'fully_approved';
+          } else if (stats.approved_items > 0) {
+            overallStatus = 'partially_approved';
+          }
+        }
+
+        // Update order's overall approval status
+        db.query(
+          "UPDATE orders SET overall_approval_status = ?, updated_at = NOW() WHERE order_number = ?",
+          [overallStatus, orderNumber],
+          (err, result) => {
+            if (err) {
+              console.error("❌ Error updating order approval status:", err);
+            } else {
+              console.log(`✅ Order ${orderNumber} overall approval status updated to: ${overallStatus}`);
+            }
+          }
+        );
+      }
+    }
+  );
+}
+
+
 
 router.put("/items/:item_id/approve", async (req, res) => {
   const { item_id } = req.params;

@@ -1646,4 +1646,218 @@ router.post('/receipts', async (req, res) => {
     if (connection) connection.release();
   }
 });
+
+
+router.put('/voucher/:id', upload.single('transaction_proof'), async (req, res) => {
+  const voucherId = req.params.id;
+  let connection;
+
+  try {
+    connection = await new Promise((resolve, reject) => {
+      db.getConnection((err, conn) => (err ? reject(err) : resolve(conn)));
+    });
+
+    await new Promise((resolve, reject) => {
+      connection.beginTransaction(err => (err ? reject(err) : resolve()));
+    });
+
+    // ------------------------------
+    // 2️⃣ FETCH CURRENT VOUCHER (RECEIPT)
+    // ------------------------------
+    const receiptRows = await new Promise((resolve, reject) => {
+      connection.query(
+        `SELECT InvoiceNumber, paid_amount, TransactionType
+         FROM voucher
+         WHERE VoucherID = ?`,
+        [voucherId],
+        (err, results) => (err ? reject(err) : resolve(results))
+      );
+    });
+
+    if (!receiptRows || receiptRows.length === 0) {
+      throw new Error('Voucher not found');
+    }
+
+    const receipt = receiptRows[0];
+    const invoiceNumber = receipt.InvoiceNumber;
+    const oldPaidAmount = parseFloat(receipt.paid_amount) || 0;
+    const isReceiptType = receipt.TransactionType === 'Receipt' || 
+                         receipt.TransactionType === 'purchase voucher';
+
+    const newPaidAmount =
+      req.body.paid_amount !== undefined
+        ? parseFloat(req.body.paid_amount) || 0
+        : oldPaidAmount;
+
+    const paidAmountChanged = newPaidAmount !== oldPaidAmount;
+
+    // ------------------------------
+    // 3️⃣ UPDATE RECEIPT ONLY
+    // ------------------------------
+    const updateFields = [];
+    const updateValues = [];
+
+    if (req.body.paid_amount !== undefined) {
+      updateFields.push(
+        'paid_amount = ?',
+        'TotalAmount = ?',
+        'paid_date = ?'
+      );
+      updateValues.push(
+        newPaidAmount,
+        newPaidAmount,
+        new Date()
+      );
+    }
+
+    for (const [key, value] of Object.entries(req.body)) {
+      if (key !== 'paid_amount') {
+        updateFields.push(`${key} = ?`);
+        updateValues.push(value ?? null);
+      }
+    }
+
+    if (req.file) {
+      updateFields.push('transaction_proof = ?');
+      updateValues.push(req.file.filename);
+    }
+
+    if (updateFields.length > 0) {
+      updateValues.push(voucherId);
+
+      await new Promise((resolve, reject) => {
+        connection.query(
+          `UPDATE voucher
+           SET ${updateFields.join(', ')}
+           WHERE VoucherID = ?`,
+          updateValues,
+          err => (err ? reject(err) : resolve())
+        );
+      });
+    }
+
+    // ------------------------------
+    // 4️⃣ RECALCULATE INVOICE BALANCE (UPDATE ONLY THE INVOICE)
+    // ------------------------------
+    if (invoiceNumber && isReceiptType && paidAmountChanged) {
+      // Fetch invoice details
+      const invoiceRows = await new Promise((resolve, reject) => {
+        connection.query(
+          `SELECT VoucherID, TotalAmount, TransactionType, balance_amount
+           FROM voucher
+           WHERE InvoiceNumber = ?
+             AND TransactionType IN ('Purchase', 'Sales', 'Stock Transfer')
+           LIMIT 1`,
+          [invoiceNumber],
+          (err, results) => (err ? reject(err) : resolve(results))
+        );
+      });
+
+      if (invoiceRows.length > 0) {
+        const invoice = invoiceRows[0];
+        const totalAmount = parseFloat(invoice.TotalAmount) || 0;
+        const invoiceTransactionType = invoice.TransactionType;
+        
+        // Determine receipt type condition based on invoice type
+        let receiptTypeCondition = '';
+        let conditionQuery = '';
+        
+        if (invoiceTransactionType === 'Sales' || invoiceTransactionType === 'Stock Transfer') {
+          receiptTypeCondition = "TransactionType = 'Receipt'";
+        } else if (invoiceTransactionType === 'Purchase') {
+          receiptTypeCondition = "TransactionType IN ('Receipt', 'purchase voucher')";
+        }
+        
+        // FIX: Build the complete WHERE clause
+        if (receiptTypeCondition) {
+          conditionQuery = `WHERE InvoiceNumber = ? AND ${receiptTypeCondition}`;
+        } else {
+          conditionQuery = `WHERE InvoiceNumber = ?`;
+        }
+
+        // Sum ALL receipts for this invoice
+        const receiptSumRows = await new Promise((resolve, reject) => {
+          connection.query(
+            `SELECT SUM(paid_amount) AS totalReceiptsPaid
+             FROM voucher
+             ${conditionQuery}`,
+            [invoiceNumber],
+            (err, results) => (err ? reject(err) : resolve(results))
+          );
+        });
+
+        const totalReceiptsPaid = parseFloat(receiptSumRows[0].totalReceiptsPaid) || 0;
+        
+        // Calculate new balance
+        const newBalance = Math.max(0, totalAmount - totalReceiptsPaid);
+
+        // Determine status for the INVOICE
+        let newStatusForInvoice = 'pending';
+        if (newBalance <= 0) {
+          newStatusForInvoice = 'Paid';
+        } else if (totalReceiptsPaid > 0) {
+          newStatusForInvoice = 'Partial';
+        }
+
+        console.log('📊 Invoice Update Calculation:', {
+          invoiceNumber,
+          totalAmount,
+          totalReceiptsPaid,
+          newBalance,
+          newStatusForInvoice,
+          receiptTypeCondition
+        });
+
+        // Update ONLY THE ORIGINAL INVOICE (not purchase vouchers)
+        await new Promise((resolve, reject) => {
+          connection.query(
+            `UPDATE voucher
+             SET balance_amount = ?, status = ?, updated_at = NOW()
+             WHERE VoucherID = ?`,
+            [newBalance, newStatusForInvoice, invoice.VoucherID],
+            err => (err ? reject(err) : resolve())
+          );
+        });
+
+        console.log('✅ Invoice updated:', {
+          invoiceNumber,
+          VoucherID: invoice.VoucherID,
+          newBalance,
+          newStatusForInvoice
+        });
+      }
+    }
+
+    // ------------------------------
+    // 5️⃣ COMMIT
+    // ------------------------------
+    await new Promise((resolve, reject) => {
+      connection.commit(err => (err ? reject(err) : resolve()));
+    });
+
+    connection.release();
+
+    res.json({
+      success: true,
+      message: 'Voucher updated successfully',
+      VoucherID: voucherId
+    });
+
+  } catch (error) {
+    console.error('Error updating voucher:', error);
+
+    if (connection) {
+      await new Promise(resolve => connection.rollback(() => resolve()));
+      connection.release();
+    }
+
+    if (req.file) fs.unlinkSync(req.file.path);
+
+    res.status(500).json({
+      success: false,
+      error: error.message
+    });
+  }
+});
+
 module.exports = router;
