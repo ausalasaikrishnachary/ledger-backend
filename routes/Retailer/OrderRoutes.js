@@ -593,5 +593,202 @@ router.put("/items/:item_id/approve", async (req, res) => {
 });
 
 
+router.put("/items/:item_id/update-price", async (req, res) => {
+  const { item_id } = req.params;
+  const {
+    order_number,
+    edited_sale_price,
+    customer_sale_price,
+    discount_amount,
+    taxable_amount,
+    tax_amount,
+    final_amount,
+    item_total,
+    credit_charge,
+    total_amount
+  } = req.body;
+
+  console.log(`📝 Updating item price: ${item_id}`, req.body);
+
+  try {
+    // First, check if item exists
+    const [itemRows] = await db.promise().query(
+      "SELECT * FROM order_items WHERE id = ?",
+      [item_id]
+    );
+
+    if (itemRows.length === 0) {
+      return res.status(404).json({
+        error: "Order item not found",
+      });
+    }
+
+    const currentItem = itemRows[0];
+    
+    // Start building update query
+    let updateFields = [];
+    let updateValues = [];
+    
+    // Add fields to update
+    if (edited_sale_price !== undefined) {
+      updateFields.push("edited_sale_price = ?");
+      updateValues.push(edited_sale_price);
+    }
+    
+    if (customer_sale_price !== undefined) {
+      updateFields.push("customer_sale_price = ?");
+      updateValues.push(customer_sale_price);
+    }
+    
+    if (discount_amount !== undefined) {
+      updateFields.push("discount_amount = ?");
+      updateValues.push(discount_amount);
+    }
+    
+    if (taxable_amount !== undefined) {
+      updateFields.push("taxable_amount = ?");
+      updateValues.push(taxable_amount);
+    }
+    
+    if (tax_amount !== undefined) {
+      updateFields.push("tax_amount = ?");
+      updateValues.push(tax_amount);
+    }
+    
+    if (final_amount !== undefined) {
+      updateFields.push("final_amount = ?");
+      updateValues.push(final_amount);
+    }
+    
+    if (item_total !== undefined) {
+      updateFields.push("item_total = ?");
+      updateValues.push(item_total);
+    }
+    
+    if (credit_charge !== undefined) {
+      updateFields.push("credit_charge = ?");
+      updateValues.push(credit_charge);
+    }
+    
+    if (total_amount !== undefined) {
+      updateFields.push("total_amount = ?");
+      updateValues.push(total_amount);
+    }
+    
+    // Always update the updated_at timestamp
+    updateFields.push("updated_at = NOW()");
+    
+    if (updateFields.length === 0) {
+      return res.status(400).json({
+        error: "No fields to update",
+      });
+    }
+    
+    // Add item_id to update values
+    updateValues.push(item_id);
+    
+    // Build and execute update query
+    const updateQuery = `
+      UPDATE order_items 
+      SET ${updateFields.join(", ")}
+      WHERE id = ?
+    `;
+    
+    const [result] = await db.promise().query(updateQuery, updateValues);
+    
+    if (result.affectedRows === 0) {
+      return res.status(404).json({
+        error: "Item not found or no changes made",
+      });
+    }
+    
+    console.log(`✅ Item price updated for item ID: ${item_id}`);
+    
+    // Recalculate order totals if order_number is provided
+    if (order_number) {
+      await recalculateOrderTotals(order_number);
+    }
+    
+    // Get updated item
+    const [updatedItemRows] = await db.promise().query(
+      "SELECT * FROM order_items WHERE id = ?",
+      [item_id]
+    );
+    
+    res.json({
+      success: true,
+      message: "Item price updated successfully",
+      data: {
+        item_id,
+        updated_item: updatedItemRows[0]
+      }
+    });
+    
+  } catch (err) {
+    console.error("❌ Error updating item price:", err);
+    
+    res.status(500).json({
+      error: "Failed to update item price",
+      details: err.message,
+    });
+  }
+});
+
+// Helper function to recalculate order totals
+async function recalculateOrderTotals(order_number) {
+  try {
+    // Get all items for the order
+    const [items] = await db.promise().query(
+      "SELECT * FROM order_items WHERE order_number = ?",
+      [order_number]
+    );
+    
+    if (items.length === 0) return;
+    
+    // Calculate totals
+    let order_total = 0;
+    let discount_amount = 0;
+    let taxable_amount = 0;
+    let tax_amount = 0;
+    let net_payable = 0;
+    
+    items.forEach(item => {
+      order_total += parseFloat(item.total_amount) || 0;
+      discount_amount += parseFloat(item.discount_amount) || 0;
+      taxable_amount += parseFloat(item.taxable_amount) || 0;
+      tax_amount += parseFloat(item.tax_amount) || 0;
+      net_payable += parseFloat(item.item_total) || 0;
+    });
+    
+    // Update order totals
+    const updateOrderQuery = `
+      UPDATE orders 
+      SET 
+        order_total = ?,
+        discount_amount = ?,
+        taxable_amount = ?,
+        tax_amount = ?,
+        net_payable = ?,
+        updated_at = NOW()
+      WHERE order_number = ?
+    `;
+    
+    await db.promise().query(updateOrderQuery, [
+      order_total,
+      discount_amount,
+      taxable_amount,
+      tax_amount,
+      net_payable,
+      order_number
+    ]);
+    
+    console.log(`📊 Order totals recalculated for: ${order_number}`);
+    
+  } catch (error) {
+    console.error("❌ Error recalculating order totals:", error);
+  }
+}
+
+
 
 module.exports = router;

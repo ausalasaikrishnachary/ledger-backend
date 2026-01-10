@@ -103,7 +103,7 @@ app.use("/api", inventory);
 // CRON JOB FOR AUTOMATIC SCORE CALCULATION
 // ============================================
 // Schedule to run at 18:36 (6:36 PM) every day
-cron.schedule('47 18 * * *', async () => {
+cron.schedule('50 19 * * *', async () => {
   console.log(`⏰ [${new Date().toISOString()}] Running daily score calculation...`);
 
   try {
