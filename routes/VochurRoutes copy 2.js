@@ -373,11 +373,17 @@ router.put("/creditnoteupdate/:id", async (req, res) => {
         
         if (invoiceNumber) {
           // Find the original Sales voucher for this invoice
-          const salesVoucherRows = await queryPromise(
-            connection,
-            "SELECT * FROM voucher WHERE InvoiceNumber = ? AND TransactionType = 'Sales'",
-            [invoiceNumber]
-          );
+     const salesVoucherRows = await queryPromise(
+  connection,
+  `
+    SELECT *
+    FROM voucher
+    WHERE InvoiceNumber = ?
+      AND TransactionType IN ('Sales', 'stock inward')
+  `,
+  [invoiceNumber]
+);
+
 
           if (salesVoucherRows.length > 0) {
             const salesVoucherId = salesVoucherRows[0].VoucherID;
