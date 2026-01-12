@@ -932,15 +932,13 @@ router.get('/total-payables', (req, res) => {
 
 
 
-// Single endpoint that accepts transaction type as query parameter
 router.get('/vouchersnumber', (req, res) => {
-  const transactionType = req.query.type; // Get type from query params
+  const transactionType = req.query.type; 
   
   let query;
   let queryParams = [];
   
   if (transactionType) {
-    // If specific type is requested
     query = `
       SELECT VoucherID, TransactionType, VchNo 
       FROM voucher 
@@ -965,14 +963,15 @@ router.get('/vouchersnumber', (req, res) => {
     res.json(results);
   });
 });
+
+
 router.get('/purchasevouchersnumber', (req, res) => {
-  const transactionType = req.query.type; // Get type from query params
+  const transactionType = req.query.type; 
   
   let query;
   let queryParams = [];
   
   if (transactionType) {
-    // If specific type is requested
     query = `
       SELECT VoucherID, TransactionType, VchNo 
       FROM voucher 
@@ -997,6 +996,4 @@ router.get('/purchasevouchersnumber', (req, res) => {
     res.json(results);
   });
 });
-
-
 module.exports = router;
