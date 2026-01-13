@@ -1280,7 +1280,7 @@ router.put('/voucher/:id', upload.single('transaction_proof'), async (req, res) 
                         TransactionType, order_number, PartyName, created_at
                  FROM voucher
                  WHERE InvoiceNumber = ?
-                   AND TransactionType IN ('Purchase', 'Sales', 'stock transfer', 'stock inward')  // FIXED: Added 'stock inward'
+                   AND TransactionType IN ('Purchase', 'Sales', 'stock transfer', 'stock inward')  
                  LIMIT 1`,
                 [newInvoiceNumber]
             );
