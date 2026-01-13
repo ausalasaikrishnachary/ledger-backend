@@ -324,7 +324,6 @@ router.put("/creditnoteupdate/:id", async (req, res) => {
           const batch = batchRows[0];
           const qty = Number(item.quantity) || 0;
 
-          // Credit Note = stock IN (reverse stock OUT of sales)
           await queryPromise(
             connection,
             "UPDATE batches SET quantity = quantity - ?, stock_in = IF(stock_in - ? >= 0, stock_in - ?, 0) WHERE id = ?",
@@ -451,7 +450,9 @@ router.put("/creditnoteupdate/:id", async (req, res) => {
             SGSTPercentage = ?,
             CGSTPercentage = ?,
             IGSTPercentage = ?,
-            paid_amount = ?
+            paid_amount = ?,
+                data_type = ?
+
           WHERE VoucherID = ?`,
           [
             updateData.VchNo || updateData.creditNoteNumber || originalVoucher.VchNo,
@@ -475,7 +476,7 @@ router.put("/creditnoteupdate/:id", async (req, res) => {
             Number(updateData.IGSTPercentage) || 0,
 
             Number(updateData.TotalAmount) || originalVoucher.paid_amount,
-
+   updateData.data_type || originalVoucher.data_type || null,
             voucherId,
           ]
         );
@@ -654,16 +655,20 @@ router.put("/debitnoteupdate/:id", async (req, res) => {
           total: Number(it.total) || 0,
         }));
 
-        // 🔴 NEW VALIDATION: Check if Debit Note quantity exceeds Purchase quantity
         const invoiceNumber = updateData.InvoiceNumber || originalVoucher.InvoiceNumber;
         
         if (invoiceNumber) {
-          // Find the original Purchase voucher for this invoice
-          const purchaseVoucherRows = await queryPromise(
-            connection,
-            "SELECT * FROM voucher WHERE InvoiceNumber = ? AND TransactionType = 'Purchase'",
-            [invoiceNumber]
-          );
+      const purchaseVoucherRows = await queryPromise(
+  connection,
+  `
+    SELECT * 
+    FROM voucher 
+    WHERE InvoiceNumber = ?
+      AND TransactionType IN ('Purchase', 'stock inward')
+  `,
+  [invoiceNumber]
+);
+
 
           if (purchaseVoucherRows.length > 0) {
             const purchaseVoucherId = purchaseVoucherRows[0].VoucherID;
@@ -763,7 +768,8 @@ router.put("/debitnoteupdate/:id", async (req, res) => {
             SGSTPercentage = ?,
             CGSTPercentage = ?,
             IGSTPercentage = ?,
-            paid_amount = ?
+            paid_amount = ?,
+            data_type = ?
           WHERE VoucherID = ?`,
           [
             updateData.VchNo || updateData.creditNoteNumber || originalVoucher.VchNo,
@@ -787,6 +793,7 @@ router.put("/debitnoteupdate/:id", async (req, res) => {
             Number(updateData.IGSTPercentage) || 0,
 
             Number(updateData.TotalAmount) || originalVoucher.paid_amount,
+   updateData.data_type || originalVoucher.data_type || null,
 
             voucherId,
           ]
@@ -2216,10 +2223,8 @@ router.post("/transaction", (req, res) => {
   const transactionData = req.body;
   
   // Determine transaction type
-  let transactionType = transactionData.TransactionType || 
-                       transactionData.transactionType || 
-                       "Sales";
-
+  let transactionType = transactionData.TransactionType || "";
+ const dataType = transactionData.data_type || null; 
   const normalizedType = transactionType.toLowerCase().trim();
   
   const orderNumber = transactionData.orderNumber || transactionData.order_number || null;
@@ -2227,7 +2232,7 @@ router.post("/transaction", (req, res) => {
   if ((normalizedType === "stock transfer" || normalizedType === "stocktransfer") && orderNumber) {
     console.log("🔄 Stock Transfer detected with order number");
     transactionType = "stock transfer"; // Keep as stock transfer
-  } else if ((normalizedType === "stock transfer" || normalizedType === "stocktransfer") && !orderNumber) {
+  } else if ((normalizedType === "stock transfer") && !orderNumber) {
     console.log("⚠️ Stock Transfer specified but no order number - Reverting to Sales");
     transactionType = "stock transfer";
   } else if (normalizedType === "stock inward") {
@@ -2255,7 +2260,8 @@ router.post("/transaction", (req, res) => {
         const result = await processTransaction(
           transactionData,
           transactionType,
-          connection
+          connection,
+           dataType // Pass dataType (could be null)
         );
 
         const { voucherId, invoiceNumber, vchNo, batchDetails } = result;
@@ -2313,7 +2319,7 @@ router.post("/transaction", (req, res) => {
   });
 });
 
-const processTransaction = async (transactionData, transactionType, connection) => {
+const processTransaction = async (transactionData, transactionType, connection, dataType ) => {
   const maxIdResult = await queryPromise(
     connection,
     "SELECT COALESCE(MAX(VoucherID),0)+1 AS nextId FROM voucher"
@@ -2678,6 +2684,7 @@ const processTransaction = async (transactionData, transactionType, connection) 
   const voucherData = {
     VoucherID: nextVoucherId,
     TransactionType: transactionType,
+      data_type: dataType, // This will be NULL if not provided
     VchNo: vchNo,
     InvoiceNumber: invoiceNumber,
     order_number: orderNumber, 

@@ -166,7 +166,7 @@ router.post('/receipts', upload.single('transaction_proof'), async (req, res) =>
   const [transactionRows] = await connection.promise().query(
     `SELECT staffid, assigned_staff, TotalAmount, balance_amount, status, order_number
      FROM voucher 
-     WHERE TransactionType IN ('Stock Transfer', 'Sales', 'Purchase', 'stock inward')  
+     WHERE TransactionType IN ('stock transfer', 'Sales', 'Purchase', 'stock inward')  
      AND InvoiceNumber = ? 
      LIMIT 1`,
     [safeInvoiceNumber]

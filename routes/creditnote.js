@@ -609,7 +609,10 @@ router.get('/creditnotes/:id', async (req, res) => {
 
 
 router.get("/credit-notes-table", (req, res) => {
-  const query = `
+  // Get data_type from query parameter
+  const dataType = req.query.data_type;
+  
+  let query = `
     SELECT 
       v.VoucherID,
       v.TransactionType,
@@ -629,11 +632,10 @@ router.get("/credit-notes-table", (req, res) => {
       v.ChequeDate,
       v.BankName,
       v.AccountID,
-
+      v.data_type,
       v.PartyID,
       a.name AS PartyName,
       a.id AS AccountPartyID,
-
       v.BasicAmount,
       v.ValueOfGoods,
       v.EntryDate,
@@ -656,10 +658,21 @@ router.get("/credit-notes-table", (req, res) => {
     FROM voucher v
     LEFT JOIN accounts a ON v.PartyID = a.id
     WHERE v.TransactionType = 'CreditNote'
-    ORDER BY v.VoucherID DESC
   `;
 
-  db.query(query, (err, results) => {
+  // Add filter for data_type if provided
+  const queryParams = [];
+  
+  if (dataType) {
+    query += ` AND v.data_type = ?`;
+    queryParams.push(dataType);
+  }
+  
+  query += ` ORDER BY v.VoucherID DESC`;
+
+  console.log(`Querying credit notes with data_type: ${dataType || 'ALL'}`);
+  
+  db.query(query, queryParams, (err, results) => {
     if (err) {
       console.error("Database error:", err);
       return res.status(500).json({
