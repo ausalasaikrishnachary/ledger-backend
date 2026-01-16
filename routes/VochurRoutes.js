@@ -3266,7 +3266,148 @@ router.get('/order/:order_number', async (req, res) => {
 
 
 
+router.post('/orders/send-retailer-alert', async (req, res) => {
+  const {
+    order_number,
+    retailer_mobile,
+    retailer_id,
+    customer_name,
+    items_with_issues,
+    message
+  } = req.body;
 
+  try {
+    // 1. Update order status
+    db.query(
+      `UPDATE orders SET 
+        modification_required = 1,
+        modification_reason = 'Item out of stock',
+        order_status = 'Modification Required',
+        updated_at = NOW()
+       WHERE order_number = ?`,
+      [order_number],
+      (error) => {
+        if (error) console.error('Error updating order:', error);
+      }
+    );
+
+    // 2. Update order items
+    items_with_issues.forEach(item => {
+      const stock_status = item.shortage > 0 ? 'INSUFFICIENT_STOCK' : 'OUT_OF_STOCK';
+      
+      db.query(
+        `UPDATE order_items SET 
+          stock_status = ?,
+          admin_approval = 'pending_modification',
+          updated_at = NOW()
+         WHERE order_number = ? 
+           AND product_id = ?`,
+        [stock_status, order_number, item.product_id],
+        (error) => {
+          if (error) console.error('Error updating item:', error);
+        }
+      );
+    });
+
+  const notificationMessage = items_with_issues
+  .map((item, index) =>
+    `${index + 1}. ${item.item_name}\n` +
+    `Ordered ${item.ordered_quantity}, Available ${item.available_quantity}, Shortage ${item.shortage} units`
+  )
+  .join('\n\n');
+
+
+    // 4. Store notification with retailer_id
+    db.query(
+      `INSERT INTO notifications SET 
+        user_type = 'RETAILER',
+        retailer_mobile = ?,
+        retailer_id = ?,
+        order_number = ?,
+        title = 'Order Modification Required',
+        message = ?,
+        created_at = NOW()`,
+      [retailer_mobile, retailer_id, order_number, notificationMessage],
+      (error, results) => {
+        if (error) {
+          console.error('Error creating notification:', error);
+          return res.status(500).json({ 
+            success: false, 
+            error: 'Failed to create notification' 
+          });
+        }
+
+        res.json({
+          success: true,
+          message: 'Alert sent to retailer successfully',
+          notification_id: results.insertId
+        });
+      }
+    );
+
+  } catch (error) {
+    console.error('Error sending retailer alert:', error);
+    res.status(500).json({
+      success: false,
+      error: 'Failed to send alert to retailer'
+    });
+  }
+});
+
+// 4. Get notifications by retailer_id
+router.get('/notifications/retailer-id/:retailer_id', async (req, res) => {
+  const { retailer_id } = req.params;
+
+  db.query(
+    `SELECT * FROM notifications 
+     WHERE retailer_id = ? 
+       AND user_type = 'RETAILER'
+       AND is_read = 0
+     ORDER BY created_at DESC`,
+    [retailer_id],
+    (error, notifications) => {
+      if (error) {
+        return res.status(500).json({
+          success: false,
+          error: 'Failed to fetch notifications'
+        });
+      }
+
+      res.json({
+        success: true,
+        notifications
+      });
+    }
+  );
+});
+
+
+router.put('/notifications/mark-read-by-order', async (req, res) => {
+  const { order_number, retailer_id } = req.body;
+
+  try {
+    await queryPromise(
+      db,
+      `UPDATE notifications SET is_read = 1 
+       WHERE order_number = ? 
+         AND retailer_id = ? 
+         AND is_read = 0`,
+      [order_number, retailer_id]
+    );
+
+    res.json({
+      success: true,
+      message: 'Notification marked as read'
+    });
+
+  } catch (error) {
+    console.error('Error marking notification as read:', error);
+    res.status(500).json({
+      success: false,
+      error: 'Failed to mark notification as read'
+    });
+  }
+});
 
 
 module.exports = router;
