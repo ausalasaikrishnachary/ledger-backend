@@ -888,7 +888,10 @@ router.get('/debitnotes/:id', async (req, res) => {
 });
 
 router.get("/debit-notes-table", (req, res) => {
-  const query = `
+  // Get data_type from query parameter - can be single value or comma-separated
+  const dataTypeParam = req.query.data_type;
+  
+  let query = `
     SELECT 
       v.VoucherID,
       v.TransactionType,
@@ -908,12 +911,10 @@ router.get("/debit-notes-table", (req, res) => {
       v.ChequeDate,
       v.BankName,
       v.AccountID,
-
-      -- Correct Party Name via accounts table
+      v.data_type,
       v.PartyID,
       a.name AS PartyName,
       a.id AS AccountPartyID,
-
       v.BasicAmount,
       v.ValueOfGoods,
       v.EntryDate,
@@ -936,10 +937,31 @@ router.get("/debit-notes-table", (req, res) => {
     FROM voucher v
     LEFT JOIN accounts a ON v.PartyID = a.id
     WHERE v.TransactionType = 'DebitNote'
-    ORDER BY v.VoucherID DESC
   `;
 
-  db.query(query, (err, results) => {
+  const queryParams = [];
+  
+  if (dataTypeParam) {
+    // Handle comma-separated values like "Purchase,stock inward"
+    const dataTypes = dataTypeParam.split(',').map(type => type.trim());
+    
+    if (dataTypes.length === 1) {
+      // Single data_type filter
+      query += ` AND v.data_type = ?`;
+      queryParams.push(dataTypes[0]);
+    } else {
+      // Multiple data_types filter
+      const placeholders = dataTypes.map(() => '?').join(',');
+      query += ` AND v.data_type IN (${placeholders})`;
+      queryParams.push(...dataTypes);
+    }
+  }
+  
+  query += ` ORDER BY v.VoucherID DESC`;
+
+  console.log(`Querying debit notes with data_type(s): ${dataTypeParam || 'ALL'}`);
+  
+  db.query(query, queryParams, (err, results) => {
     if (err) {
       console.error("Database error:", err);
       return res.status(500).json({
@@ -950,7 +972,6 @@ router.get("/debit-notes-table", (req, res) => {
     }
 
     console.log(`Found ${results.length} debit notes`);
-
     res.json({
       success: true,
       count: results.length,

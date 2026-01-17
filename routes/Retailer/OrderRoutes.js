@@ -917,4 +917,317 @@ async function recalculateOrderTotals(order_number) {
 
 
 
+function rollback(connection, res, message, error) {
+  console.error(message, error);
+  connection.rollback(() => {
+    connection.release();
+    res.status(500).json({
+      success: false,
+      error: message,
+      details: error?.message,
+    });
+  });
+}
+
+
+function commit(connection, res, orderNumber, count) {
+  connection.commit((err) => {
+    if (err) {
+      return rollback(connection, res, 'Commit failed', err);
+    }
+
+    connection.release();
+    res.json({
+      success: true,
+      message: 'Order and items updated successfully',
+      orderNumber,
+      updatedItems: count,
+    });
+  });
+}
+
+
+router.put("/update-order/:order_number", async (req, res) => {
+  const { order_number } = req.params;
+  console.log("📦 Updating order:", order_number, req.body);
+
+  const { order, orderItems } = req.body;
+
+  if (!order || !orderItems || !Array.isArray(orderItems)) {
+    return res.status(400).json({
+      error: "Missing order or orderItems data",
+    });
+  }
+
+  db.getConnection((err, connection) => {
+    if (err) {
+      console.error("❌ DB Connection Error:", err);
+      return res.status(500).json({ error: "Database connection failed" });
+    }
+
+    connection.beginTransaction(async (err) => {
+      if (err) {
+        connection.release();
+        console.error("❌ Transaction Error:", err);
+        return res.status(500).json({ error: "Failed to start transaction" });
+      }
+
+      try {
+        // ---------------------------------------------------
+        // 1. UPDATE ORDER
+        // ---------------------------------------------------
+        const updateOrderQuery = `
+          UPDATE orders 
+          SET 
+            customer_id             = ?,
+            customer_name           = ?,
+            order_total             = ?,
+            discount_amount         = ?,
+            taxable_amount          = ?,
+            tax_amount              = ?,
+            net_payable             = ?,
+            credit_period           = ?,
+            estimated_delivery_date = ?,
+            order_placed_by         = ?,
+            ordered_by              = ?,
+            staff_id                = ?,
+            assigned_staff          = ?,
+            staff_incentive         = ?,
+            order_mode              = ?,
+            approval_status         = ?,
+            retailer_mobile         = ?,
+            updated_at              = NOW()
+          WHERE order_number = ?
+        `;
+
+        const orderValues = [
+          order.customer_id || null,
+          order.customer_name || null,
+          order.order_total || 0,
+          order.discount_amount || 0,
+          order.taxable_amount || 0,
+          order.tax_amount || 0,
+          order.net_payable || 0,
+          order.credit_period || "0",
+          order.estimated_delivery_date || null,
+          order.order_placed_by || null,
+          order.ordered_by || null,
+          order.staffid || order.staff_id || null,
+
+          order.assigned_staff || null,
+          order.staff_incentive || 0,
+          order.order_mode || 'KACHA',
+          order.approval_status || 'Pending',
+          order.retailer_mobile || null,
+          order_number
+        ];
+
+        const updateOrderResult = await new Promise((resolve, reject) => {
+          connection.query(updateOrderQuery, orderValues, (err, result) => {
+            if (err) reject(err);
+            else resolve(result);
+          });
+        });
+
+        if (updateOrderResult.affectedRows === 0) {
+          throw new Error("Order not found");
+        }
+
+        console.log("✅ Order updated:", updateOrderResult.affectedRows);
+
+        // ---------------------------------------------------
+        // 2. DELETE EXISTING ORDER ITEMS
+        // ---------------------------------------------------
+        const deleteOrderItemsQuery = `
+          DELETE FROM order_items 
+          WHERE order_number = ?
+        `;
+
+        await new Promise((resolve, reject) => {
+          connection.query(deleteOrderItemsQuery, [order_number], (err) => {
+            if (err) reject(err);
+            else resolve();
+          });
+        });
+
+        console.log("🗑️ Old order items deleted");
+
+        // ---------------------------------------------------
+        // 3. INSERT UPDATED ORDER ITEMS
+        // ---------------------------------------------------
+        const insertOrderItemsQuery = `
+          INSERT INTO order_items (
+            order_number, item_name, product_id, mrp, sale_price,
+            edited_sale_price, credit_charge, customer_sale_price,
+            final_amount, quantity, total_amount,
+            discount_percentage, discount_amount, taxable_amount,
+            tax_percentage, tax_amount, item_total,
+            credit_period, credit_percentage,
+            sgst_percentage, sgst_amount,
+            cgst_percentage, cgst_amount,
+            discount_applied_scheme
+          ) VALUES ?
+        `;
+
+        const orderItemValues = orderItems.map((item) => [
+          order_number,
+          item.item_name,
+          item.product_id,
+          item.mrp || 0,
+          item.sale_price || 0,
+          item.edited_sale_price || 0,
+          item.credit_charge || 0,
+          item.customer_sale_price || 0,
+          item.final_amount || 0,
+          item.quantity || 1,
+          item.total_amount || 0,
+          item.discount_percentage || 0,
+          item.discount_amount || 0,
+          item.taxable_amount || 0,
+          item.tax_percentage || 0,
+          item.tax_amount || 0,
+          item.item_total || 0,
+          item.credit_period || "0",
+          item.credit_percentage || 0,
+          item.sgst_percentage || 0,
+          item.sgst_amount || 0,
+          item.cgst_percentage || 0,
+          item.cgst_amount || 0,
+          item.discount_applied_scheme || 'none',
+        ]);
+
+        await new Promise((resolve, reject) => {
+          connection.query(insertOrderItemsQuery, [orderItemValues], (err, result) => {
+            if (err) reject(err);
+            else resolve(result);
+          });
+        });
+
+        console.log("✅ New order items inserted:", orderItems.length);
+
+        // ---------------------------------------------------
+        // 4. COMMIT TRANSACTION
+        // ---------------------------------------------------
+        await new Promise((resolve, reject) => {
+          connection.commit((err) => {
+            if (err) reject(err);
+            else resolve();
+          });
+        });
+
+        connection.release();
+        console.log("✅ Transaction committed");
+
+        // ---------------------------------------------------
+        // 5. SEND UPDATE EMAILS
+        // ---------------------------------------------------
+        try {
+          const emailHTML = `
+            <h2>Order ${order.approval_status === 'Approved' ? 'Updated' : 'Pending Approval'} Successfully</h2>
+            <p><strong>Order Number:</strong> ${order_number}</p>
+            <p><strong>Customer:</strong> ${order.customer_name}</p>
+            <p><strong>Updated Net Amount:</strong> ₹${order.net_payable}</p>
+            <p><strong>Placed By:</strong> ${order.ordered_by}</p>
+            <p><strong>Order Mode:</strong> ${order.order_mode}</p>
+            <p><strong>Status:</strong> ${order.approval_status}</p>
+          `;
+
+          const mailPromises = [];
+
+          if (process.env.ADMIN_EMAIL) {
+            mailPromises.push(
+              sendMail({
+                to: process.env.ADMIN_EMAIL,
+                subject: `Order Updated - ${order_number}`,
+                html: emailHTML,
+              })
+            );
+          }
+
+          if (order.staff_email) {
+            mailPromises.push(
+              sendMail({
+                to: order.staff_email,
+                subject: `Order Updated - ${order_number}`,
+                html: emailHTML,
+              })
+            );
+          }
+
+          if (order.retailer_email) {
+            mailPromises.push(
+              sendMail({
+                to: order.retailer_email,
+                subject: `Your Order ${order_number} Has Been Updated`,
+                html: emailHTML,
+              })
+            );
+          }
+
+          if (mailPromises.length > 0) {
+            await Promise.all(mailPromises);
+            console.log("📧 Update emails sent");
+          }
+        } catch (mailErr) {
+          console.error("❌ Email failed:", mailErr.message);
+        }
+
+        // ---------------------------------------------------
+        // 6. SEND UPDATE SMS TO RETAILER
+        // ---------------------------------------------------
+        try {
+          if (order.retailer_mobile) {
+            const productSummary = orderItems
+              .slice(0, 3)
+              .map((item) => item.item_name)
+              .join(", ");
+
+            const smsText = `Dear Customer, Your Order No. ${order_number} for ${productSummary} has been updated successfully. Updated Amount: ₹${order.net_payable}. - SHREE SHASHWATRAJ AGRO PRIVATE LIMITED`;
+
+            const smsUrl = "https://www.smsjust.com/blank/sms/user/urlsms.php";
+
+            const smsParams = {
+              username: process.env.SMS_USERNAME,
+              pass: process.env.SMS_PASSWORD,
+              senderid: process.env.SMS_SENDERID,
+              dest_mobileno: order.retailer_mobile,
+              message: smsText,
+              dltentityid: process.env.SMS_ENTITYID,
+              dlttempid: process.env.SMS_ORDERTEMPLATEID,
+              response: "y",
+            };
+
+            const smsResponse = await axios.get(smsUrl, {
+              params: smsParams,
+            });
+
+            console.log("📩 Update SMS sent:", smsResponse.data);
+          }
+        } catch (smsErr) {
+          console.error("❌ SMS failed:", smsErr.message);
+        }
+
+        // ---------------------------------------------------
+        // 7. RESPONSE
+        // ---------------------------------------------------
+        res.status(200).json({
+          success: true,
+          order_number: order_number,
+          message: "Order updated successfully",
+          affected_rows: updateOrderResult.affectedRows,
+          items_updated: orderItems.length,
+        });
+      } catch (error) {
+        connection.rollback(() => {
+          connection.release();
+          console.error("❌ Update transaction failed:", error);
+          res.status(500).json({
+            error: "Failed to update order",
+            details: error.message,
+          });
+        });
+      }
+    });
+  });
+});
 module.exports = router;
