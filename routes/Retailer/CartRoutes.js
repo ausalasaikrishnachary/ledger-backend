@@ -4,51 +4,100 @@ const db = require('./../../db');
 
 // ============================
 // Add to Cart
-// ============================
-// Add to Cart
 router.post("/add-to-cart", (req, res) => {
-  const { customer_id, product_id, price, staff_id, quantity, credit_period, credit_percentage } = req.body;
+  const {
+    customer_id,
+    product_id,
+    staff_id,
+    quantity,
+    credit_period,
+    credit_percentage
+  } = req.body;
 
-  console.log("Add to cart request body:", req.body); // Add logging
+  console.log("Add to cart request body:", req.body);
 
   if (!customer_id || !product_id) {
-    return res.status(400).json({ 
+    return res.status(400).json({
       success: false,
-      error: "customer_id & product_id are required" 
+      error: "customer_id & product_id are required"
     });
   }
 
-  // Fix: Removed duplicate price field from SQL
-  const sql = `
-    INSERT INTO cart_items (customer_id, product_id, price, staff_id, quantity, credit_period, credit_percentage)
-    VALUES (?, ?, ?, ?, ?, ?, ?)
-  `;
+  // ✅ Correct column name: id
+  const priceSql = `SELECT price FROM products WHERE id = ?`;
 
-  console.log("SQL:", sql); // Add logging
-  console.log("Values:", [customer_id, product_id, price, staff_id || null, quantity || 1, credit_period || 0, credit_percentage || 0]);
-
-  db.query(
-    sql,
-    [customer_id, product_id, price, staff_id || null, quantity || 1, credit_period || 0, credit_percentage || 0],
-    (err, result) => {
-      if (err) {
-        console.error("Database error:", err); // Add logging
-        return res.status(500).json({ 
-          success: false,
-          error: err.message 
-        });
-      }
-      
-      console.log("Insert result:", result); // Add logging
-      res.json({ 
-        success: true,
-        message: "Item added to cart", 
-        item_id: result.insertId 
+  db.query(priceSql, [product_id], (err, productResult) => {
+    if (err) {
+      console.error("Price fetch error:", err);
+      return res.status(500).json({
+        success: false,
+        error: err.message
       });
     }
-  );
+
+    if (productResult.length === 0) {
+      return res.status(404).json({
+        success: false,
+        error: "Product not found"
+      });
+    }
+
+    // 🔥 Convert VARCHAR price → NUMBER safely
+    let rawPrice = productResult[0].price;
+
+    if (!rawPrice) {
+      return res.status(400).json({
+        success: false,
+        error: "Product price is not set"
+      });
+    }
+
+    // Remove commas & convert to number
+    const price = parseFloat(String(rawPrice).replace(/,/g, ""));
+
+    if (isNaN(price)) {
+      return res.status(400).json({
+        success: false,
+        error: "Invalid product price format"
+      });
+    }
+
+    const insertSql = `
+      INSERT INTO cart_items
+      (customer_id, product_id, price, staff_id, quantity, credit_period, credit_percentage)
+      VALUES (?, ?, ?, ?, ?, ?, ?)
+    `;
+
+    const values = [
+      customer_id,
+      product_id,
+      price,
+      staff_id || null,
+      quantity || 1,
+      credit_period || 0,
+      credit_percentage || 0
+    ];
+
+    console.log("Insert values:", values);
+
+    db.query(insertSql, values, (err, result) => {
+      if (err) {
+        console.error("Insert error:", err);
+        return res.status(500).json({
+          success: false,
+          error: err.message
+        });
+      }
+
+      res.json({
+        success: true,
+        message: "Item added to cart",
+        item_id: result.insertId
+      });
+    });
+  });
 });
-// ============================
+
 // Remove From Cart
 // ============================
 router.delete("/remove-cart-item/:id", (req, res) => {
