@@ -697,11 +697,26 @@ router.get('/receipts', async (req, res) => {
     const { data_type } = req.query;
 
     let invoiceTypes = `'Sales','stock transfer'`;
+    let whereClause = "r.TransactionType = 'Receipt'";
 
     if (data_type === 'Sales') {
       invoiceTypes = `'Sales'`;
+      // Add filter for Sales-related receipts
+      whereClause += ` AND EXISTS (
+        SELECT 1 FROM voucher v 
+        WHERE v.PartyID = r.PartyID 
+        AND v.InvoiceNumber = r.InvoiceNumber
+        AND v.TransactionType = 'Sales'
+      )`;
     } else if (data_type === 'stock transfer') {
       invoiceTypes = `'stock transfer'`;
+      // Add filter for stock transfer-related receipts
+      whereClause += ` AND EXISTS (
+        SELECT 1 FROM voucher v 
+        WHERE v.PartyID = r.PartyID 
+        AND v.InvoiceNumber = r.InvoiceNumber
+        AND v.TransactionType = 'stock transfer'
+      )`;
     }
 
     const sql = `
@@ -748,7 +763,7 @@ router.get('/receipts', async (req, res) => {
 
       FROM voucher r
       LEFT JOIN accounts a ON r.PartyID = a.id
-      WHERE r.TransactionType = 'Receipt'
+      WHERE ${whereClause}
       ORDER BY r.created_at DESC
     `;
 
@@ -784,11 +799,24 @@ router.get('/receipts/:id', async (req, res) => {
     const { data_type } = req.query;
 
     let invoiceTypes = `'Sales','stock transfer'`;
+    let whereClause = "r.VoucherID = ? AND r.TransactionType = 'Receipt'";
 
     if (data_type === 'Sales') {
       invoiceTypes = `'Sales'`;
+      whereClause += ` AND EXISTS (
+        SELECT 1 FROM voucher v 
+        WHERE v.PartyID = r.PartyID 
+        AND v.InvoiceNumber = r.InvoiceNumber
+        AND v.TransactionType = 'Sales'
+      )`;
     } else if (data_type === 'stock transfer') {
       invoiceTypes = `'stock transfer'`;
+      whereClause += ` AND EXISTS (
+        SELECT 1 FROM voucher v 
+        WHERE v.PartyID = r.PartyID 
+        AND v.InvoiceNumber = r.InvoiceNumber
+        AND v.TransactionType = 'stock transfer'
+      )`;
     }
 
     const sql = `
@@ -835,8 +863,7 @@ router.get('/receipts/:id', async (req, res) => {
 
       FROM voucher r
       LEFT JOIN accounts a ON r.PartyID = a.id
-      WHERE r.VoucherID = ?
-      AND r.TransactionType = 'Receipt'
+      WHERE ${whereClause}
     `;
 
     db.execute(sql, [req.params.id], (error, results) => {
@@ -864,7 +891,6 @@ router.get('/receipts/:id', async (req, res) => {
     res.status(500).json({ error: "Failed to fetch receipt" });
   }
 });
-
 
 
 // ------------------------------
@@ -952,26 +978,36 @@ router.get('/voucher', async (req, res) => {
       LEFT JOIN accounts a ON v.PartyID = a.id
     `;
 
-    let whereClause = "";
-
-    // FIXED: Filter by data_type parameter correctly
+    // FIXED: Filter by TransactionType = 'purchase voucher'
+    let whereClause = "WHERE v.TransactionType = 'purchase voucher'";
+    
     const type = data_type?.trim();
 
     if (type === 'Purchase') {
-      whereClause = `WHERE v.data_type = 'Purchase'`;
+      // For Purchase type, filter by data_type = 'Purchase' AND TransactionType = 'purchase voucher'
+      whereClause = `WHERE v.TransactionType = 'purchase voucher' 
+                     AND EXISTS (
+                       SELECT 1 FROM voucher p 
+                       WHERE p.PartyID = v.PartyID 
+                       AND p.InvoiceNumber = v.InvoiceNumber
+                       AND p.TransactionType = 'Purchase'
+                     )`;
+    } else if (type === 'stock inward') {
+      // For stock inward type, filter by data_type = 'stock inward' AND TransactionType = 'purchase voucher'
+      whereClause = `WHERE v.TransactionType = 'purchase voucher' 
+                     AND EXISTS (
+                       SELECT 1 FROM voucher p 
+                       WHERE p.PartyID = v.PartyID 
+                       AND p.InvoiceNumber = v.InvoiceNumber
+                       AND p.TransactionType = 'stock inward'
+                     )`;
     }
-    else if (type === 'stock inward') {
-      whereClause = `WHERE v.data_type = 'stock inward'`;
-    }
-    else {
-      // Default: show all purchase vouchers
-      whereClause = `WHERE v.TransactionType = 'purchase voucher'`;
-    }
+    // No else needed - default shows all purchase vouchers
 
     const orderClause = `ORDER BY v.created_at DESC`;
     const query = `${baseQuery} ${whereClause} ${orderClause}`;
 
-    console.log('Executing query with data_type:', type);
+    console.log('Executing voucher query with data_type:', type);
     console.log('Where clause:', whereClause);
 
     db.execute(query, (error, results) => {
@@ -980,7 +1016,7 @@ router.get('/voucher', async (req, res) => {
         return res.status(500).json({ error: 'Failed to fetch vouchers' });
       }
 
-      console.log('Results count:', results.length);
+      console.log('Voucher results count:', results.length);
 
       const processedResults = results.map(voucher => ({
         ...voucher,
@@ -998,22 +1034,13 @@ router.get('/voucher', async (req, res) => {
     res.status(500).json({ error: 'Server error' });
   }
 });
-
 router.get('/voucher/:id', async (req, res) => {
   try {
     const { data_type } = req.query;
     const type = data_type?.trim();
 
-    // FIXED: Filter by data_type field instead of TransactionType
-    let typeCondition = `v.TransactionType = 'purchase voucher'`;
-
-    if (type === 'Purchase') {
-      typeCondition = `v.data_type = 'Purchase'`;
-    } else if (type === 'stock inward') {
-      typeCondition = `v.data_type = 'stock inward'`;
-    }
-
-    const query = `
+    // Base query with proper filtering
+    let baseQuery = `
       SELECT 
         v.*, 
         a.business_name, 
@@ -1032,34 +1059,87 @@ router.get('/voucher/:id', async (req, res) => {
           SELECT SUM(p.TotalAmount)
           FROM voucher p
           WHERE p.PartyID = v.PartyID
-            AND p.TransactionType = 'Purchase'
+            AND p.TransactionType IN ('Purchase', 'stock inward')
             AND p.InvoiceNumber IS NOT NULL
             AND p.InvoiceNumber != ''
+            AND FIND_IN_SET(
+              p.InvoiceNumber,
+              (
+                SELECT GROUP_CONCAT(DISTINCT v3.InvoiceNumber)
+                FROM voucher v3
+                WHERE v3.VchNo = v.VchNo
+                  AND v3.TransactionType IN ('Purchase', 'purchase voucher', 'stock inward')
+                  AND v3.InvoiceNumber IS NOT NULL
+                  AND v3.InvoiceNumber != ''
+              )
+            ) > 0
         ), 0) AS total_invoice_amount,
 
         COALESCE((
           SELECT SUM(p.paid_amount)
           FROM voucher p
           WHERE p.PartyID = v.PartyID
-            AND p.TransactionType = 'Purchase'
+            AND p.TransactionType IN ('Purchase', 'stock inward')
             AND p.InvoiceNumber IS NOT NULL
             AND p.InvoiceNumber != ''
+            AND FIND_IN_SET(
+              p.InvoiceNumber,
+              (
+                SELECT GROUP_CONCAT(DISTINCT v3.InvoiceNumber)
+                FROM voucher v3
+                WHERE v3.VchNo = v.VchNo
+                  AND v3.TransactionType IN ('Purchase', 'purchase voucher', 'stock inward')
+                  AND v3.InvoiceNumber IS NOT NULL
+                  AND v3.InvoiceNumber != ''
+              )
+            ) > 0
         ), 0) AS total_paid_amount,
 
         COALESCE((
           SELECT SUM(p.balance_amount)
           FROM voucher p
           WHERE p.PartyID = v.PartyID
-            AND p.TransactionType = 'Purchase'
+            AND p.TransactionType IN ('Purchase', 'stock inward')
             AND p.InvoiceNumber IS NOT NULL
             AND p.InvoiceNumber != ''
+            AND FIND_IN_SET(
+              p.InvoiceNumber,
+              (
+                SELECT GROUP_CONCAT(DISTINCT v3.InvoiceNumber)
+                FROM voucher v3
+                WHERE v3.VchNo = v.VchNo
+                  AND v3.TransactionType IN ('Purchase', 'purchase voucher', 'stock inward')
+                  AND v3.InvoiceNumber IS NOT NULL
+                  AND v3.InvoiceNumber != ''
+              )
+            ) > 0
         ), 0) AS total_balance_amount
 
       FROM voucher v
       LEFT JOIN accounts a ON v.PartyID = a.id
       WHERE v.VoucherID = ?
-        AND ${typeCondition}
+        AND v.TransactionType = 'purchase voucher'
     `;
+
+    let additionalCondition = "";
+
+    if (type === 'Purchase') {
+      additionalCondition = `AND EXISTS (
+        SELECT 1 FROM voucher p 
+        WHERE p.PartyID = v.PartyID 
+        AND p.InvoiceNumber = v.InvoiceNumber
+        AND p.TransactionType = 'Purchase'
+      )`;
+    } else if (type === 'stock inward') {
+      additionalCondition = `AND EXISTS (
+        SELECT 1 FROM voucher p 
+        WHERE p.PartyID = v.PartyID 
+        AND p.InvoiceNumber = v.InvoiceNumber
+        AND p.TransactionType = 'stock inward'
+      )`;
+    }
+
+    const query = `${baseQuery} ${additionalCondition}`;
 
     db.execute(query, [req.params.id], (error, results) => {
       if (error) {
@@ -1088,7 +1168,6 @@ router.get('/voucher/:id', async (req, res) => {
     res.status(500).json({ error: 'Server error' });
   }
 });
-
 
 
 router.put('/voucher/:id', upload.single('transaction_proof'), async (req, res) => {

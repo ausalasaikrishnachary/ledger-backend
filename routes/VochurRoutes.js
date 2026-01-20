@@ -1,6 +1,7 @@
 const express = require('express');
 const router = express.Router();
 const db = require('../db');
+const axios = require('axios'); // ADD THIS LINE
 
 // Get next sales invoice number
 router.get("/next-invoice-number", async (req, res) => {
@@ -1395,6 +1396,8 @@ router.delete("/transactions/:id", async (req, res) => {
           }
 
           connection.release();
+
+          
           console.log("✔ Transaction deleted & stock reversed successfully");
 
           let message = "Invoice deleted successfully";
@@ -2030,13 +2033,11 @@ router.put("/transactions/:id", async (req, res) => {
 
           const currentQuantity = parseFloat(currentBatch[0].quantity);
 
-          // Determine if this is a stock IN transaction or stock OUT transaction
           const isStockInTransaction = originalTransactionType === "Purchase" || 
                                        originalTransactionType === "CreditNote" || 
                                        originalTransactionType === "stock inward";
           
           if (isStockInTransaction) {
-            // For Purchase, CreditNote, stock inward - ADD stock
             await queryPromise(
               connection,
               "UPDATE batches SET quantity = quantity + ?, stock_in = stock_in + ?, updated_at = NOW() WHERE product_id = ? AND batch_number = ?",
@@ -2046,7 +2047,6 @@ router.put("/transactions/:id", async (req, res) => {
             console.log(`✔ ${originalTransactionType} applied - added stock to batch ${item.batch}`);
 
           } else {
-            // For Sales, DebitNote, stock transfer - REDUCE stock
             if (currentQuantity < itemQuantity) {
               throw new Error(
                 `Insufficient quantity for ${originalTransactionType} update in batch ${item.batch}. Available: ${currentQuantity}, Required: ${item.quantity}`
@@ -2122,25 +2122,21 @@ router.get("/ledger", (req, res) => {
       return res.status(500).json({ message: "Database error", error: err });
     }
 
-    // For debugging: Log transaction types and DC values
     console.log("Transaction types found:", [...new Set(results.map(r => r.trantype))]);
     
-    // Recalculate running balances for all parties
     const dataWithRecalculatedBalances = recalculateRunningBalances(results);
 
     res.status(200).json(dataWithRecalculatedBalances);
   });
 });
 
-// Function to recalculate running balances
 function recalculateRunningBalances(transactions) {
   const parties = {};
 
-  // Group transactions by PartyID
   transactions.forEach(transaction => {
     const partyId = transaction.PartyID;
     
-    if (!partyId) return; // Skip if no PartyID
+    if (!partyId) return; 
     
     if (!parties[partyId]) {
       parties[partyId] = {
@@ -2221,7 +2217,8 @@ function recalculateRunningBalances(transactions) {
 
 router.post("/transaction", (req, res) => {
   const transactionData = req.body;
-  
+  console.log('📦 ALL RECEIVED DATA:', transactionData);
+
   // Determine transaction type
   let transactionType = transactionData.TransactionType || "";
  const dataType = transactionData.data_type || null; 
@@ -2264,22 +2261,77 @@ router.post("/transaction", (req, res) => {
            dataType // Pass dataType (could be null)
         );
 
-        const { voucherId, invoiceNumber, vchNo, batchDetails } = result;
+        const { voucherId, invoiceNumber, vchNo, batchDetails, grandTotal } = result;
 
-        connection.commit((commitErr) => {
-          if (commitErr) {
-            console.error("Commit Error:", commitErr);
+     connection.commit(async (commitErr) => {     // ← Add async here!
+    if (commitErr) {
+        console.error("Commit Error:", commitErr);
 
-            return connection.rollback(() => {
-              connection.release();
-              res.status(500).send({
+        return connection.rollback(() => {
+            connection.release();
+            res.status(500).send({
                 error: "Transaction commit failed",
                 details: commitErr.message,
-              });
             });
-          }
+        });
+    }
 
-          connection.release();
+    connection.release();
+
+try {
+    const normalizedType = (transactionType || "")
+        .toLowerCase()
+        .trim()
+        .replace(/\s+/g, " ");
+
+    if (
+        orderNumber &&
+        (normalizedType === "sales" || normalizedType === "stock transfer")
+    ) {
+        const mobile =
+            transactionData.fullAccountDetails?.mobile_number || null;
+
+        if (!mobile) {
+            console.log(`No mobile number for order ${orderNumber}`);
+            return;
+        }
+
+        const cleanMobile = mobile.toString().replace(/\D/g, "");
+
+        if (!/^[6-9]\d{9}$/.test(cleanMobile)) {
+            console.log(`Invalid mobile number: ${cleanMobile}`);
+            return;
+        }
+
+        // 🔥 EXACT TEMPLATE MESSAGE (VARIABLES REPLACED)
+        const smsMessage =
+`Your invoice ${invoiceNumber} for order #${orderNumber} is ready.
+Total Amount: ${grandTotal} - SHREE SHASHWATRAJ AGRO PRIVATE LIMITED`;
+
+        const smsResponse = await axios.get(
+            "https://www.smsjust.com/blank/sms/user/urlsms.php",
+            {
+                params: {
+                    username: process.env.SMS_USERNAME,
+                    pass: process.env.SMS_PASSWORD,
+                    senderid: process.env.SMS_SENDERID,
+                    dest_mobileno: cleanMobile,
+                    message: smsMessage, // ✅ THIS IS REQUIRED
+                    dltentityid: process.env.SMS_ENTITYID,
+                    dlttempid: process.env.SMS_INVOICEREADYTEMPLATEID,
+                    response: "y"
+                }
+            }
+        );
+
+        console.log(`✅ SMS SENT to ${cleanMobile}`);
+        console.log("SMSJust response:", smsResponse.data);
+    }
+} catch (err) {
+    console.error("❌ SMS failed (non-blocking):", err.message);
+}
+
+
 
           let message =
             transactionType === "CreditNote"
@@ -2705,6 +2757,10 @@ const processTransaction = async (transactionData, transactionType, connection, 
     AccountName: account_name,      
     business_name: business_name,   
     PartyID: partyID,
+      retailer_mobile: transactionData.customerInfo?.phone || 
+                  transactionData.fullAccountDetails?.mobile_number || 0,
+                 
+                
     PartyName: partyName,
     BasicAmount: taxableAmount,
     ValueOfGoods: taxableAmount,
@@ -3003,8 +3059,6 @@ const processTransaction = async (transactionData, transactionType, connection, 
     }
   }
 
-  // UNPAID AMOUNT UPDATE FOR SALES AND STOCK TRANSFER WITH ORDER NUMBER
-  // Update accounts table for BOTH Sales AND stock transfer transactions with order number
   if ((transactionType === "Sales" || transactionType === "stock transfer" || transactionType === "stock inward") && partyID && orderNumber) {
     console.log(`💰 UNPAID AMOUNT UPDATE - ${transactionType} with order number detected`);
     console.log(`   PartyID: ${partyID}, TotalAmount: ${grandTotal}, Order Number: ${orderNumber}`);
@@ -3106,6 +3160,8 @@ const processTransaction = async (transactionData, transactionType, connection, 
     } catch (error) {
       console.error(`❌ ERROR updating unpaid amount:`, error.message);
     }
+
+    
   }
 
   return {
@@ -3126,7 +3182,13 @@ const processTransaction = async (transactionData, transactionType, connection, 
     orderStatusUpdated: orderNumber ? true : false,
     transactionType: transactionType
   };
+
+
+  
 };
+
+
+
 router.get("/voucherdetail", async (req, res) => {
   try {
     const query = `

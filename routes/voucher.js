@@ -855,11 +855,12 @@ router.delete('/purchase-vouchers/:id', async (req, res) => {
 router.get('/sales-receipt-totals', (req, res) => {
   const sqlQuery = `
     SELECT 
-      COALESCE(SUM(CASE WHEN TransactionType = 'Sales' THEN TotalAmount ELSE 0 END), 0) as totalSales,
-      COALESCE(SUM(CASE WHEN TransactionType = 'Receipt' THEN paid_amount ELSE 0 END), 0) as totalReceipts,
-      COALESCE(SUM(CASE WHEN TransactionType = 'CreditNote' THEN TotalAmount ELSE 0 END), 0) as totalCreditNote
-    FROM voucher 
-    WHERE TransactionType IN ('Sales', 'Receipt', 'CreditNote')
+      COALESCE(SUM(CASE WHEN TransactionType = 'Sales' THEN TotalAmount ELSE 0 END), 0) AS totalSales,
+      COALESCE(SUM(CASE WHEN TransactionType = 'Receipt' THEN paid_amount ELSE 0 END), 0) AS totalReceipts,
+      COALESCE(SUM(CASE WHEN TransactionType = 'CreditNote' THEN TotalAmount ELSE 0 END), 0) AS totalCreditNote,
+      COALESCE(SUM(CASE WHEN TransactionType = 'stock transfer' THEN TotalAmount ELSE 0 END), 0) AS totalStockTransfer
+    FROM voucher
+    WHERE TransactionType IN ('Sales', 'Receipt', 'CreditNote', 'stock transfer')
   `;
 
   db.query(sqlQuery, (err, results) => {
@@ -875,27 +876,42 @@ router.get('/sales-receipt-totals', (req, res) => {
     const totalSales = parseFloat(results[0].totalSales) || 0;
     const totalReceipts = parseFloat(results[0].totalReceipts) || 0;
     const totalCreditNote = parseFloat(results[0].totalCreditNote) || 0;
+    const totalStockTransfer = parseFloat(results[0].totalStockTransfer) || 0;
+
+    const netAmount =
+      totalSales +
+      totalStockTransfer -
+      (totalReceipts + totalCreditNote);
 
     res.json({
       success: true,
       data: {
-        totalSales: totalSales,
-        totalReceipts: totalReceipts,
-        totalCreditNote: totalCreditNote,
-        netAmount: totalSales - totalReceipts - totalCreditNote
+        totalSales,
+        totalReceipts,
+        totalCreditNote,
+        totalStockTransfer,
+        netAmount
       }
     });
   });
 });
 
+
+
 router.get('/total-payables', (req, res) => {
   const sqlQuery = `
     SELECT 
-      COALESCE(SUM(CASE WHEN TransactionType = 'Purchase' THEN TotalAmount ELSE 0 END), 0) as totalPurchase,
-      COALESCE(SUM(CASE WHEN TransactionType = 'purchase voucher' THEN paid_amount ELSE 0 END), 0) as totalPurchaseVoucher,
-      COALESCE(SUM(CASE WHEN TransactionType = 'DebitNote' THEN TotalAmount ELSE 0 END), 0) as totalDebitNote
-    FROM voucher 
-    WHERE TransactionType IN ('Purchase', 'purchase voucher', 'DebitNote')
+      COALESCE(SUM(CASE WHEN TransactionType = 'Purchase' THEN TotalAmount ELSE 0 END), 0) AS totalPurchase,
+      COALESCE(SUM(CASE WHEN TransactionType = 'purchase voucher' THEN paid_amount ELSE 0 END), 0) AS totalPurchaseVoucher,
+      COALESCE(SUM(CASE WHEN TransactionType = 'DebitNote' THEN TotalAmount ELSE 0 END), 0) AS totalDebitNote,
+      COALESCE(SUM(CASE WHEN TransactionType = 'stock inward' THEN TotalAmount ELSE 0 END), 0) AS totalStockInward
+    FROM voucher
+    WHERE TransactionType IN (
+      'Purchase',
+      'purchase voucher',
+      'DebitNote',
+      'stock inward'
+    )
   `;
 
   db.query(sqlQuery, (err, results) => {
@@ -903,7 +919,7 @@ router.get('/total-payables', (req, res) => {
       console.error('Database error:', err);
       return res.status(500).json({
         success: false,
-        error: 'Failed to fetch Purchase and purchase voucher totals',
+        error: 'Failed to fetch payables totals',
         details: err.message
       });
     }
@@ -911,21 +927,27 @@ router.get('/total-payables', (req, res) => {
     const totalPurchase = parseFloat(results[0].totalPurchase) || 0;
     const totalPurchaseVoucher = parseFloat(results[0].totalPurchaseVoucher) || 0;
     const totalDebitNote = parseFloat(results[0].totalDebitNote) || 0;
-    
-    // Net amount calculation: Purchase - (Purchase Voucher + DebitNote)
-    const netAmount = totalPurchase - (totalPurchaseVoucher + totalDebitNote);
+    const totalStockInward = parseFloat(results[0].totalStockInward) || 0;
+
+    // ✅ Stock Inward is ADDED
+    const netAmount =
+      totalPurchase +
+      totalStockInward -
+      (totalPurchaseVoucher + totalDebitNote);
 
     res.json({
       success: true,
       data: {
-        totalPurchase: totalPurchase,
-        totalPurchaseVoucher: totalPurchaseVoucher,
-        totalDebitNote: totalDebitNote,
-        netAmount: netAmount
+        totalPurchase,
+        totalPurchaseVoucher,
+        totalDebitNote,
+        totalStockInward,
+        netAmount
       }
     });
   });
 });
+
 
 
 
@@ -940,7 +962,7 @@ router.get('/vouchersnumber', (req, res) => {
   
   if (transactionType) {
     query = `
-      SELECT VoucherID, TransactionType, VchNo 
+      SELECT VoucherID, TransactionType, InvoiceNumber ,PartyName,PartyID,TotalAmount
       FROM voucher 
       WHERE TransactionType = ?
       ORDER BY VoucherID DESC
@@ -948,7 +970,7 @@ router.get('/vouchersnumber', (req, res) => {
     queryParams = [transactionType];
   } else {
     query = `
-      SELECT VoucherID, TransactionType, VchNo 
+      SELECT VoucherID, TransactionType, InvoiceNumber ,PartyName,PartyID, TotalAmount
       FROM voucher 
       WHERE TransactionType IN ('Sales', 'stock transfer')
       ORDER BY VoucherID DESC
@@ -973,7 +995,7 @@ router.get('/purchasevouchersnumber', (req, res) => {
   
   if (transactionType) {
     query = `
-      SELECT VoucherID, TransactionType, VchNo 
+      SELECT VoucherID, TransactionType, InvoiceNumber ,PartyName,PartyID, TotalAmount
       FROM voucher 
       WHERE TransactionType = ?
       ORDER BY VoucherID DESC
@@ -981,7 +1003,7 @@ router.get('/purchasevouchersnumber', (req, res) => {
     queryParams = [transactionType];
   } else {
     query = `
-      SELECT VoucherID, TransactionType, VchNo 
+      SELECT VoucherID, TransactionType, InvoiceNumber ,PartyName,PartyID, TotalAmount
       FROM voucher 
       WHERE TransactionType IN ('Purchase', 'stock inward')
       ORDER BY VoucherID DESC
