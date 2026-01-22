@@ -1175,6 +1175,42 @@ router.get('/products/category/:category_id', async (req, res) => {
   }
 });
 
+// For MySQL/PostgreSQL with raw queries
+router.get('/sales-catalog-check/:purchaseProductId', async (req, res) => {
+  try {
+    const { purchaseProductId } = req.params;
+    
+    // Query to check for existing sales catalog copy
+    const query = `
+      SELECT id, goods_name, sku, price 
+      FROM products 
+      WHERE purchase_product_id = ? 
+      AND group_by = 'Salescatalog'
+      LIMIT 1
+    `;
+    
+    const [results] = await db.query(query, [purchaseProductId]);
+    
+    const hasSalesCatalogCopy = results.length > 0;
+    const salesCatalogProduct = hasSalesCatalogCopy ? results[0] : null;
+    
+    res.json({
+      success: true,
+      hasSalesCatalogCopy,
+      salesCatalogProductId: salesCatalogProduct?.id || null,
+      salesCatalogProductName: salesCatalogProduct?.goods_name || null,
+      salesCatalogProductSku: salesCatalogProduct?.sku || null,
+      salesCatalogProductPrice: salesCatalogProduct?.price || null
+    });
+  } catch (error) {
+    console.error('Error checking sales catalog:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Error checking sales catalog',
+      error: error.message
+    });
+  }
+});
 
 // Get product batches
 router.get('/products/:id/batches', async (req, res) => {
