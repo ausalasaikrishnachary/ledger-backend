@@ -6197,7 +6197,7 @@ const processTransaction = async (transactionData, transactionType, connection, 
     vchNo =
       transactionData.VchNo ||
       transactionData.vchNo ||
-      transactionData.debitNoteNumber ||
+      transactionData.creditNoteNumber  ||
       "DNOTE001";
   }
 

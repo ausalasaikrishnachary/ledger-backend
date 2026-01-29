@@ -120,6 +120,7 @@ router.post('/receipts', upload.single('transaction_proof'), async (req, res) =>
             business_name,
             amount,
             bank_name,
+            payment_method,
             invoice_number,
             product_id,
             batch_id,
@@ -219,14 +220,14 @@ router.post('/receipts', upload.single('transaction_proof'), async (req, res) =>
             `INSERT INTO voucher (
                 TransactionType, VchNo, product_id, batch_id, InvoiceNumber, Date,
                 PaymentTerms, Freight, TotalPacks, TaxAmount, Subtotal, BillSundryAmount,
-                TotalAmount, ChequeNo, ChequeDate, BankName, AccountID, AccountName, 
+                TotalAmount, ChequeNo, ChequeDate, BankName, payment_method, AccountID, AccountName, 
                 PartyID, PartyName, BasicAmount, ValueOfGoods, EntryDate, SGSTPercentage, 
                 CGSTPercentage, IGSTPercentage, SGSTAmount, CGSTAmount, IGSTAmount, 
                 TaxSystem, paid_amount, created_at, balance_amount, status, paid_date, 
                 pdf_data, DC, pdf_file_name, pdf_created_at, transaction_proof,
                 staffid, assigned_staff, data_type, business_name
             )
-            VALUES (?, ?, ?, ?, ?, ?, 'Immediate', 0, 0, 0, ?, 0, ?, NULL, NULL, ?, ?, ?, ?, ?, ?, ?, ?, 0, 0, 0, 0, 0, 0,
+            VALUES (?, ?, ?, ?, ?, ?, 'Immediate', 0, 0, 0, ?, 0, ?, NULL, NULL, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, 0, 0, 0, 0, 0,
                     'GST', ?, ?, 0, 'Paid', ?, ?, 'C', ?, ?, ?, ?, ?, ?, ?)`,
             [
                 safeTransactionType,
@@ -238,6 +239,7 @@ router.post('/receipts', upload.single('transaction_proof'), async (req, res) =>
                 receiptAmount,
                 receiptAmount,
                 bank_name || null,
+                payment_method || null,
                 retailer_id || null,
                 account_name || "",
                 retailer_id || null,
