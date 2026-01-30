@@ -17,7 +17,6 @@ const inventoryCategoryRoutes = require('./routes/Inventory/Category_companyRout
 const inventoryServiceRoutes = require('./routes/Inventory/ServiceRoutes'); // Import inventory service routes
 const inventoryStockRoutes = require('./routes/Inventory/StockRoutes'); // Import inventory stock routes
 const gstApiRoutes = require('./routes/gstApiRoutes'); // Import GST API routes
-const transactionApiRoutes = require('./routes/Transaction/TransactionRoutes');
 const accountsGroupRoutes = require('./routes/accountGroupRoutes');
 const staffRoutes = require('./routes/staffRoutes'); // Import staff routes
 const loginRoutes = require('./routes/loginsignup');
@@ -42,12 +41,10 @@ const offersRoutes = require('./routes/Inventory/OffersRoutes');
 const cartRoutes = require("./routes/Retailer/CartRoutes");
 const RetailerOrderRoutes = require("./routes/Retailer/OrderRoutes");
 const retailerScoreRoutes = require('./routes/retailerScore');
-
 // Add this line with your other route imports
 const creditPeriodFixRoutes = require('./routes/CreditPeriod/CreditPeriodRoutes');
 const inventory = require('./routes/Retailer/InventoryRoutes');
 const { baseurl } = require('./baseUrl');
-
 const port = 5000;
 
 // ✅ Use CORS Middleware (allows requests from any origin)
@@ -73,7 +70,6 @@ app.use('/', inventoryCategoryRoutes); // Use inventory category and company rou
 app.use('/', inventoryServiceRoutes); // Use inventory service routes
 app.use('/', inventoryStockRoutes); // Use inventory stock routes
 app.use('/', gstApiRoutes); // Use GST API routes
-app.use('/', transactionApiRoutes);
 app.use('/', accountsGroupRoutes);
 app.use('/api', staffRoutes);
 app.use('/', loginRoutes);

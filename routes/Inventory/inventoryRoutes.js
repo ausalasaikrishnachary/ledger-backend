@@ -1452,7 +1452,6 @@ router.get("/vouchers/by-product/:product_id", (req, res) => {
   });
 });
 
-
 router.get('/get-sales-products', async (req, res) => {
   try {
     const [rows] = await db.promise().query(`
@@ -1467,11 +1466,13 @@ router.get('/get-sales-products', async (req, res) => {
         p.gst_rate,
         p.inclusive_gst,
         p.images,
+        p.can_be_sold,
         c.category_name
       FROM products p
       LEFT JOIN categories c 
         ON p.category_id = c.id
       WHERE p.group_by = 'Salescatalog'
+         OR (p.group_by = 'Purchaseditems' AND p.can_be_sold = 1)  -- ⭐ Only if can_be_sold = 1
       ORDER BY p.created_at DESC
     `);
 
@@ -1486,7 +1487,9 @@ router.get('/get-sales-products', async (req, res) => {
       category: item.category_name,
       gst_rate: item.gst_rate,
       inclusive_gst: item.inclusive_gst,
-      images: item.images   // ⭐ added
+      images: item.images,
+      group_by: item.group_by,        // Keep to identify source
+      can_be_sold: item.can_be_sold   // Keep for reference
     }));
 
     res.json(products);
