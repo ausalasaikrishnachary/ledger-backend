@@ -446,7 +446,7 @@ router.get('/offers', async (req, res) => {
       page = 1,
       limit = 10,
       search = '',
-      offer_type = '',
+      offer = '',
       status = ''
     } = req.query;
 
@@ -460,9 +460,10 @@ router.get('/offers', async (req, res) => {
       FROM offers o
       LEFT JOIN categories c ON o.category_id = c.id
       LEFT JOIN products p ON o.product_id = p.id
-      WHERE 1=1
+      WHERE o.offer = 'Regular offers'  
     `;
-    let countQuery = `SELECT COUNT(*) as total FROM offers WHERE 1=1`;
+    
+    let countQuery = `SELECT COUNT(*) as total FROM offers WHERE offer = 'Regular offers'`;  // Add this filter
     const params = [];
     const countParams = [];
 
@@ -474,12 +475,13 @@ router.get('/offers', async (req, res) => {
       countParams.push(searchTerm, searchTerm);
     }
 
-    if (offer_type && offer_type !== 'All') {
-      query += ` AND o.offer_type = ?`;
-      countQuery += ` AND offer_type = ?`;
-      params.push(offer_type);
-      countParams.push(offer_type);
-    }
+    // Remove the offer_type filter since we're only getting Regular offers
+    // if (offer_type && offer_type !== 'All') {
+    //   query += ` AND o.offer_type = ?`;
+    //   countQuery += ` AND offer_type = ?`;
+    //   params.push(offer_type);
+    //   countParams.push(offer_type);
+    // }
 
     if (status) {
       query += ` AND o.status = ?`;
@@ -543,7 +545,7 @@ router.get('/offers/:id', async (req, res) => {
       FROM offers o
       LEFT JOIN categories c ON o.category_id = c.id
       LEFT JOIN products p ON o.product_id = p.id
-      WHERE o.id = ?
+      WHERE o.id = ? AND o.offer = 'Regular offers'
     `;
     
     const offers = await new Promise((resolve, reject) => {
@@ -557,7 +559,7 @@ router.get('/offers/:id', async (req, res) => {
     });
 
     if (offers.length === 0) {
-      return res.status(404).json({ error: 'Offer not found' });
+      return res.status(404).json({ error: 'Regular offer not found' });
     }
 
     res.json(offers[0]);
@@ -582,8 +584,8 @@ router.post('/offers', upload.single('image'), handleMulterError, async (req, re
       categoryName,
       productName,
       productId,
-      company, // NEW: company ID
-      companyName, // NEW: company name
+      company,       // company ID
+      companyName,   // company name
       status = 'active'
     } = req.body;
 
@@ -602,25 +604,28 @@ router.post('/offers', upload.single('image'), handleMulterError, async (req, re
       return res.status(400).json({ error: 'Missing required fields' });
     }
 
-    // Validate category for category-specific offers
+    // Validate category-specific offers
     if (offerType === 'category' && !category) {
       return res.status(400).json({ error: 'Category is required for category-specific offers' });
     }
 
-    // Validate company and product for product-specific offers
+    // Validate company/product-specific offers
     if (offerType === 'product' && (!company || !productId)) {
       return res.status(400).json({ error: 'Company and Product are required for product-specific offers' });
     }
 
     const image_url = req.file ? `/uploads/offers/${req.file.filename}` : null;
 
+    // ✅ Static "Regular offers" value
+    const offer = "Regular offers";
+
     const query = `
       INSERT INTO offers (
         title, description, discount_percentage, minimum_amount,
         valid_from, valid_until, image_url, offer_type, status,
         category_id, category_name, product_name, product_id,
-        company_id, company_name, created_at, updated_at
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW(), NOW())
+        company_id, company_name, offer, created_at, updated_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW(), NOW())
     `;
 
     const result = await new Promise((resolve, reject) => {
@@ -638,8 +643,9 @@ router.post('/offers', upload.single('image'), handleMulterError, async (req, re
         offerType === 'category' ? categoryName : null,
         productName || null,
         productId || null,
-        company || null, // NEW: company ID
-        companyName || null, // NEW: company name
+        company || null,
+        companyName || null,
+        offer,  // ✅ Static Flash Sales value
       ], (error, results) => {
         if (error) {
           console.error('❌ Database error:', error);
@@ -655,10 +661,11 @@ router.post('/offers', upload.single('image'), handleMulterError, async (req, re
       offerId: result.insertId
     });
   } catch (error) {
-    console.error('Error creating offer:', error);
+    console.error('❌ Error creating offer:', error);
     res.status(500).json({ error: 'Internal server error' });
   }
 });
+
 
 // UPDATE offer - UPDATED to handle company_id and company_name
 router.put('/offers/:id', upload.single('image'), handleMulterError, async (req, res) => {

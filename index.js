@@ -44,6 +44,7 @@ const retailerScoreRoutes = require('./routes/retailerScore');
 // Add this line with your other route imports
 const creditPeriodFixRoutes = require('./routes/CreditPeriod/CreditPeriodRoutes');
 const inventory = require('./routes/Retailer/InventoryRoutes');
+const OfferFlashSale = require('./routes/OfferFlashSale');
 const { baseurl } = require('./baseUrl');
 const port = 5000;
 
@@ -91,7 +92,7 @@ app.use("/api/reports", salesReportRoutes);
 app.use('/api/credit-period-fix', creditPeriodFixRoutes);
 
 app.use('/', pdfRoutes);
-
+app.use("/", OfferFlashSale);
 app.use("/orders", RetailerOrderRoutes);
 app.use("/api/cart", cartRoutes);
 app.use("/api", inventory);
