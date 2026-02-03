@@ -1498,6 +1498,7 @@ router.get('/get-sales-products', async (req, res) => {
         p.inclusive_gst,
         p.images,
         p.can_be_sold,
+        p.net_price,
         c.category_name,
         b.exp_date   -- ✅ expiry date from batches
       FROM products p
@@ -1524,6 +1525,7 @@ router.get('/get-sales-products', async (req, res) => {
       images: item.images,
       group_by: item.group_by,
       can_be_sold: item.can_be_sold,
+      net_price:item.net_price,
       exp_date: item.exp_date   // ✅ send to frontend
     }));
 

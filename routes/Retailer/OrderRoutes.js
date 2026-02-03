@@ -84,7 +84,6 @@ router.get("/details/:order_number", (req, res) => {
 });
 
 
-
 router.post("/create-complete-order", async (req, res) => {
   console.log("📦 Creating complete order:", req.body);
 
@@ -154,19 +153,22 @@ router.post("/create-complete-order", async (req, res) => {
         console.log("✅ Order inserted:", orderResult.insertId);
 
         // ---------------------------------------------------
-        // 2. INSERT ORDER ITEMS
+        // 2. INSERT ORDER ITEMS (WITH NEW FLASH OFFER COLUMNS)
         // ---------------------------------------------------
         const orderItemQuery = `
           INSERT INTO order_items (
             order_number, item_name, product_id, mrp, sale_price,
-            edited_sale_price, credit_charge, customer_sale_price,
+            edited_sale_price, net_price, credit_charge, customer_sale_price, 
             final_amount, quantity, total_amount,
             discount_percentage, discount_amount, taxable_amount,
             tax_percentage, tax_amount, item_total,
             credit_period, credit_percentage,
             sgst_percentage, sgst_amount,
             cgst_percentage, cgst_amount,
-            discount_applied_scheme
+            discount_applied_scheme,
+            flash_offer,            -- NEW COLUMN
+            buy_quantity,           -- NEW COLUMN
+            get_quantity            -- NEW COLUMN
           ) VALUES ?
         `;
 
@@ -174,27 +176,31 @@ router.post("/create-complete-order", async (req, res) => {
           order.order_number,
           item.item_name,
           item.product_id,
-          item.mrp,
-          item.sale_price,
-          item.edited_sale_price,
-          item.credit_charge,
-          item.customer_sale_price,
-          item.final_amount,
-          item.quantity,
-          item.total_amount,
-          item.discount_percentage,
-          item.discount_amount,
-          item.taxable_amount,
-          item.tax_percentage,
-          item.tax_amount,
-          item.item_total,
-          item.credit_period,
-          item.credit_percentage,
-          item.sgst_percentage,
-          item.sgst_amount,
-          item.cgst_percentage,
-          item.cgst_amount,
-          item.discount_applied_scheme,
+          item.mrp || 0,
+          item.sale_price || 0,
+          item.edited_sale_price || 0,
+           item.net_price || 0,  // ADD net_price HERE
+          item.credit_charge || 0,
+          item.customer_sale_price || 0,
+          item.final_amount || 0,
+          item.quantity || 1,
+          item.total_amount || 0,
+          item.discount_percentage || 0,
+          item.discount_amount || 0,
+          item.taxable_amount || 0,
+          item.tax_percentage || 0,
+          item.tax_amount || 0,
+          item.item_total || 0,
+          item.credit_period || "0",
+          item.credit_percentage || 0,
+          item.sgst_percentage || 0,
+          item.sgst_amount || 0,
+          item.cgst_percentage || 0,
+          item.cgst_amount || 0,
+          item.discount_applied_scheme || 'none',
+          item.flash_offer || 0,          // NEW: flash_offer column
+          item.buy_quantity || 0,         // NEW: buy_quantity column
+          item.get_quantity || 0          // NEW: get_quantity column
         ]);
 
         await new Promise((resolve, reject) => {
@@ -204,7 +210,7 @@ router.post("/create-complete-order", async (req, res) => {
           });
         });
 
-        console.log("✅ Order items inserted");
+        console.log("✅ Order items inserted with flash offer data");
 
         // ---------------------------------------------------
         // 3. CLEAR CART
@@ -244,12 +250,16 @@ router.post("/create-complete-order", async (req, res) => {
         // 5. SEND EMAILS
         // ---------------------------------------------------
         try {
+          // Check if any flash offers were applied
+          const hasFlashOffers = orderItems.some(item => item.flash_offer && item.flash_offer !== 0);
+          
           const emailHTML = `
             <h2>Order Placed Successfully</h2>
             <p><strong>Order Number:</strong> ${order.order_number}</p>
             <p><strong>Customer:</strong> ${order.customer_name}</p>
             <p><strong>Net Amount:</strong> ₹${order.net_payable}</p>
             <p><strong>Placed By:</strong> ${order.ordered_by}</p>
+            ${hasFlashOffers ? '<p><strong>Note:</strong> This order includes flash offer items</p>' : ''}
           `;
 
           await Promise.all([
@@ -946,7 +956,6 @@ function commit(connection, res, orderNumber, count) {
   });
 }
 
-
 router.put("/update-order/:order_number", async (req, res) => {
   const { order_number } = req.params;
   console.log("📦 Updating order:", order_number, req.body);
@@ -1013,7 +1022,6 @@ router.put("/update-order/:order_number", async (req, res) => {
           order.order_placed_by || null,
           order.ordered_by || null,
           order.staffid || order.staff_id || null,
-
           order.assigned_staff || null,
           order.staff_incentive || 0,
           order.order_mode || 'KACHA',
@@ -1053,19 +1061,22 @@ router.put("/update-order/:order_number", async (req, res) => {
         console.log("🗑️ Old order items deleted");
 
         // ---------------------------------------------------
-        // 3. INSERT UPDATED ORDER ITEMS
+        // 3. INSERT UPDATED ORDER ITEMS (WITH NEW FLASH OFFER COLUMNS)
         // ---------------------------------------------------
         const insertOrderItemsQuery = `
           INSERT INTO order_items (
             order_number, item_name, product_id, mrp, sale_price,
-            edited_sale_price, credit_charge, customer_sale_price,
+            edited_sale_price, net_price, credit_charge, customer_sale_price,
             final_amount, quantity, total_amount,
             discount_percentage, discount_amount, taxable_amount,
             tax_percentage, tax_amount, item_total,
             credit_period, credit_percentage,
             sgst_percentage, sgst_amount,
             cgst_percentage, cgst_amount,
-            discount_applied_scheme
+            discount_applied_scheme,
+            flash_offer,            -- NEW COLUMN
+            buy_quantity,           -- NEW COLUMN
+            get_quantity            -- NEW COLUMN
           ) VALUES ?
         `;
 
@@ -1076,6 +1087,7 @@ router.put("/update-order/:order_number", async (req, res) => {
           item.mrp || 0,
           item.sale_price || 0,
           item.edited_sale_price || 0,
+           item.net_price || 0,  
           item.credit_charge || 0,
           item.customer_sale_price || 0,
           item.final_amount || 0,
@@ -1094,6 +1106,9 @@ router.put("/update-order/:order_number", async (req, res) => {
           item.cgst_percentage || 0,
           item.cgst_amount || 0,
           item.discount_applied_scheme || 'none',
+          item.flash_offer || 0,          // NEW: flash_offer column
+          item.buy_quantity || 0,         // NEW: buy_quantity column
+          item.get_quantity || 0          // NEW: get_quantity column
         ]);
 
         await new Promise((resolve, reject) => {
@@ -1103,7 +1118,7 @@ router.put("/update-order/:order_number", async (req, res) => {
           });
         });
 
-        console.log("✅ New order items inserted:", orderItems.length);
+        console.log("✅ New order items inserted with flash offer data:", orderItems.length);
 
         // ---------------------------------------------------
         // 4. COMMIT TRANSACTION
@@ -1122,6 +1137,9 @@ router.put("/update-order/:order_number", async (req, res) => {
         // 5. SEND UPDATE EMAILS
         // ---------------------------------------------------
         try {
+          // Check if any flash offers were applied
+          const hasFlashOffers = orderItems.some(item => item.flash_offer && item.flash_offer !== 0);
+          
           const emailHTML = `
             <h2>Order ${order.approval_status === 'Approved' ? 'Updated' : 'Pending Approval'} Successfully</h2>
             <p><strong>Order Number:</strong> ${order_number}</p>
@@ -1130,6 +1148,7 @@ router.put("/update-order/:order_number", async (req, res) => {
             <p><strong>Placed By:</strong> ${order.ordered_by}</p>
             <p><strong>Order Mode:</strong> ${order.order_mode}</p>
             <p><strong>Status:</strong> ${order.approval_status}</p>
+            ${hasFlashOffers ? '<p><strong>Note:</strong> This order includes flash offer items</p>' : ''}
           `;
 
           const mailPromises = [];

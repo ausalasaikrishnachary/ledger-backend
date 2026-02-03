@@ -55,6 +55,55 @@ router.get("/flashoffer", (req, res) => {
   });
 });
 
+
+router.get("/flashofferretailer", (req, res) => {
+  const currentDate = new Date().toISOString().split('T')[0]; // Get current date in YYYY-MM-DD format
+  
+  const sql = `
+    SELECT * FROM offers 
+    WHERE offer = 'Flash Sales' 
+      AND status = 'active'
+      AND (valid_until IS NULL OR valid_until >= CURDATE())
+    ORDER BY created_at DESC
+  `;
+  
+  db.query(sql, (err, results) => {
+    if (err) {
+      console.error("Error fetching flash sales:", err);
+      return res.status(500).json({ success: false, message: "DB Error" });
+    }
+
+    const flashSales = results.map((sale) => ({
+      id: sale.id,
+      title: sale.title,
+      description: sale.description,
+      flashSaleType: sale.offer_type,
+      status: sale.status,
+      valid_from: sale.valid_from,
+      valid_until: sale.valid_until,
+      start_time: sale.start_time,
+      end_time: sale.end_time,
+      buy_quantity: sale.buy_quantity,
+      get_quantity: sale.get_quantity,
+      discount_percentage: sale.discount_percentage,
+      purchase_limit: sale.purchase_limit,
+      terms_conditions: sale.terms_conditions,
+      product_id: sale.product_id,
+      product_name: sale.product_name,
+      category_id: sale.category_id,
+      category_name: sale.category_name,
+      image_url: sale.image_url,
+      created_at: sale.created_at,
+      offer: sale.offer
+    }));
+
+    console.log("Flash sales response:", flashSales); // Debug log
+    res.json({ success: true, data: flashSales });
+  });
+});
+
+
+
 // GET SINGLE FLASH SALE
 router.get("/flashoffer/:id", (req, res) => {
   const sql = `SELECT * FROM offers WHERE id = ? AND offer = 'Flash Sales'`;
@@ -99,6 +148,8 @@ router.get("/flashoffer/:id", (req, res) => {
     res.json({ success: true, data: flashSale });
   });
 });
+
+
 
 // CREATE FLASH SALE
 router.post("/create-flashsale", upload.single("image"), (req, res) => {

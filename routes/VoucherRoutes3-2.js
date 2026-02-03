@@ -5777,20 +5777,21 @@ function recalculateRunningBalances(transactions) {
     return a.id - b.id;
   });
 }
+
 router.post("/transaction", (req, res) => {
   const transactionData = req.body;
   console.log('📦 ALL RECEIVED DATA:', transactionData);
 
   // Determine transaction type
   let transactionType = transactionData.TransactionType || "";
-  const dataType = transactionData.data_type || null; 
+ const dataType = transactionData.data_type || null; 
   const normalizedType = transactionType.toLowerCase().trim();
   
   const orderNumber = transactionData.orderNumber || transactionData.order_number || null;
   
   if ((normalizedType === "stock transfer" || normalizedType === "stocktransfer") && orderNumber) {
     console.log("🔄 Stock Transfer detected with order number");
-    transactionType = "stock transfer";
+    transactionType = "stock transfer"; // Keep as stock transfer
   } else if ((normalizedType === "stock transfer") && !orderNumber) {
     console.log("⚠️ Stock Transfer specified but no order number - Reverting to Sales");
     transactionType = "stock transfer";
@@ -5820,77 +5821,80 @@ router.post("/transaction", (req, res) => {
           transactionData,
           transactionType,
           connection,
-          dataType
+           dataType // Pass dataType (could be null)
         );
 
         const { voucherId, invoiceNumber, vchNo, batchDetails, grandTotal } = result;
 
-        connection.commit(async (commitErr) => {
-          if (commitErr) {
-            console.error("Commit Error:", commitErr);
-            return connection.rollback(() => {
-              connection.release();
-              res.status(500).send({
+     connection.commit(async (commitErr) => {     // ← Add async here!
+    if (commitErr) {
+        console.error("Commit Error:", commitErr);
+
+        return connection.rollback(() => {
+            connection.release();
+            res.status(500).send({
                 error: "Transaction commit failed",
                 details: commitErr.message,
-              });
             });
-          }
+        });
+    }
 
-          connection.release();
+    connection.release();
 
-          // SMS sending logic (your existing code)
-          try {
-            const normalizedType = (transactionType || "")
-              .toLowerCase()
-              .trim()
-              .replace(/\s+/g, " ");
+try {
+    const normalizedType = (transactionType || "")
+        .toLowerCase()
+        .trim()
+        .replace(/\s+/g, " ");
 
-            if (
-              orderNumber &&
-              (normalizedType === "sales" || normalizedType === "stock transfer")
-            ) {
-              const mobile =
-                transactionData.fullAccountDetails?.mobile_number || null;
+    if (
+        orderNumber &&
+        (normalizedType === "sales" || normalizedType === "stock transfer")
+    ) {
+        const mobile =
+            transactionData.fullAccountDetails?.mobile_number || null;
 
-              if (!mobile) {
-                console.log(`No mobile number for order ${orderNumber}`);
-                return;
-              }
+        if (!mobile) {
+            console.log(`No mobile number for order ${orderNumber}`);
+            return;
+        }
 
-              const cleanMobile = mobile.toString().replace(/\D/g, "");
+        const cleanMobile = mobile.toString().replace(/\D/g, "");
 
-              if (!/^[6-9]\d{9}$/.test(cleanMobile)) {
-                console.log(`Invalid mobile number: ${cleanMobile}`);
-                return;
-              }
+        if (!/^[6-9]\d{9}$/.test(cleanMobile)) {
+            console.log(`Invalid mobile number: ${cleanMobile}`);
+            return;
+        }
 
-              const smsMessage =
+        // 🔥 EXACT TEMPLATE MESSAGE (VARIABLES REPLACED)
+        const smsMessage =
 `Your invoice ${invoiceNumber} for order #${orderNumber} is ready.
 Total Amount: ${grandTotal} - SHREE SHASHWATRAJ AGRO PRIVATE LIMITED`;
 
-              const smsResponse = await axios.get(
-                "https://www.smsjust.com/blank/sms/user/urlsms.php",
-                {
-                  params: {
+        const smsResponse = await axios.get(
+            "https://www.smsjust.com/blank/sms/user/urlsms.php",
+            {
+                params: {
                     username: process.env.SMS_USERNAME,
                     pass: process.env.SMS_PASSWORD,
                     senderid: process.env.SMS_SENDERID,
                     dest_mobileno: cleanMobile,
-                    message: smsMessage,
+                    message: smsMessage, // ✅ THIS IS REQUIRED
                     dltentityid: process.env.SMS_ENTITYID,
                     dlttempid: process.env.SMS_INVOICEREADYTEMPLATEID,
                     response: "y"
-                  }
                 }
-              );
-
-              console.log(`✅ SMS SENT to ${cleanMobile}`);
-              console.log("SMSJust response:", smsResponse.data);
             }
-          } catch (err) {
-            console.error("❌ SMS failed (non-blocking):", err.message);
-          }
+        );
+
+        console.log(`✅ SMS SENT to ${cleanMobile}`);
+        console.log("SMSJust response:", smsResponse.data);
+    }
+} catch (err) {
+    console.error("❌ SMS failed (non-blocking):", err.message);
+}
+
+
 
           let message =
             transactionType === "CreditNote"
@@ -5930,7 +5934,7 @@ Total Amount: ${grandTotal} - SHREE SHASHWATRAJ AGRO PRIVATE LIMITED`;
   });
 });
 
-const processTransaction = async (transactionData, transactionType, connection, dataType) => {
+const processTransaction = async (transactionData, transactionType, connection, dataType ) => {
   const maxIdResult = await queryPromise(
     connection,
     "SELECT COALESCE(MAX(VoucherID),0)+1 AS nextId FROM voucher"
@@ -5958,38 +5962,24 @@ const processTransaction = async (transactionData, transactionType, connection, 
   else if (Array.isArray(transactionData.batchDetails)) items = transactionData.batchDetails;
   else items = [];
 
-  // Process items with FLASH OFFER SUPPORT
+  // Process items
   items = items.map((i) => {
     const itemStaffIncentive = parseFloat(i.staff_incentive) || 0;
-    
-    // Get flash offer details from frontend
-    const flashOffer = parseInt(i.flash_offer) || 0;
-    const buyQuantity = parseFloat(i.buy_quantity) || 0;
-    const getQuantity = parseFloat(i.get_quantity) || 0;
-    
-   
-    const billingQuantity = parseFloat(i.quantity) || 1;
-    
-    const stockDeductionQuantity = i.stock_deduction_quantity || 
-                                  (flashOffer === 1 ? buyQuantity + getQuantity : billingQuantity);
-    
+    const quantity = parseFloat(i.quantity) || 1;
+
     const discountAmount = parseFloat(i.discount_amount) || 0;
     const creditCharge = parseFloat(i.credit_charge) || 0;
     
     totalDiscount += discountAmount;  
     totalCreditCharge += creditCharge;
 
-    console.log(`🎁 Item ${i.product}: Flash Offer: ${flashOffer === 1 ? 'Yes' : 'No'}`);
-    console.log(`   Buy Qty: ${buyQuantity}, Get Qty: ${getQuantity}`);
-    console.log(`   Billing Qty: ${billingQuantity}, Stock Deduction Qty: ${stockDeductionQuantity}`);
-
     if (isKacha) {
+      console.log(`🔄 Converting item ${i.product} to KACHA mode - removing GST`);
       return {
         product: i.product || "",
         product_id: parseInt(i.product_id || i.productId) || null,
         batch: i.batch || i.batch_number || "DEFAULT",
-        quantity: billingQuantity, // For billing records
-        stock_deduction_quantity: stockDeductionQuantity, // For stock management
+        quantity: quantity,
         price: parseFloat(i.price) || 0,
         discount: parseFloat(i.discount) || 0,
         discount_amount: discountAmount,
@@ -5999,29 +5989,25 @@ const processTransaction = async (transactionData, transactionType, connection, 
         sgst: 0,
         igst: 0,
         cess: 0,
-        total: parseFloat(i.total) || (billingQuantity * parseFloat(i.price)),
+        total: parseFloat(i.total) || (quantity * parseFloat(i.price)),
         mfg_date: i.mfg_date || null,
-        staff_incentive: itemStaffIncentive,
-        // Store flash offer details
-        flash_offer: flashOffer,
-        buy_quantity: buyQuantity,
-        get_quantity: getQuantity
+        staff_incentive: itemStaffIncentive
       };
     } else {
       const gstPercentage = parseFloat(i.gst) || 0;
       const cgstPercentageFromFrontend = parseFloat(i.cgst) || 0;
       const sgstPercentageFromFrontend = parseFloat(i.sgst) || 0;
       
-      // Use billing quantity for GST calculations
-      const cgstToStore = cgstPercentageFromFrontend * billingQuantity;  
-      const sgstToStore = sgstPercentageFromFrontend * billingQuantity;
+      const cgstToStore = cgstPercentageFromFrontend * quantity;  
+      const sgstToStore = sgstPercentageFromFrontend * quantity;  
+      
+      console.log(`📊 Item ${i.product}: Storing CGST=${cgstToStore}, SGST=${sgstToStore} (${cgstPercentageFromFrontend} × ${quantity})`);
       
       return {
         product: i.product || "",
         product_id: parseInt(i.product_id || i.productId) || null,
         batch: i.batch || i.batch_number || "DEFAULT",
-        quantity: billingQuantity, // For billing records
-        stock_deduction_quantity: stockDeductionQuantity, // For stock management
+        quantity: quantity,
         price: parseFloat(i.price) || 0,
         discount: parseFloat(i.discount) || 0,
         discount_amount: discountAmount,
@@ -6031,13 +6017,9 @@ const processTransaction = async (transactionData, transactionType, connection, 
         sgst: sgstToStore,  
         igst: parseFloat(i.igst) || 0,
         cess: parseFloat(i.cess) || 0,
-        total: parseFloat(i.total) || (billingQuantity * parseFloat(i.price)),
+        total: parseFloat(i.total) || (quantity * parseFloat(i.price)),
         mfg_date: i.mfg_date || null,
-        staff_incentive: itemStaffIncentive,
-        // Store flash offer details
-        flash_offer: flashOffer,
-        buy_quantity: buyQuantity,
-        get_quantity: getQuantity
+        staff_incentive: itemStaffIncentive
       };
     }
   });
@@ -6313,17 +6295,15 @@ const processTransaction = async (transactionData, transactionType, connection, 
                        transactionData.businessName ||  
                        "";
 
-  // VOUCHER DATA with FLASH OFFER field
+  // VOUCHER DATA
   const voucherData = {
     VoucherID: nextVoucherId,
     TransactionType: transactionType,
-    data_type: dataType,
+      data_type: dataType, // This will be NULL if not provided
     VchNo: vchNo,
     InvoiceNumber: invoiceNumber,
     order_number: orderNumber, 
     order_mode: orderMode,
-    // ADD FLASH OFFER FIELD
-    flash_offer: items.some(item => item.flash_offer === 1) ? 1 : 0,
     due_date: transactionData.due_date || null,
     Date: transactionData.Date || new Date().toISOString().split("T")[0],
     PaymentTerms: transactionData.PaymentTerms || "Immediate",
@@ -6340,8 +6320,10 @@ const processTransaction = async (transactionData, transactionType, connection, 
     AccountName: account_name,      
     business_name: business_name,   
     PartyID: partyID,
-    retailer_mobile: transactionData.customerInfo?.phone || 
-                transactionData.fullAccountDetails?.mobile_number || 0,
+      retailer_mobile: transactionData.customerInfo?.phone || 
+                  transactionData.fullAccountDetails?.mobile_number || 0,
+                 
+                
     PartyName: partyName,
     BasicAmount: taxableAmount,
     ValueOfGoods: taxableAmount,
@@ -6377,7 +6359,6 @@ const processTransaction = async (transactionData, transactionType, connection, 
   };
 
   console.log("🔍 DEBUG - Staff Incentive in voucher:", voucherData.staff_incentive);
-  console.log("🔍 DEBUG - Flash Offer in voucher:", voucherData.flash_offer);
 
   // INSERT VOUCHER
   await queryPromise(
@@ -6386,42 +6367,14 @@ const processTransaction = async (transactionData, transactionType, connection, 
     [voucherData]
   );
 
- // FIXED INSERT QUERY - Added missing field
-const insertDetailQuery = `
-  INSERT INTO voucherdetails (
-    voucher_id, product, product_id, transaction_type, InvoiceNumber,
-    batch, quantity, get_quantity, price, discount,
-    gst, cgst, sgst, igst, cess, total, created_at
-  ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW())
-`;
-
-for (const i of items) {
-  const itemGST = isKacha ? 0 : i.gst;
-  const itemCGST = isKacha ? 0 : i.cgst;
-  const itemSGST = isKacha ? 0 : i.sgst;
-  const itemIGST = isKacha ? 0 : i.igst;
-  const itemCess = isKacha ? 0 : i.cess;
-  
-  await queryPromise(connection, insertDetailQuery, [
-    nextVoucherId,          
-    i.product,             
-    i.product_id,          
-    transactionType,       
-    invoiceNumber,        
-    i.batch,               
-    i.quantity,         
-    i.get_quantity || 0,   
-    i.price,            
-    i.discount,         
-    itemGST,              
-    itemCGST,             
-    itemSGST,           
-    itemIGST,           
-    itemCess,             
-    i.total,              
-   
-  ]);
-}
+  // INSERT VOUCHER DETAILS
+  const insertDetailQuery = `
+    INSERT INTO voucherdetails (
+      voucher_id, product, product_id, transaction_type, InvoiceNumber,
+      batch, quantity, price, discount,
+      gst, cgst, sgst, igst, cess, total, created_at
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW())
+  `;
 
   for (const i of items) {
     const itemGST = isKacha ? 0 : i.gst;
@@ -6437,8 +6390,7 @@ for (const i of items) {
       transactionType,
       invoiceNumber,
       i.batch,
-      i.quantity, // Billing quantity (buyQuantity for flash offers)
-      i.get_quantity || 0, // Store get_quantity in database
+      i.quantity,
       i.price,
       i.discount,
       itemGST,
@@ -6454,20 +6406,13 @@ for (const i of items) {
   for (const i of items) {
     if (transactionType === "Sales" || transactionType === "DebitNote" || transactionType === "stock transfer") {
       
-      // USE stock_deduction_quantity for flash offers (buy+get), otherwise use quantity
-      let remainingQuantity = i.stock_deduction_quantity || i.quantity;
-      const flashOffer = i.flash_offer || 0;
-      
-      console.log(`🔄 Stock Deduction - Flash Offer: ${flashOffer === 1 ? 'Yes' : 'No'}`);
-      console.log(`   Product: ${i.product} (ID: ${i.product_id})`);
-      console.log(`   Billing Qty: ${i.quantity}, Stock Deduction Qty: ${remainingQuantity}`);
-      if (flashOffer === 1) {
-        console.log(`   Buy: ${i.buy_quantity}, Get: ${i.get_quantity}, Total: ${remainingQuantity}`);
-      }
+      let remainingQuantity = i.quantity;
       
       const specificBatch = i.batch || i.batch_number || i.batchNumber;
       const shouldUseSpecificBatch = specificBatch && specificBatch !== "DEFAULT";
       const isFromOrder = orderNumber;
+      
+      console.log(`🔄 Stock Deduction - Order: ${isFromOrder ? 'Yes' : 'No'}, Batch: ${specificBatch || 'None'}, Qty: ${remainingQuantity}`);
       
       if (shouldUseSpecificBatch) {
         console.log(`🔍 Deducting from specific batch: ${specificBatch} for product ${i.product_id}`);
@@ -6629,14 +6574,12 @@ for (const i of items) {
       }
       
       if (remainingQuantity > 0) {
-        throw new Error(`Insufficient stock for product ID ${i.product_id}. Required: ${i.stock_deduction_quantity || i.quantity}, Fulfilled: ${(i.stock_deduction_quantity || i.quantity) - remainingQuantity}, Shortage: ${remainingQuantity} units`);
+        throw new Error(`Insufficient stock for product ID ${i.product_id}. Required: ${i.quantity}, Fulfilled: ${i.quantity - remainingQuantity}, Shortage: ${remainingQuantity} units`);
       }
       
     } else if (transactionType === "Purchase" || transactionType === "CreditNote" || transactionType === "stock inward") {
       // ADD STOCK LOGIC for Purchase, CreditNote, and stock inward
-      // For purchases, use billing quantity (don't apply flash offer logic for incoming stock)
-      const purchaseQuantity = i.quantity;
-      console.log(`➕ Adding ${purchaseQuantity} to product ${i.product_id}, batch: ${i.batch || i.batch_number} (Transaction: ${transactionType})`);
+      console.log(`➕ Adding ${i.quantity} to product ${i.product_id}, batch: ${i.batch || i.batch_number} (Transaction: ${transactionType})`);
       
       const batchToUse = i.batch || i.batch_number || i.batchNumber || "DEFAULT";
       
@@ -6661,7 +6604,7 @@ for (const i of items) {
                 updated_at = NOW()
           WHERE product_id = ? AND batch_number = ?
           `,
-          [purchaseQuantity, purchaseQuantity, i.product_id, batchToUse]
+          [i.quantity, i.quantity, i.product_id, batchToUse]
         );
         console.log(`📝 Updated existing batch ${batchToUse}`);
       } else {
@@ -6672,7 +6615,7 @@ for (const i of items) {
           INSERT INTO batches (product_id, batch_number, quantity, stock_in, mfg_date, created_at, updated_at)
           VALUES (?, ?, ?, ?, ?, NOW(), NOW())
         `,
-          [i.product_id, batchToUse, purchaseQuantity, purchaseQuantity, i.mfg_date]
+          [i.product_id, batchToUse, i.quantity, i.quantity, i.mfg_date]
         );
         console.log(`📝 Created new batch ${batchToUse}`);
       }
@@ -6780,6 +6723,8 @@ for (const i of items) {
     } catch (error) {
       console.error(`❌ ERROR updating unpaid amount:`, error.message);
     }
+
+    
   }
 
   return {
@@ -6798,10 +6743,13 @@ for (const i of items) {
     isKacha: isKacha,
     updatedItemCount: hasItemSelection ? selectedItemIds.length : 'all',
     orderStatusUpdated: orderNumber ? true : false,
-    transactionType: transactionType,
-    hasFlashOffer: voucherData.flash_offer === 1
+    transactionType: transactionType
   };
+
+
+  
 };
+
 
 
 router.get("/voucherdetail", async (req, res) => {
