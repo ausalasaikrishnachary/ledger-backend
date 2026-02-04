@@ -6423,32 +6423,7 @@ for (const i of items) {
   ]);
 }
 
-  for (const i of items) {
-    const itemGST = isKacha ? 0 : i.gst;
-    const itemCGST = isKacha ? 0 : i.cgst;
-    const itemSGST = isKacha ? 0 : i.sgst;
-    const itemIGST = isKacha ? 0 : i.igst;
-    const itemCess = isKacha ? 0 : i.cess;
-    
-    await queryPromise(connection, insertDetailQuery, [
-      nextVoucherId,
-      i.product,
-      i.product_id,
-      transactionType,
-      invoiceNumber,
-      i.batch,
-      i.quantity, // Billing quantity (buyQuantity for flash offers)
-      i.get_quantity || 0, // Store get_quantity in database
-      i.price,
-      i.discount,
-      itemGST,
-      itemCGST,
-      itemSGST,
-      itemIGST,
-      itemCess,
-      i.total,
-    ]);
-  }
+
 
   // STOCK MANAGEMENT - For Sales and stock transfer transactions
   for (const i of items) {
@@ -6633,8 +6608,6 @@ for (const i of items) {
       }
       
     } else if (transactionType === "Purchase" || transactionType === "CreditNote" || transactionType === "stock inward") {
-      // ADD STOCK LOGIC for Purchase, CreditNote, and stock inward
-      // For purchases, use billing quantity (don't apply flash offer logic for incoming stock)
       const purchaseQuantity = i.quantity;
       console.log(`➕ Adding ${purchaseQuantity} to product ${i.product_id}, batch: ${i.batch || i.batch_number} (Transaction: ${transactionType})`);
       

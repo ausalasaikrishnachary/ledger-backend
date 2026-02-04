@@ -1499,13 +1499,14 @@ router.get('/get-sales-products', async (req, res) => {
         p.images,
         p.can_be_sold,
         p.net_price,
+        p.product_type,   -- ✅ ADDED
         c.category_name,
-        b.exp_date   -- ✅ expiry date from batches
+        b.exp_date
       FROM products p
       LEFT JOIN categories c 
         ON p.category_id = c.id
       LEFT JOIN batches b
-        ON b.product_id = p.id   -- ✅ match product with batch
+        ON b.product_id = p.id
       WHERE p.group_by = 'Salescatalog'
          OR (p.group_by = 'Purchaseditems' AND p.can_be_sold = 1)  
       ORDER BY p.created_at DESC
@@ -1525,8 +1526,9 @@ router.get('/get-sales-products', async (req, res) => {
       images: item.images,
       group_by: item.group_by,
       can_be_sold: item.can_be_sold,
-      net_price:item.net_price,
-      exp_date: item.exp_date   // ✅ send to frontend
+      net_price: item.net_price,
+      product_type: item.product_type,  // ✅ SEND TO FRONTEND
+      exp_date: item.exp_date
     }));
 
     res.json(products);
@@ -1536,6 +1538,7 @@ router.get('/get-sales-products', async (req, res) => {
     res.status(500).json({ message: 'Failed to fetch products' });
   }
 });
+
 
 
 
