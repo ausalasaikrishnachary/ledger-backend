@@ -3746,10 +3746,6 @@ function queryPromise(connection, sql, params = []) {
     });
   });
 }
-
-// ----------------------------------------------------------------------
-// PUT /creditnoteupdate/:id
-// ----------------------------------------------------------------------
 router.put("/creditnoteupdate/:id", async (req, res) => {
   const voucherId = req.params.id;
   const updateData = req.body;
@@ -3851,15 +3847,15 @@ router.put("/creditnoteupdate/:id", async (req, res) => {
         if (invoiceNumber) {
           // Find the original Sales voucher for this invoice
           const salesVoucherRows = await queryPromise(
-  connection,
-  `
-    SELECT *
-    FROM voucher
-    WHERE InvoiceNumber = ?
-      AND TransactionType IN ('Sales', 'stock transfer')
-  `,
-  [invoiceNumber]
-);
+            connection,
+            `
+              SELECT *
+              FROM voucher
+              WHERE InvoiceNumber = ?
+                AND TransactionType IN ('Sales', 'stock transfer')
+            `,
+            [invoiceNumber]
+          );
 
           if (salesVoucherRows.length > 0) {
             const salesVoucherId = salesVoucherRows[0].VoucherID;
@@ -3909,124 +3905,80 @@ router.put("/creditnoteupdate/:id", async (req, res) => {
           }
         }
 
-        // 5️⃣ UPDATE voucher TABLE (ONLY REAL FIELDS)
+        const rawDate = updateData.Date || originalVoucher.Date;
 
-// --------------------------------------
-// DATETIME CONVERTER (ISO → MySQL)
-// --------------------------------------
-const rawDate =
-  updateData.Date || originalVoucher.Date;
+        let voucherDate = null;
+        if (rawDate) {
+          const d = new Date(rawDate);
+          if (!isNaN(d.getTime())) {
+            voucherDate = d.toISOString().slice(0, 19).replace("T", " ");
+          }
+        }
 
-const voucherDate = rawDate
-  ? new Date(rawDate).toISOString().slice(0, 19).replace('T', ' ')
-  : null;
+        console.log("🔥 RAW DATE:", rawDate);
+        console.log("🔥 MYSQL DATE:", voucherDate);
 
-console.log('🔥 RAW DATE:', rawDate);
-console.log('🔥 MYSQL DATE:', voucherDate);
+        // --------------------------------------
+        // UPDATE voucher TABLE
+        // --------------------------------------
+        const sql = `
+          UPDATE voucher SET
+            VchNo = ?,
+            Date = ?,
+            InvoiceNumber = ?,
+            PartyName = ?,
+            BasicAmount = ?,
+            TaxAmount = ?,
+            TotalAmount = ?,
+            Subtotal = ?,
+            SGSTAmount = ?,
+            CGSTAmount = ?,
+            IGSTAmount = ?,
+            SGSTPercentage = ?,
+            CGSTPercentage = ?,
+            IGSTPercentage = ?,
+            paid_amount = ?,
+            data_type = ?
+          WHERE VoucherID = ?
+        `;
 
+        // Get the tax amount from updateData or use original value
+        const taxAmount = Number(updateData.TaxAmount) || originalVoucher.TaxAmount;
+        const igstPercentage = Number(updateData.IGSTPercentage) || originalVoucher.IGSTPercentage || 0;
+        
+        const values = [
+          updateData.VchNo ||
+            updateData.creditNoteNumber ||
+            originalVoucher.VchNo,
 
+          voucherDate, // ✅ MySQL-safe datetime
 
-// --------------------------------------
-// UPDATE voucher TABLE
-// --------------------------------------
+          updateData.InvoiceNumber || originalVoucher.InvoiceNumber,
+          updateData.PartyName || originalVoucher.PartyName,
 
-async function updateVoucher({
-  connection,
-  voucherId,
-  updateData,
-  originalVoucher
-}) {
-  // --------------------------------------
-  // SAFE DATETIME CONVERSION (ISO → MySQL)
-  // --------------------------------------
-  const rawDate = updateData.Date || originalVoucher.Date;
+          Number(updateData.BasicAmount) || originalVoucher.BasicAmount,
+          taxAmount, // Store TaxAmount in TaxAmount column
+          Number(updateData.TotalAmount) || originalVoucher.TotalAmount,
 
-  let voucherDate = null;
-  if (rawDate) {
-    const d = new Date(rawDate);
-    if (!isNaN(d.getTime())) {
-      voucherDate = d.toISOString().slice(0, 19).replace("T", " ");
-    }
-  }
+          // Subtotal = BasicAmount
+          Number(updateData.BasicAmount) || originalVoucher.Subtotal,
 
-  console.log("🔥 RAW DATE:", rawDate);
-  console.log("🔥 MYSQL DATE:", voucherDate);
+          0, // SGSTAmount - set to 0 for IGST
+          0, // CGSTAmount - set to 0 for IGST
+          taxAmount, // IGSTAmount - store TaxAmount here
 
-  // --------------------------------------
-  // UPDATE voucher TABLE
-  // --------------------------------------
-  const sql = `
-    UPDATE voucher SET
-      VchNo = ?,
-      Date = ?,
-      InvoiceNumber = ?,
-      PartyName = ?,
-      BasicAmount = ?,
-      TaxAmount = ?,
-      TotalAmount = ?,
-      Subtotal = ?,
-      SGSTAmount = ?,
-      CGSTAmount = ?,
-      IGSTAmount = ?,
-      SGSTPercentage = ?,
-      CGSTPercentage = ?,
-      IGSTPercentage = ?,
-      paid_amount = ?,
-      data_type = ?
-    WHERE VoucherID = ?
-  `;
+          0, // SGSTPercentage - set to 0 for IGST
+          0, // CGSTPercentage - set to 0 for IGST
+          igstPercentage, // IGSTPercentage - store IGST percentage here
 
-  const values = [
-    updateData.VchNo ||
-      updateData.creditNoteNumber ||
-      originalVoucher.VchNo,
+          Number(updateData.TotalAmount) || originalVoucher.paid_amount,
 
-    voucherDate, // ✅ MySQL-safe datetime
+          updateData.data_type || originalVoucher.data_type || null,
 
-    updateData.InvoiceNumber || originalVoucher.InvoiceNumber,
-    updateData.PartyName || originalVoucher.PartyName,
+          voucherId // ✅ FIXED: Using actual voucherId from request params
+        ];
 
-    Number(updateData.BasicAmount) || originalVoucher.BasicAmount,
-    Number(updateData.TaxAmount) || originalVoucher.TaxAmount,
-    Number(updateData.TotalAmount) || originalVoucher.TotalAmount,
-
-    // Subtotal = BasicAmount
-    Number(updateData.BasicAmount) || originalVoucher.Subtotal,
-
-    Number(updateData.SGSTAmount) || 0,
-    Number(updateData.CGSTAmount) || 0,
-    Number(updateData.IGSTAmount) || 0,
-
-    Number(updateData.SGSTPercentage) || 0,
-    Number(updateData.CGSTPercentage) || 0,
-    Number(updateData.IGSTPercentage) || 0,
-
-    Number(updateData.TotalAmount) || originalVoucher.paid_amount,
-
-    updateData.data_type || originalVoucher.data_type || null,
-
-    voucherId
-  ];
-
-  await queryPromise(connection, sql, values);
-}
-
-
-
-
-
-
-// --------------------------------------
-// EXAMPLE CALL
-// --------------------------------------
-await updateVoucher({
-  connection,
-  voucherId: 8,
-  updateData,
-  originalVoucher
-});
-
-
+        await queryPromise(connection, sql, values);
 
         // 6️⃣ INSERT NEW voucherdetails ROWS
         for (const it of newBatchDetails) {
@@ -4106,7 +4058,6 @@ await updateVoucher({
     });
   });
 });
-
 router.put("/debitnoteupdate/:id", async (req, res) => {
   const voucherId = req.params.id;
   const updateData = req.body;
@@ -4205,17 +4156,16 @@ router.put("/debitnoteupdate/:id", async (req, res) => {
         const invoiceNumber = updateData.InvoiceNumber || originalVoucher.InvoiceNumber;
         
         if (invoiceNumber) {
-      const purchaseVoucherRows = await queryPromise(
-  connection,
-  `
-    SELECT * 
-    FROM voucher 
-    WHERE InvoiceNumber = ?
-      AND TransactionType IN ('Purchase', 'stock inward')
-  `,
-  [invoiceNumber]
-);
-
+          const purchaseVoucherRows = await queryPromise(
+            connection,
+            `
+              SELECT * 
+              FROM voucher 
+              WHERE InvoiceNumber = ?
+                AND TransactionType IN ('Purchase', 'stock inward')
+            `,
+            [invoiceNumber]
+          );
 
           if (purchaseVoucherRows.length > 0) {
             const purchaseVoucherId = purchaseVoucherRows[0].VoucherID;
@@ -4298,70 +4248,77 @@ router.put("/debitnoteupdate/:id", async (req, res) => {
         }
 
         // 5️⃣ UPDATE voucher TABLE (ONLY REAL FIELDS)
+        
+        // Helper function for MySQL datetime conversion
+        function toMySQLDateTime(value) {
+          if (!value) return null;
+          const d = new Date(value);
+          if (isNaN(d.getTime())) return null;
+          return d.toISOString().slice(0, 19).replace("T", " ");
+        }
 
+        // Calculate GST values properly
+        const taxAmount = Number(updateData.TaxAmount) || originalVoucher.TaxAmount;
+        const igstPercentage = Number(updateData.IGSTPercentage) || 
+                              (updateData.IGSTPercentage === 0 ? 0 : originalVoucher.IGSTPercentage) || 0;
+        
+        // Determine if this is IGST or SGST/CGST based on the data
+        const hasIGST = igstPercentage > 0 || (updateData.IGSTAmount && updateData.IGSTAmount > 0);
+        
+        await queryPromise(
+          connection,
+          `UPDATE voucher SET
+            VchNo = ?,
+            Date = ?,
+            InvoiceNumber = ?,
+            PartyName = ?,
+            BasicAmount = ?,
+            TaxAmount = ?,
+            TotalAmount = ?,
+            Subtotal = ?,
+            SGSTAmount = ?,
+            CGSTAmount = ?,
+            IGSTAmount = ?,
+            SGSTPercentage = ?,
+            CGSTPercentage = ?,
+            IGSTPercentage = ?,
+            paid_amount = ?,
+            data_type = ?
+          WHERE VoucherID = ?`,
+          [
+            updateData.VchNo || updateData.creditNoteNumber || originalVoucher.VchNo,
 
-// helper (must exist once in file)
-function toMySQLDateTime(value) {
-  if (!value) return null;
-  const d = new Date(value);
-  if (isNaN(d.getTime())) return null;
-  return d.toISOString().slice(0, 19).replace("T", " ");
-}
+            // ✅ FIXED DATETIME
+            toMySQLDateTime(updateData.Date || originalVoucher.Date),
 
-// 5️⃣ UPDATE voucher TABLE (ONLY REAL FIELDS)
-await queryPromise(
-  connection,
-  `UPDATE voucher SET
-    VchNo = ?,
-    Date = ?,
-    InvoiceNumber = ?,
-    PartyName = ?,
-    BasicAmount = ?,
-    TaxAmount = ?,
-    TotalAmount = ?,
-    Subtotal = ?,
-    SGSTAmount = ?,
-    CGSTAmount = ?,
-    IGSTAmount = ?,
-    SGSTPercentage = ?,
-    CGSTPercentage = ?,
-    IGSTPercentage = ?,
-    paid_amount = ?,
-    data_type = ?
-  WHERE VoucherID = ?`,
-  [
-    updateData.VchNo || updateData.creditNoteNumber || originalVoucher.VchNo,
+            updateData.InvoiceNumber || originalVoucher.InvoiceNumber,
+            updateData.PartyName || originalVoucher.PartyName,
 
-    // ✅ FIXED DATETIME
-    toMySQLDateTime(updateData.Date || originalVoucher.Date),
+            Number(updateData.BasicAmount) || originalVoucher.BasicAmount,
+            taxAmount, // Store in TaxAmount column
+            Number(updateData.TotalAmount) || originalVoucher.TotalAmount,
 
-    updateData.InvoiceNumber || originalVoucher.InvoiceNumber,
-    updateData.PartyName || originalVoucher.PartyName,
+            // Subtotal = BasicAmount
+            Number(updateData.BasicAmount) || originalVoucher.Subtotal,
 
-    Number(updateData.BasicAmount) || originalVoucher.BasicAmount,
-    Number(updateData.TaxAmount) || originalVoucher.TaxAmount,
-    Number(updateData.TotalAmount) || originalVoucher.TotalAmount,
+            // For IGST: Set SGST and CGST to 0
+            hasIGST ? 0 : (Number(updateData.SGSTAmount) || originalVoucher.SGSTAmount || 0),
+            hasIGST ? 0 : (Number(updateData.CGSTAmount) || originalVoucher.CGSTAmount || 0),
+            // For IGST: Store tax amount in IGSTAmount
+            hasIGST ? taxAmount : (Number(updateData.IGSTAmount) || originalVoucher.IGSTAmount || 0),
 
-    // Subtotal = BasicAmount
-    Number(updateData.BasicAmount) || originalVoucher.Subtotal,
+            // For IGST: Set SGST and CGST percentages to 0
+            hasIGST ? 0 : (Number(updateData.SGSTPercentage) || originalVoucher.SGSTPercentage || 0),
+            hasIGST ? 0 : (Number(updateData.CGSTPercentage) || originalVoucher.CGSTPercentage || 0),
+            // Store IGST percentage
+            hasIGST ? igstPercentage : (Number(updateData.IGSTPercentage) || originalVoucher.IGSTPercentage || 0),
 
-    Number(updateData.SGSTAmount) || 0,
-    Number(updateData.CGSTAmount) || 0,
-    Number(updateData.IGSTAmount) || 0,
+            Number(updateData.TotalAmount) || originalVoucher.paid_amount,
+            updateData.data_type || originalVoucher.data_type || null,
 
-    Number(updateData.SGSTPercentage) || 0,
-    Number(updateData.CGSTPercentage) || 0,
-    Number(updateData.IGSTPercentage) || 0,
-
-    Number(updateData.TotalAmount) || originalVoucher.paid_amount,
-    updateData.data_type || originalVoucher.data_type || null,
-
-    voucherId,
-  ]
-);
-
-
-
+            voucherId,
+          ]
+        );
 
         // 6️⃣ INSERT NEW voucherdetails ROWS
         for (const it of newBatchDetails) {
@@ -6344,6 +6301,7 @@ const processTransaction = async (transactionData, transactionType, connection, 
                 transactionData.fullAccountDetails?.mobile_number || 0,
     PartyName: partyName,
     BasicAmount: taxableAmount,
+    
     ValueOfGoods: taxableAmount,
     EntryDate: new Date(),
     SGSTPercentage: isKacha ? 0 : (parseFloat(transactionData.SGSTPercentage) || 0),
