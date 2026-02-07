@@ -4657,8 +4657,21 @@ router.delete("/transactions/:id", async (req, res) => {
 
         const voucherData = voucherResult[0];
         const transactionType = voucherData.TransactionType || "Sales";
+        const invoiceNumber = voucherData.InvoiceNumber; // Get the InvoiceNumber
 
-        // 2️⃣ Get batch details from voucherdetails table
+        // 2️⃣ Get ALL vouchers with the same InvoiceNumber
+        const allVouchers = await queryPromise(
+          connection,
+          "SELECT VoucherID, TransactionType, PartyID, order_number, TotalAmount FROM voucher WHERE InvoiceNumber = ?",
+          [invoiceNumber]
+        );
+
+        console.log(`Found ${allVouchers.length} vouchers with InvoiceNumber: ${invoiceNumber}`);
+
+        // Store all voucher IDs for deletion
+        const allVoucherIds = allVouchers.map(v => v.VoucherID);
+
+        // 3️⃣ Get batch details from voucherdetails table (for the requested voucher)
         const batchDetails = await queryPromise(
           connection,
           "SELECT * FROM voucherdetails WHERE voucher_id = ?",
@@ -4666,12 +4679,11 @@ router.delete("/transactions/:id", async (req, res) => {
         );
 
         // -----------------------------------------------------------------------
-        // 3️⃣ Reverse stock based on transaction type
+        // 4️⃣ Reverse stock based on transaction type (for the requested voucher only)
         // -----------------------------------------------------------------------
         if (batchDetails.length > 0) {
           console.log(`Reversing STOCK for ${transactionType}`);
 
-          // Define which transactions are STOCK IN (add stock) vs STOCK OUT (remove stock)
           const stockInTransactions = ["Purchase", "CreditNote", "stock inward"];
           const stockOutTransactions = ["Sales", "DebitNote", "stock transfer"];
           
@@ -4771,7 +4783,7 @@ router.delete("/transactions/:id", async (req, res) => {
         }
 
         // -----------------------------------------------------------------------
-        // 4️⃣ Handle order status reversal if this was an invoice from an order
+        // 5️⃣ Handle order status reversal if this was an invoice from an order
         // -----------------------------------------------------------------------
         if (voucherData.order_number) {
           console.log(`🔄 This was an invoice from order ${voucherData.order_number}. Reversing order status...`);
@@ -4814,7 +4826,7 @@ router.delete("/transactions/:id", async (req, res) => {
         }
 
         // -----------------------------------------------------------------------
-        // 5️⃣ Handle unpaid amount reversal if applicable
+        // 6️⃣ Handle unpaid amount reversal if applicable
         // -----------------------------------------------------------------------
         if ((transactionType === "Sales" || transactionType === "stock transfer" || transactionType === "stock inward") && voucherData.PartyID) {
           console.log(`💰 Reversing unpaid amount for PartyID: ${voucherData.PartyID}`);
@@ -4883,25 +4895,27 @@ router.delete("/transactions/:id", async (req, res) => {
         }
 
         // -----------------------------------------------------------------------
-        // 6️⃣ Delete voucherdetails
+        // 7️⃣ Delete ALL voucherdetails with the same InvoiceNumber
         // -----------------------------------------------------------------------
+        console.log(`Deleting ALL voucherdetails with InvoiceNumber: ${invoiceNumber}`);
         await queryPromise(
           connection,
-          "DELETE FROM voucherdetails WHERE voucher_id = ?",
-          [voucherId]
+          "DELETE FROM voucherdetails WHERE InvoiceNumber = ?",
+          [invoiceNumber]
         );
 
         // -----------------------------------------------------------------------
-        // 7️⃣ Delete voucher record
+        // 8️⃣ Delete ALL voucher records with the same InvoiceNumber
         // -----------------------------------------------------------------------
+        console.log(`Deleting ALL vouchers with InvoiceNumber: ${invoiceNumber}`);
         await queryPromise(
           connection,
-          "DELETE FROM voucher WHERE VoucherID = ?",
-          [voucherId]
+          "DELETE FROM voucher WHERE InvoiceNumber = ?",
+          [invoiceNumber]
         );
 
         // -----------------------------------------------------------------------
-        // 8️⃣ Commit transaction
+        // 9️⃣ Commit transaction
         // -----------------------------------------------------------------------
         connection.commit((commitErr) => {
           if (commitErr) {
@@ -4917,8 +4931,7 @@ router.delete("/transactions/:id", async (req, res) => {
 
           connection.release();
 
-          
-          console.log("✔ Transaction deleted & stock reversed successfully");
+          console.log("✔ All transactions with InvoiceNumber deleted successfully");
 
           let message = "Invoice deleted successfully";
           if (transactionType === "stock inward") {
@@ -4931,9 +4944,12 @@ router.delete("/transactions/:id", async (req, res) => {
 
           res.send({
             success: true,
-            message,
+            message: `${message} (and all related transactions with InvoiceNumber: ${invoiceNumber})`,
             voucherId,
+            invoiceNumber,
             transactionType,
+            allDeletedVoucherIds: allVoucherIds,
+            deletedCount: allVouchers.length,
             stockReverted: true,
             orderReverted: voucherData.order_number ? true : false,
             unpaidReverted: voucherData.PartyID ? true : false
@@ -5805,7 +5821,7 @@ router.post("/transaction", (req, res) => {
 
             if (
               orderNumber &&
-              (normalizedType === "sales" || normalizedType === "stock transfer")
+              (normalizedType === "Sales" || normalizedType === "stock transfer")
             ) {
               const mobile =
                 transactionData.fullAccountDetails?.mobile_number || null;
@@ -5936,9 +5952,6 @@ const processTransaction = async (transactionData, transactionType, connection, 
     totalDiscount += discountAmount;  
     totalCreditCharge += creditCharge;
 
-    console.log(`🎁 Item ${i.product}: Flash Offer: ${flashOffer === 1 ? 'Yes' : 'No'}`);
-    console.log(`   Buy Qty: ${buyQuantity}, Get Qty: ${getQuantity}`);
-    console.log(`   Billing Qty: ${billingQuantity}, Stock Deduction Qty: ${stockDeductionQuantity}`);
 
     if (isKacha) {
       return {
@@ -6006,145 +6019,166 @@ const processTransaction = async (transactionData, transactionType, connection, 
   const hasItemSelection = selectedItemIds && selectedItemIds.length > 0;
   
   console.log("📋 Has item selection:", hasItemSelection ? `Yes (${selectedItemIds.length} items)` : "No");
-
-  if (orderNumber && (transactionType === "Sales" || transactionType === "stock transfer")) {
-    console.log("✅ This is an order conversion. Updating order items and order status...");
-    
-    const invoiceNumber = transactionData.InvoiceNumber || transactionData.invoiceNumber || `INV${Date.now()}`;
-    const invoiceDate = transactionData.Date || new Date().toISOString().split('T')[0];
-    
-    try {
-      if (hasItemSelection && selectedItemIds.length > 0) {
-        const placeholders = selectedItemIds.map(() => '?').join(',');
-        const updateParams = [invoiceNumber, invoiceDate, orderNumber, ...selectedItemIds];
-        
-        await queryPromise(
-          connection,
-          `
-          UPDATE order_items SET 
-            invoice_number = ?, 
-            invoice_date = ?, 
-            invoice_status = 1, 
-            updated_at = NOW()
-          WHERE order_number = ? 
-            AND id IN (${placeholders})
-          `,
-          updateParams
-        );
-        
-        console.log(`✅ Updated ${selectedItemIds.length} selected items in order ${orderNumber} with invoice ${invoiceNumber}`);
-        
-      } else {
-        await queryPromise(
-          connection,
-          `
-          UPDATE order_items SET 
-            invoice_number = ?, 
-            invoice_date = ?, 
-            invoice_status = 1, 
-            updated_at = NOW()
-          WHERE order_number = ?
-          `,
-          [invoiceNumber, invoiceDate, orderNumber]
-        );
-        
-        const countResult = await queryPromise(
-          connection,
-          "SELECT COUNT(*) as count FROM order_items WHERE order_number = ?",
-          [orderNumber]
-        );
-        
-        console.log(`✅ Updated ALL ${countResult[0].count} items in order ${orderNumber} with invoice ${invoiceNumber}`);
-      }
-      
-      // Update orders table
-      console.log(`🔄 Updating order status in orders table for: ${orderNumber}`);
-      
+  
+if (orderNumber && (transactionType === "Sales" || transactionType === "stock transfer")) {
+  console.log("✅ This is an order conversion. Updating order items and order status...");
+  
+  const invoiceNumber = transactionData.InvoiceNumber || transactionData.invoiceNumber || `INV${Date.now()}`;
+  const invoiceDate = transactionData.Date || new Date().toISOString().split('T')[0];
+  
+  try {
+   if (hasItemSelection && selectedItemIds.length > 0) {
+  const placeholders = selectedItemIds.map(() => '?').join(',');
+  const updateParams = [invoiceNumber, invoiceDate, orderNumber, ...selectedItemIds];
+  
+  await queryPromise(
+    connection,
+    `
+    UPDATE order_items SET 
+      invoice_number = ?, 
+      invoice_date = ?, 
+      invoice_status = 1, 
+      updated_at = NOW()
+    WHERE order_number = ? 
+      AND id IN (${placeholders})
+    `,
+    updateParams
+  );
+  
+  // ADD THIS: Update product_id for each item
+  for (const item of itemsWithCalculations) {
+    if (item.matched_product_id && item.originalItemId) {
       await queryPromise(
         connection,
         `
-        UPDATE orders SET 
-          order_status = 'Invoice',
-          invoice_number = ?,
-          invoice_date = ?,
-          invoice_status = 1,
+        UPDATE order_items SET 
+          product_id = ?,
           updated_at = NOW()
-        WHERE order_number = ?
+        WHERE order_number = ? 
+          AND id = ?
         `,
-        [invoiceNumber, invoiceDate, orderNumber]
+        [item.matched_product_id, orderNumber, item.originalItemId]
       );
+      console.log(`✅ Updated product_id for order_item ${item.originalItemId} to ${item.matched_product_id}`);
+    }
+  }
+  
+  console.log(`✅ Updated ${selectedItemIds.length} selected items in order ${orderNumber} with invoice ${invoiceNumber}`);
+}
+    
+    // Update orders table WITH order_mode
+    console.log(`🔄 Updating order status in orders table for: ${orderNumber}`);
+    console.log(`   Order Mode being set: ${orderMode}`);
+    
+    // First check what columns exist in the orders table
+    let updateOrdersQuery;
+    let updateParams;
+    
+    try {
+      // Try the full update including order_mode
+      updateOrdersQuery = `
+      UPDATE orders SET 
+        order_status = 'Invoice',
+        invoice_number = ?,
+        invoice_date = ?,
+        invoice_status = 1,
+        order_mode = ?,
+        updated_at = NOW()
+      WHERE order_number = ?
+      `;
+      updateParams = [invoiceNumber, invoiceDate, orderMode, orderNumber];
       
-      console.log(`✅ Order ${orderNumber} status updated to 'Invoiced' in orders table with invoice ${invoiceNumber}`);
+      await queryPromise(connection, updateOrdersQuery, updateParams);
       
     } catch (error) {
       if (error.code === 'ER_BAD_FIELD_ERROR') {
-        if (error.message.includes('updated_at')) {
-          console.log("ℹ️ 'updated_at' column not found, updating without it...");
+        console.log(`ℹ️ Column error detected: ${error.message}`);
+        
+        if (error.message.includes('order_mode')) {
+          console.log("ℹ️ 'order_mode' column not found in orders table, updating without it...");
           
-          if (hasItemSelection && selectedItemIds.length > 0) {
-            const placeholders = selectedItemIds.map(() => '?').join(',');
-            const updateParams = [invoiceNumber, invoiceDate, orderNumber, ...selectedItemIds];
-            
-            await queryPromise(
-              connection,
-              `
-              UPDATE order_items SET 
-                invoice_number = ?, 
-                invoice_date = ?, 
-                invoice_status = 1
-              WHERE order_number = ? 
-                AND id IN (${placeholders})
-              `,
-              updateParams
-            );
-          } else {
-            await queryPromise(
-              connection,
-              `
-              UPDATE order_items SET 
-                invoice_number = ?, 
-                invoice_date = ?, 
-                invoice_status = 1
-              WHERE order_number = ?
-              `,
-              [invoiceNumber, invoiceDate, orderNumber]
-            );
-          }
-          
-          await queryPromise(
-            connection,
-            `
+          // Try without order_mode but with updated_at
+          try {
+            updateOrdersQuery = `
             UPDATE orders SET 
               order_status = 'Invoice',
               invoice_number = ?,
               invoice_date = ?,
-               invoice_status = 1
+              invoice_status = 1,
+              updated_at = NOW()
             WHERE order_number = ?
-            `,
-            [invoiceNumber, invoiceDate, orderNumber]
-          );
+            `;
+            updateParams = [invoiceNumber, invoiceDate, orderNumber];
+            
+            await queryPromise(connection, updateOrdersQuery, updateParams);
+            
+          } catch (innerError) {
+            if (innerError.code === 'ER_BAD_FIELD_ERROR' && innerError.message.includes('updated_at')) {
+              console.log("ℹ️ 'updated_at' column not found either, updating basic columns only...");
+              
+              updateOrdersQuery = `
+              UPDATE orders SET 
+                order_status = 'Invoice',
+                invoice_number = ?,
+                invoice_date = ?,
+                invoice_status = 1
+              WHERE order_number = ?
+              `;
+              updateParams = [invoiceNumber, invoiceDate, orderNumber];
+              
+              await queryPromise(connection, updateOrdersQuery, updateParams);
+            } else {
+              throw innerError;
+            }
+          }
+          
+        } else if (error.message.includes('updated_at')) {
+          console.log("ℹ️ 'updated_at' column not found, updating without it...");
+          
+          updateOrdersQuery = `
+          UPDATE orders SET 
+            order_status = 'Invoice',
+            invoice_number = ?,
+            invoice_date = ?,
+            invoice_status = 1,
+            order_mode = ?
+          WHERE order_number = ?
+          `;
+          updateParams = [invoiceNumber, invoiceDate, orderMode, orderNumber];
+          
+          await queryPromise(connection, updateOrdersQuery, updateParams);
           
         } else if (error.message.includes('invoice_status')) {
           console.log("ℹ️ 'invoice_status' column not found in orders table, updating without it...");
           
-          await queryPromise(
-            connection,
-            `
-            UPDATE orders SET 
-              order_status = 'Invoice',
-              invoice_number = ?,
-              invoice_date = ?
-            WHERE order_number = ?
-            `,
-            [invoiceNumber, invoiceDate, orderNumber]
-          );
+          updateOrdersQuery = `
+          UPDATE orders SET 
+            order_status = 'Invoice',
+            invoice_number = ?,
+            invoice_date = ?,
+            order_mode = ?,
+            updated_at = NOW()
+          WHERE order_number = ?
+          `;
+          updateParams = [invoiceNumber, invoiceDate, orderMode, orderNumber];
+          
+          await queryPromise(connection, updateOrdersQuery, updateParams);
+        } else {
+          throw error;
         }
       } else {
-        console.error(`❌ Error updating order ${orderNumber}:`, error.message);
         throw error;
       }
     }
+    
+    console.log(`✅ Order ${orderNumber} status updated to 'Invoiced' in orders table with invoice ${invoiceNumber}`);
+    console.log(`✅ Order mode set to: ${orderMode}`);
+    
+  } catch (error) {
+    console.error(`❌ Error updating order ${orderNumber}:`, error.message);
+    throw error;
   }
+}
 
   let voucherBatchNumber = null;
   

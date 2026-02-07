@@ -511,6 +511,7 @@ router.post('/products', async (req, res) => {
     console.log('MRP:', data.mrp);
     console.log('Opening Stock:', data.opening_stock);
     console.log('Opening Stock Date:', data.opening_stock_date);
+    console.log('Weight:', data.weight); // Added log for weight
     console.log('Batches Count:', data.batches ? data.batches.length : 0);
 
     // Prepare timestamps
@@ -531,10 +532,11 @@ router.post('/products', async (req, res) => {
       ...cleanProduct,
       unit: data.unit,
       product_type: data.product_type || null,
+      weight: data.weight || 0, // Add weight column
       price: data.price || 0,
       purchase_price: data.purchase_price || 0,
       mrp: data.mrp || 0,
-      opening_stock_date: data.opening_stock_date || now, // Add opening_stock_date here
+      opening_stock_date: data.opening_stock_date || now,
       images: JSON.stringify(imagesArray),
       created_at: now,
       updated_at: now,
@@ -542,11 +544,12 @@ router.post('/products', async (req, res) => {
 
     console.log('📊 Product data for DB insertion:', {
       product_type: productData.product_type,
+      weight: productData.weight, // Log weight
       price: productData.price,
       purchase_price: productData.purchase_price,
       mrp: productData.mrp,
       maintain_batch: productData.maintain_batch,
-      opening_stock_date: productData.opening_stock_date // Log it
+      opening_stock_date: productData.opening_stock_date
     });
 
     // Insert product into `products`
@@ -566,13 +569,15 @@ router.post('/products', async (req, res) => {
     const productPurchasePrice = parseFloat(data.purchase_price || 0);
     const productOpeningStock = parseFloat(data.opening_stock || 0);
     const productType = data.product_type || null;
+    const productWeight = parseFloat(data.weight || 0); // Get weight for batches
 
     console.log('💰 Values for batches:', {
       productPrice,
       productMRP,
       productPurchasePrice,
       productOpeningStock,
-      productType
+      productType,
+      productWeight // Log weight
     });
 
     // ========== Handle Batches ==========
@@ -600,6 +605,7 @@ router.post('/products', async (req, res) => {
         const batchMRP = parseFloat(batch.mrp || productMRP || 0);
         const batchPurchasePrice = parseFloat(batch.purchase_price || batch.purchasePrice || productPurchasePrice || 0);
         const batchMinSalePrice = parseFloat(batch.min_sale_price || 0);
+        const batchWeight = parseFloat(batch.weight || productWeight || 0); // Use batch weight if available, otherwise product weight
 
         console.log(`📦 Batch ${index + 1} data:`, {
           batchNumber: batch.batch_number,
@@ -609,7 +615,8 @@ router.post('/products', async (req, res) => {
           selling_price: batchSellingPrice,
           mrp: batchMRP,
           purchase_price: batchPurchasePrice,
-          product_type: productType
+          product_type: productType,
+          weight: batchWeight // Log batch weight
         });
 
         batchValues.push([
@@ -631,7 +638,8 @@ router.post('/products', async (req, res) => {
           batchSellingPrice,
           barcode,
           batch.remark || '',
-          batchOpeningStockDate, // Add opening_stock_date to batch
+          batchOpeningStockDate,
+          batchWeight, // Add weight to batch values
           now,
           now,
         ]);
@@ -641,7 +649,7 @@ router.post('/products', async (req, res) => {
         INSERT INTO batches 
         (product_id, batch_number, group_by, mfg_date, exp_date, product_type, quantity, opening_stock, 
          stock_in, stock_out, cost_price, selling_price, purchase_price, mrp, min_sale_price, 
-         batch_price, barcode, remark, opening_stock_date, created_at, updated_at)
+         batch_price, barcode, remark, opening_stock_date, weight, created_at, updated_at)
         VALUES ?
       `;
       await db.promise().query(batchSql, [batchValues]);
@@ -671,7 +679,8 @@ router.post('/products', async (req, res) => {
         selling_price: productPrice,
         mrp: productMRP,
         purchase_price: productPurchasePrice,
-        product_type: productType
+        product_type: productType,
+        weight: productWeight // Log weight
       });
 
       const defaultBatch = [
@@ -693,7 +702,8 @@ router.post('/products', async (req, res) => {
         productPrice,
         barcode,
         '',
-        openingStockDate, // Add opening_stock_date to default batch
+        openingStockDate,
+        productWeight, // Add weight to default batch
         now,
         now,
       ];
@@ -702,7 +712,7 @@ router.post('/products', async (req, res) => {
         INSERT INTO batches 
         (product_id, batch_number, group_by, mfg_date, exp_date, product_type, quantity, opening_stock, 
          stock_in, stock_out, cost_price, selling_price, purchase_price, mrp, min_sale_price, 
-         batch_price, barcode, remark, opening_stock_date, created_at, updated_at)
+         batch_price, barcode, remark, opening_stock_date, weight, created_at, updated_at)
         VALUES (?)
       `;
       await db.promise().query(batchSql, [defaultBatch]);
@@ -715,6 +725,7 @@ router.post('/products', async (req, res) => {
       message: "Product created successfully",
       product_id: productId,
       product_type: productType,
+      weight: data.weight, // Include weight in response
     });
   } catch (err) {
     console.error("❌ Error creating product:", err);
@@ -738,6 +749,7 @@ router.put('/products/:id', async (req, res) => {
   console.log('Product Type:', data.product_type);
   console.log('Opening stock from request:', data.opening_stock);
   console.log('Opening stock date from request:', data.opening_stock_date);
+  console.log('Weight from request:', data.weight); 
 
   try {
     // ✅ First, fetch existing product
@@ -755,7 +767,6 @@ router.put('/products/:id', async (req, res) => {
 
     const existing = existingProduct[0];
     
-    // ✅ Update main product info - Add opening_stock_date
     const updateData = {
       group_by: data.group_by || existing.group_by,
       goods_name: data.goods_name || existing.goods_name,
@@ -773,6 +784,7 @@ router.put('/products/:id', async (req, res) => {
       cess_rate: data.cess_rate || existing.cess_rate,
       cess_amount: data.cess_amount || existing.cess_amount,
       sku: data.sku || existing.sku,
+      weight: data.weight || existing.weight,
       min_stock_alert: data.min_stock_alert || existing.min_stock_alert,
       max_stock_alert: data.max_stock_alert || existing.max_stock_alert,
       description: data.description || existing.description,
@@ -780,7 +792,7 @@ router.put('/products/:id', async (req, res) => {
       can_be_sold: data.can_be_sold !== undefined ? data.can_be_sold : existing.can_be_sold,
       min_sale_price: data.min_sale_price || existing.min_sale_price,
       product_type: data.product_type || existing.product_type || null,
-      opening_stock_date: data.opening_stock_date || existing.opening_stock_date || new Date(), // Add this line
+      opening_stock_date: data.opening_stock_date || existing.opening_stock_date || new Date(),
       updated_at: new Date()
     };
 
@@ -789,8 +801,9 @@ router.put('/products/:id', async (req, res) => {
       price: updateData.price,
       purchase_price: updateData.purchase_price,
       mrp: updateData.mrp,
+      weight: updateData.weight, 
       maintain_batch: updateData.maintain_batch,
-      opening_stock_date: updateData.opening_stock_date // Log it
+      opening_stock_date: updateData.opening_stock_date
     });
 
     // Update product
@@ -816,6 +829,7 @@ router.put('/products/:id', async (req, res) => {
     const currentPrice = parseFloat(data.price || existing.price || 0);
     const currentMRP = parseFloat(data.mrp || existing.mrp || 0);
     const currentPurchasePrice = parseFloat(data.purchase_price || existing.purchase_price || 0);
+    const currentWeight = parseFloat(data.weight || existing.weight || 0); // Get current weight
     const requestOpeningStock = parseFloat(data.opening_stock || 0);
     const currentProductType = data.product_type || existing.product_type || null;
     const openingStockDate = data.opening_stock_date || existing.opening_stock_date || new Date();
@@ -824,6 +838,7 @@ router.put('/products/:id', async (req, res) => {
       currentPrice,
       currentMRP,
       currentPurchasePrice,
+      currentWeight,
       requestOpeningStock,
       currentProductType,
       openingStockDate
@@ -839,6 +854,7 @@ router.put('/products/:id', async (req, res) => {
       );
 
       const processedBatchIds = [];
+      let totalBatchWeight = 0; 
 
       for (const [index, batch] of batches.entries()) {
         let barcode = batch.barcode;
@@ -859,19 +875,19 @@ router.put('/products/:id', async (req, res) => {
           console.log(`Using default opening_stock: ${openingStock}`);
         }
 
-        // Use batch's opening_stock_date or product's opening_stock_date
         const batchOpeningStockDate = batch.opening_stock_date || openingStockDate;
 
-        // Calculate stock values
         const stockIn = parseFloat(batch.stock_in || 0);
         const stockOut = parseFloat(batch.stock_out || 0);
         const quantity = openingStock + stockIn - stockOut;
 
-        // Get prices
         const batchSellingPrice = parseFloat(batch.selling_price || batch.sellingPrice || currentPrice || 0);
         const batchMRP = parseFloat(batch.mrp || currentMRP || 0);
         const batchPurchasePrice = parseFloat(batch.purchase_price || batch.purchasePrice || currentPurchasePrice || 0);
         const batchMinSalePrice = parseFloat(batch.min_sale_price || 0);
+        const batchWeight = parseFloat(batch.weight || 0); // Get batch weight
+
+        totalBatchWeight += batchWeight;
 
         console.log(`🔹 Batch ${index + 1} "${batch.batch_number}" data:`, {
           openingStock,
@@ -880,6 +896,7 @@ router.put('/products/:id', async (req, res) => {
           selling_price: batchSellingPrice,
           mrp: batchMRP,
           purchase_price: batchPurchasePrice,
+          weight: batchWeight, // Log batch weight
           product_type: currentProductType,
           isExisting: batch.isExisting
         });
@@ -891,7 +908,7 @@ router.put('/products/:id', async (req, res) => {
           exp_date: batch.exp_date || batch.expDate || null,
           quantity: quantity,
           opening_stock: openingStock,
-          opening_stock_date: batchOpeningStockDate, // Add opening_stock_date
+          opening_stock_date: batchOpeningStockDate,
           stock_in: stockIn,
           stock_out: stockOut,
           cost_price: parseFloat(batch.cost_price || 0),
@@ -900,6 +917,7 @@ router.put('/products/:id', async (req, res) => {
           mrp: batchMRP,
           min_sale_price: batchMinSalePrice,
           batch_price: batchSellingPrice,
+          weight: batchWeight, // Add weight to batch data
           barcode,
           remark: batch.remark || '',
           product_type: currentProductType,
@@ -910,23 +928,23 @@ router.put('/products/:id', async (req, res) => {
         const isExistingBatch = batch.isExisting && hasValidId;
 
         if (isExistingBatch) {
-          // UPDATE existing batch with opening_stock_date
           const updateSql = `
             UPDATE batches SET 
               batch_number = ?, group_by = ?, mfg_date = ?, exp_date = ?, quantity = ?, 
               opening_stock = ?, opening_stock_date = ?, stock_in = ?, stock_out = ?, cost_price = ?, 
               selling_price = ?, purchase_price = ?, mrp = ?, min_sale_price = ?, batch_price = ?, 
-              barcode = ?, remark = ?, product_type = ?, updated_at = ?
+              weight = ?, barcode = ?, remark = ?, product_type = ?, updated_at = ?
             WHERE id = ?
           `;
           const values = [
             batchData.batch_number, batchData.group_by,
             batchData.mfg_date, batchData.exp_date, batchData.quantity,
             batchData.opening_stock,
-            batchData.opening_stock_date, // Add opening_stock_date
+            batchData.opening_stock_date,
             batchData.stock_in, batchData.stock_out,
             batchData.cost_price, batchData.selling_price, batchData.purchase_price,
             batchData.mrp, batchData.min_sale_price, batchData.batch_price,
+            batchData.weight, // Add weight
             batchData.barcode, batchData.remark, batchData.product_type,
             batchData.updated_at,
             parseInt(batch.id)
@@ -935,13 +953,13 @@ router.put('/products/:id', async (req, res) => {
           processedBatchIds.push(parseInt(batch.id));
           console.log(`✅ Updated existing batch "${batchData.batch_number}"`);
         } else {
-          // INSERT new batch with opening_stock_date
+          // INSERT new batch with opening_stock_date and weight
           const insertSql = `
             INSERT INTO batches (
               product_id, batch_number, group_by, mfg_date, exp_date, product_type, quantity, opening_stock, 
               opening_stock_date, stock_in, stock_out, cost_price, selling_price, purchase_price, mrp, min_sale_price, 
-              batch_price, barcode, remark, created_at, updated_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+              batch_price, weight, barcode, remark, created_at, updated_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
           `;
           const values = [
             productId, 
@@ -952,7 +970,7 @@ router.put('/products/:id', async (req, res) => {
             batchData.product_type,
             batchData.quantity,
             batchData.opening_stock,
-            batchData.opening_stock_date, // Add opening_stock_date
+            batchData.opening_stock_date,
             batchData.stock_in, 
             batchData.stock_out,
             batchData.cost_price, 
@@ -961,6 +979,7 @@ router.put('/products/:id', async (req, res) => {
             batchData.mrp, 
             batchData.min_sale_price, 
             batchData.batch_price,
+            batchData.weight, // Add weight
             batchData.barcode, 
             batchData.remark,
             new Date(), 
@@ -970,6 +989,14 @@ router.put('/products/:id', async (req, res) => {
           processedBatchIds.push(result.insertId);
           console.log(`✅ Inserted new batch "${batchData.batch_number}"`);
         }
+      }
+
+      if (totalBatchWeight > 0) {
+        await db.promise().query(
+          'UPDATE products SET weight = ? WHERE id = ?',
+          [totalBatchWeight, productId]
+        );
+        console.log(`✅ Updated product weight to sum of batch weights: ${totalBatchWeight}`);
       }
 
       if (processedBatchIds.length > 0) {
@@ -1004,6 +1031,7 @@ router.put('/products/:id', async (req, res) => {
         selling_price: currentPrice,
         mrp: currentMRP,
         purchase_price: currentPurchasePrice,
+        weight: currentWeight, // Log weight
         product_type: currentProductType
       });
 
@@ -1014,7 +1042,7 @@ router.put('/products/:id', async (req, res) => {
         exp_date: null,
         quantity: quantity,
         opening_stock: openingStock,
-        opening_stock_date: openingStockDate, // Add opening_stock_date
+        opening_stock_date: openingStockDate,
         stock_in: stockIn,
         stock_out: stockOut,
         cost_price: 0,
@@ -1023,6 +1051,7 @@ router.put('/products/:id', async (req, res) => {
         mrp: currentMRP,
         min_sale_price: parseFloat(data.min_sale_price || 0),
         batch_price: currentPrice,
+        weight: currentWeight, // Add weight to default batch
         barcode: 'DEFAULT-123',
         remark: '',
         product_type: currentProductType,
@@ -1030,22 +1059,23 @@ router.put('/products/:id', async (req, res) => {
       };
 
       if (existingDefault.length > 0) {
-        // UPDATE DEFAULT batch with opening_stock_date
+        // UPDATE DEFAULT batch with opening_stock_date and weight
         const updateSql = `
           UPDATE batches SET 
             quantity = ?, opening_stock = ?, opening_stock_date = ?, selling_price = ?, purchase_price = ?, 
-            mrp = ?, min_sale_price = ?, batch_price = ?, product_type = ?, updated_at = ?
+            mrp = ?, min_sale_price = ?, batch_price = ?, weight = ?, product_type = ?, updated_at = ?
           WHERE product_id = ? AND batch_number = "DEFAULT"
         `;
         const values = [
           batchData.quantity, 
           batchData.opening_stock,
-          batchData.opening_stock_date, // Add opening_stock_date
+          batchData.opening_stock_date,
           batchData.selling_price, 
           batchData.purchase_price,
           batchData.mrp, 
           batchData.min_sale_price,
           batchData.batch_price, 
+          batchData.weight, // Add weight
           batchData.product_type,
           batchData.updated_at,
           productId
@@ -1053,13 +1083,13 @@ router.put('/products/:id', async (req, res) => {
         await db.promise().query(updateSql, values);
         console.log('🔄 Updated DEFAULT batch');
       } else {
-        // INSERT DEFAULT batch with opening_stock_date
+        // INSERT DEFAULT batch with opening_stock_date and weight
         const insertSql = `
           INSERT INTO batches (
             product_id, batch_number, group_by, mfg_date, exp_date, product_type, quantity, opening_stock,
             opening_stock_date, stock_in, stock_out, cost_price, selling_price, purchase_price, mrp, min_sale_price,
-            batch_price, barcode, remark, created_at, updated_at
-          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            batch_price, weight, barcode, remark, created_at, updated_at
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         `;
         const values = [
           productId, 
@@ -1070,7 +1100,7 @@ router.put('/products/:id', async (req, res) => {
           batchData.product_type,
           batchData.quantity,
           batchData.opening_stock,
-          batchData.opening_stock_date, // Add opening_stock_date
+          batchData.opening_stock_date,
           batchData.stock_in, 
           batchData.stock_out,
           batchData.cost_price, 
@@ -1079,6 +1109,7 @@ router.put('/products/:id', async (req, res) => {
           batchData.mrp, 
           batchData.min_sale_price, 
           batchData.batch_price,
+          batchData.weight, // Add weight
           batchData.barcode, 
           batchData.remark,
           new Date(), 
@@ -1103,9 +1134,10 @@ router.put('/products/:id', async (req, res) => {
     );
 
     console.log('📊 Verification - Updated data:');
+    console.log(`- Product weight: ${updatedProduct[0]?.weight}`);
     console.log(`- Product opening_stock_date: ${updatedProduct[0]?.opening_stock_date}`);
     updatedBatches.forEach(batch => {
-      console.log(`- Batch "${batch.batch_number}" opening_stock_date: ${batch.opening_stock_date}`);
+      console.log(`- Batch "${batch.batch_number}" weight: ${batch.weight}, opening_stock_date: ${batch.opening_stock_date}`);
     });
 
     res.json({ 
@@ -1499,6 +1531,7 @@ router.get('/get-sales-products', async (req, res) => {
         p.images,
         p.can_be_sold,
         p.net_price,
+        p.weight,
         MAX(b.product_type) AS product_type,   -- ✅ FROM BATCHES
         c.category_name,
         MAX(b.exp_date) AS exp_date
@@ -1520,6 +1553,7 @@ router.get('/get-sales-products', async (req, res) => {
       price: item.price,
       mrp: item.mrp,
       unit: item.unit,
+      weight:item.weight,
       category_id: item.category_id,
       category: item.category_name,
       gst_rate: item.gst_rate,

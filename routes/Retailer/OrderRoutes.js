@@ -158,7 +158,7 @@ router.post("/create-complete-order", async (req, res) => {
         const orderItemQuery = `
           INSERT INTO order_items (
             order_number, item_name, product_id, mrp, sale_price,
-            edited_sale_price, net_price, credit_charge, customer_sale_price, 
+            edited_sale_price, net_price, weight, credit_charge, customer_sale_price, 
             final_amount, quantity, total_amount,
             discount_percentage, discount_amount, taxable_amount,
             tax_percentage, tax_amount, item_total,
@@ -180,6 +180,8 @@ router.post("/create-complete-order", async (req, res) => {
           item.sale_price || 0,
           item.edited_sale_price || 0,
            item.net_price || 0,  // ADD net_price HERE
+                     item.weight || 0,  // ADD weight HERE
+
           item.credit_charge || 0,
           item.customer_sale_price || 0,
           item.final_amount || 0,
@@ -1061,12 +1063,12 @@ router.put("/update-order/:order_number", async (req, res) => {
         console.log("🗑️ Old order items deleted");
 
         // ---------------------------------------------------
-        // 3. INSERT UPDATED ORDER ITEMS (WITH NEW FLASH OFFER COLUMNS)
+        // 3. INSERT UPDATED ORDER ITEMS (WITH WEIGHT COLUMN)
         // ---------------------------------------------------
         const insertOrderItemsQuery = `
           INSERT INTO order_items (
             order_number, item_name, product_id, mrp, sale_price,
-            edited_sale_price, net_price, credit_charge, customer_sale_price,
+            edited_sale_price, net_price, weight, credit_charge, customer_sale_price,
             final_amount, quantity, total_amount,
             discount_percentage, discount_amount, taxable_amount,
             tax_percentage, tax_amount, item_total,
@@ -1074,9 +1076,9 @@ router.put("/update-order/:order_number", async (req, res) => {
             sgst_percentage, sgst_amount,
             cgst_percentage, cgst_amount,
             discount_applied_scheme,
-            flash_offer,            -- NEW COLUMN
-            buy_quantity,           -- NEW COLUMN
-            get_quantity            -- NEW COLUMN
+            flash_offer,
+            buy_quantity,
+            get_quantity
           ) VALUES ?
         `;
 
@@ -1087,11 +1089,12 @@ router.put("/update-order/:order_number", async (req, res) => {
           item.mrp || 0,
           item.sale_price || 0,
           item.edited_sale_price || 0,
-           item.net_price || 0,  
+          item.net_price || 0,  // net_price
+          item.weight || null,  // weight - ADD THIS
           item.credit_charge || 0,
           item.customer_sale_price || 0,
           item.final_amount || 0,
-          item.quantity || 1,
+          item.quantity || 1,  // This is the quantity field - it should be present
           item.total_amount || 0,
           item.discount_percentage || 0,
           item.discount_amount || 0,
@@ -1106,10 +1109,17 @@ router.put("/update-order/:order_number", async (req, res) => {
           item.cgst_percentage || 0,
           item.cgst_amount || 0,
           item.discount_applied_scheme || 'none',
-          item.flash_offer || 0,          // NEW: flash_offer column
-          item.buy_quantity || 0,         // NEW: buy_quantity column
-          item.get_quantity || 0          // NEW: get_quantity column
+          item.flash_offer || 0,
+          item.buy_quantity || 0,
+          item.get_quantity || 0
         ]);
+
+        console.log("Order item values to insert:", orderItemValues.map(item => ({
+          item_name: item[1],
+          quantity: item[12],  // Index 12 is quantity
+          weight: item[7],     // Index 7 is weight
+          net_price: item[6]   // Index 6 is net_price
+        })));
 
         await new Promise((resolve, reject) => {
           connection.query(insertOrderItemsQuery, [orderItemValues], (err, result) => {
@@ -1118,7 +1128,7 @@ router.put("/update-order/:order_number", async (req, res) => {
           });
         });
 
-        console.log("✅ New order items inserted with flash offer data:", orderItems.length);
+        console.log("✅ New order items inserted with weight:", orderItems.length);
 
         // ---------------------------------------------------
         // 4. COMMIT TRANSACTION
@@ -1137,7 +1147,6 @@ router.put("/update-order/:order_number", async (req, res) => {
         // 5. SEND UPDATE EMAILS
         // ---------------------------------------------------
         try {
-          // Check if any flash offers were applied
           const hasFlashOffers = orderItems.some(item => item.flash_offer && item.flash_offer !== 0);
           
           const emailHTML = `

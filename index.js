@@ -43,7 +43,7 @@ const RetailerOrderRoutes = require("./routes/Retailer/OrderRoutes");
 const retailerScoreRoutes = require('./routes/retailerScore');
 // Add this line with your other route imports
 const creditPeriodFixRoutes = require('./routes/CreditPeriod/CreditPeriodRoutes');
-const inventory = require('./routes/Retailer/InventoryRoutes');
+const inventory = require('./routes/Retailer/InventoryRoutesRetailer');
 const OfferFlashSale = require('./routes/OfferFlashSale');
 const { baseurl } = require('./baseUrl');
 const port = 5000;

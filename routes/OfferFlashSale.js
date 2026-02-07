@@ -15,8 +15,70 @@ const storage = multer.diskStorage({
 
 const upload = multer({ storage: storage });
 
-// GET ALL FLASH SALES (filtered by offer = 'Flash Sales')
+function updateExpiredFlashSales() {
+  console.log('🔄 Checking expired flash sales...');
+  
+  const sql = `
+    UPDATE offers 
+    SET status = 'inactive', 
+        updated_at = NOW() 
+    WHERE offer = 'Flash Sales' 
+      AND status = 'active' 
+      AND CONCAT(
+        DATE(valid_until), 
+        ' ', 
+        COALESCE(
+          NULLIF(end_time, ''), 
+          COALESCE(NULLIF(start_time, ''), '23:59:59')
+        )
+      ) < NOW()
+  `;
+  
+  db.query(sql, (err, result) => {
+    if (err) {
+      console.error('Error updating expired flash sales:', err);
+    } else if (result.affectedRows > 0) {
+      console.log(`✅ Updated ${result.affectedRows} expired flash sales to inactive`);
+      
+      // Now update batches table
+      const updateBatchesSql = `
+        UPDATE batches b
+        INNER JOIN offers o ON b.product_id = o.product_id
+        SET b.flash_sale_status = 'inactive'
+        WHERE o.offer = 'Flash Sales' 
+          AND o.status = 'inactive'
+          AND b.flash_sale_status = 'active'
+          AND CONCAT(
+            DATE(o.valid_until), 
+            ' ', 
+            COALESCE(
+              NULLIF(o.end_time, ''), 
+              COALESCE(NULLIF(o.start_time, ''), '23:59:59')
+            )
+          ) < NOW()
+      `;
+      
+      db.query(updateBatchesSql, (batchErr, batchResult) => {
+        if (batchErr) {
+          console.error('Error updating batches:', batchErr);
+        } else if (batchResult.affectedRows > 0) {
+          console.log(`✅ Updated ${batchResult.affectedRows} batches to inactive`);
+        }
+      });
+    } else {
+      console.log('✅ No expired flash sales to update');
+    }
+  });
+}
+// ================================================
+// GET ALL FLASH SALES
+// ================================================
 router.get("/flashoffer", (req, res) => {
+  console.log("📋 GET Flash Sales Request");
+  
+  // Auto-update expired flash sales BEFORE fetching
+  updateExpiredFlashSales();
+  
   const sql = `SELECT * FROM offers WHERE offer = 'Flash Sales' ORDER BY created_at DESC`;
   db.query(sql, (err, results) => {
     if (err) {
@@ -24,88 +86,56 @@ router.get("/flashoffer", (req, res) => {
       return res.status(500).json({ success: false, message: "DB Error" });
     }
 
-    const flashSales = results.map((sale) => ({
-      id: sale.id,
-      title: sale.title,
-      description: sale.description,
-      flashSaleType: sale.offer_type,
-      status: sale.status,
-      valid_from: sale.valid_from,
-      valid_until: sale.valid_until,
-      start_time: sale.start_time,
-      end_time: sale.end_time,
-      buy_quantity: sale.buy_quantity,
-      get_quantity: sale.get_quantity,
-      discount_percentage: sale.discount_percentage,
-      purchase_limit: sale.purchase_limit,
-      terms_conditions: sale.terms_conditions,
-      // ADD THESE FIELDS:
-      product_id: sale.product_id,
-      product_name: sale.product_name,
-      category_id: sale.category_id,
-      category_name: sale.category_name,
-      // End of added fields
-      image_url: sale.image_url,
-      created_at: sale.created_at,
-      offer: sale.offer
-    }));
+    const flashSales = results.map((sale) => {
+      // Check if sale is expired based on valid_until date
+      const currentDate = new Date().toISOString().split('T')[0];
+      const validUntilDate = sale.valid_until ? 
+        new Date(sale.valid_until).toISOString().split('T')[0] : 
+        null;
+      
+      const isExpired = validUntilDate && validUntilDate < currentDate;
+      
+      return {
+        id: sale.id,
+        title: sale.title,
+        description: sale.description,
+        flashSaleType: sale.offer_type,
+        status: sale.status,
+        valid_from: sale.valid_from,
+        valid_until: sale.valid_until,
+        start_time: sale.start_time,
+        end_time: sale.end_time,
+        buy_quantity: sale.buy_quantity,
+        get_quantity: sale.get_quantity,
+        discount_percentage: sale.discount_percentage,
+        purchase_limit: sale.purchase_limit,
+        terms_conditions: sale.terms_conditions,
+        product_id: sale.product_id,
+        product_name: sale.product_name,
+        category_id: sale.category_id,
+        category_name: sale.category_name,
+        image_url: sale.image_url,
+        created_at: sale.created_at,
+        offer: sale.offer,
+        // Add this for frontend info
+        is_expired: isExpired
+      };
+    });
 
-    console.log("Flash sales response:", flashSales); // Debug log
+    console.log(`✅ Returning ${flashSales.length} flash sales`);
     res.json({ success: true, data: flashSales });
   });
 });
 
-
-router.get("/flashofferretailer", (req, res) => {
-  const currentDate = new Date().toISOString().split('T')[0]; // Get current date in YYYY-MM-DD format
-  
-  const sql = `
-    SELECT * FROM offers 
-    WHERE offer = 'Flash Sales' 
-      AND status = 'active'
-      AND (valid_until IS NULL OR valid_until >= CURDATE())
-    ORDER BY created_at DESC
-  `;
-  
-  db.query(sql, (err, results) => {
-    if (err) {
-      console.error("Error fetching flash sales:", err);
-      return res.status(500).json({ success: false, message: "DB Error" });
-    }
-
-    const flashSales = results.map((sale) => ({
-      id: sale.id,
-      title: sale.title,
-      description: sale.description,
-      flashSaleType: sale.offer_type,
-      status: sale.status,
-      valid_from: sale.valid_from,
-      valid_until: sale.valid_until,
-      start_time: sale.start_time,
-      end_time: sale.end_time,
-      buy_quantity: sale.buy_quantity,
-      get_quantity: sale.get_quantity,
-      discount_percentage: sale.discount_percentage,
-      purchase_limit: sale.purchase_limit,
-      terms_conditions: sale.terms_conditions,
-      product_id: sale.product_id,
-      product_name: sale.product_name,
-      category_id: sale.category_id,
-      category_name: sale.category_name,
-      image_url: sale.image_url,
-      created_at: sale.created_at,
-      offer: sale.offer
-    }));
-
-    console.log("Flash sales response:", flashSales); // Debug log
-    res.json({ success: true, data: flashSales });
-  });
-});
-
-
-
+// ================================================
 // GET SINGLE FLASH SALE
+// ================================================
 router.get("/flashoffer/:id", (req, res) => {
+  console.log(`📋 GET Single Flash Sale ID: ${req.params.id}`);
+  
+  // Auto-update expired flash sales
+  updateExpiredFlashSales();
+  
   const sql = `SELECT * FROM offers WHERE id = ? AND offer = 'Flash Sales'`;
   db.query(sql, [req.params.id], (err, results) => {
     if (err) {
@@ -118,6 +148,14 @@ router.get("/flashoffer/:id", (req, res) => {
     }
 
     const sale = results[0];
+    
+    // Check if expired
+    const currentDate = new Date().toISOString().split('T')[0];
+    const validUntilDate = sale.valid_until ? 
+      new Date(sale.valid_until).toISOString().split('T')[0] : 
+      null;
+    const isExpired = validUntilDate && validUntilDate < currentDate;
+    
     const flashSale = {
       id: sale.id,
       title: sale.title,
@@ -133,22 +171,20 @@ router.get("/flashoffer/:id", (req, res) => {
       discount_percentage: sale.discount_percentage,
       purchase_limit: sale.purchase_limit,
       terms_conditions: sale.terms_conditions,
-      // ADD THESE FIELDS:
       product_id: sale.product_id,
       product_name: sale.product_name,
       category_id: sale.category_id,
       category_name: sale.category_name,
-      // End of added fields
       image_url: sale.image_url,
       created_at: sale.created_at,
-      offer: sale.offer
+      offer: sale.offer,
+      is_expired: isExpired
     };
 
-    console.log("Single flash sale response:", flashSale); // Debug log
+    console.log("✅ Single flash sale response:", flashSale);
     res.json({ success: true, data: flashSale });
   });
 });
-
 
 
 // CREATE FLASH SALE
@@ -258,7 +294,7 @@ router.put('/update-flashsale/:id', upload.single('image'), (req, res) => {
       offer_type, status, category_id, category_name, product_id,
       product_name, purchase_limit, removeImage,
       buy_quantity, get_quantity, terms_conditions, 
-      start_time, end_time, expiry_threshold
+      start_time, end_time, 
     } = req.body;
 
     console.log("Parsed body fields:");
@@ -376,7 +412,6 @@ router.patch('/flashoffer/:id/status', async (req, res) => {
   try {
     const { id } = req.params;
     const { status } = req.body;
-
     if (!status || !['active', 'inactive'].includes(status)) {
       return res.status(400).json({ success: false, message: 'Invalid status' });
     }
@@ -449,4 +484,90 @@ router.patch('/flashoffer/:id/status', async (req, res) => {
   }
 });
 
+
+
+router.get("/flashofferretailer", (req, res) => {
+  const currentDate = new Date();
+  const currentDateStr = currentDate.toISOString().split('T')[0]; // YYYY-MM-DD
+  const currentTimeStr = currentDate.toTimeString().split(' ')[0]; // HH:MM:SS
+  
+  console.log(`Current Date: ${currentDateStr}, Current Time: ${currentTimeStr}`);
+  
+  const sql = `
+    SELECT * FROM offers 
+    WHERE offer = 'Flash Sales' 
+      AND status = 'active'
+      AND (valid_from IS NULL OR valid_from <= CURDATE())
+      AND (valid_until IS NULL OR valid_until >= CURDATE())
+    ORDER BY created_at DESC
+  `;
+  
+  db.query(sql, (err, results) => {
+    if (err) {
+      console.error("Error fetching flash sales:", err);
+      return res.status(500).json({ success: false, message: "DB Error" });
+    }
+
+    const filteredFlashSales = results.filter((sale) => {
+      const validFrom = new Date(sale.valid_from);
+      const validUntil = new Date(sale.valid_until);
+      const current = new Date();
+      
+      if (current < validFrom || current > validUntil) {
+        return false;
+      }
+      
+      if (sale.start_time && sale.end_time) {
+        const startTimeParts = sale.start_time.split(':').map(Number);
+        const endTimeParts = sale.end_time.split(':').map(Number);
+        const currentTimeParts = currentTimeStr.split(':').map(Number);
+        
+        const startTime = new Date();
+        startTime.setHours(startTimeParts[0], startTimeParts[1], startTimeParts[2] || 0);
+        
+        const endTime = new Date();
+        endTime.setHours(endTimeParts[0], endTimeParts[1], endTimeParts[2] || 0);
+        
+        const currentTime = new Date();
+        currentTime.setHours(currentTimeParts[0], currentTimeParts[1], currentTimeParts[2] || 0);
+        
+        // Check if current time is between start and end time
+        if (currentTime < startTime || currentTime > endTime) {
+          return false;
+        }
+      }
+      
+      return true;
+    });
+
+    const flashSales = filteredFlashSales.map((sale) => ({
+      id: sale.id,
+      title: sale.title,
+      description: sale.description,
+      flashSaleType: sale.offer_type,
+      status: sale.status,
+      valid_from: sale.valid_from,
+      valid_until: sale.valid_until,
+      start_time: sale.start_time,
+      end_time: sale.end_time,
+      buy_quantity: sale.buy_quantity,
+      get_quantity: sale.get_quantity,
+      discount_percentage: sale.discount_percentage,
+      purchase_limit: sale.purchase_limit,
+      terms_conditions: sale.terms_conditions,
+      product_id: sale.product_id,
+      product_name: sale.product_name,
+      category_id: sale.category_id,
+      category_name: sale.category_name,
+      image_url: sale.image_url,
+      created_at: sale.created_at,
+      offer: sale.offer
+    }));
+
+    console.log(`Found ${flashSales.length} active flash sales at ${currentDateStr} ${currentTimeStr}`);
+    console.log("Flash sales response:", flashSales);
+    
+    res.json({ success: true, data: flashSales });
+  });
+});
 module.exports = router;
