@@ -1308,8 +1308,6 @@ router.get("/retailerorder/:id", (req, res) => {
 // });
 
 
-// PUT /api/orders/:id - Update an order with GST
-// UPDATE /api/orders/:id - Update an order
 router.put('/orders/:id', (req, res) => {
   const { id } = req.params;
   const { 

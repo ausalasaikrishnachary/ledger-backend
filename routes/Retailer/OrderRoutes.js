@@ -153,7 +153,7 @@ router.post("/create-complete-order", async (req, res) => {
         console.log("✅ Order inserted:", orderResult.insertId);
 
         // ---------------------------------------------------
-        // 2. INSERT ORDER ITEMS (WITH NEW FLASH OFFER COLUMNS)
+        // 2. INSERT ORDER ITEMS (WITH ORDER_MODE)
         // ---------------------------------------------------
         const orderItemQuery = `
           INSERT INTO order_items (
@@ -168,7 +168,8 @@ router.post("/create-complete-order", async (req, res) => {
             discount_applied_scheme,
             flash_offer,            -- NEW COLUMN
             buy_quantity,           -- NEW COLUMN
-            get_quantity            -- NEW COLUMN
+            get_quantity,           -- NEW COLUMN
+            order_mode              -- ADDED: order_mode column
           ) VALUES ?
         `;
 
@@ -179,9 +180,8 @@ router.post("/create-complete-order", async (req, res) => {
           item.mrp || 0,
           item.sale_price || 0,
           item.edited_sale_price || 0,
-           item.net_price || 0,  // ADD net_price HERE
-                     item.weight || 0,  // ADD weight HERE
-
+          item.net_price || 0,      // ADD net_price HERE
+          item.weight || 0,         // ADD weight HERE
           item.credit_charge || 0,
           item.customer_sale_price || 0,
           item.final_amount || 0,
@@ -202,7 +202,8 @@ router.post("/create-complete-order", async (req, res) => {
           item.discount_applied_scheme || 'none',
           item.flash_offer || 0,          // NEW: flash_offer column
           item.buy_quantity || 0,         // NEW: buy_quantity column
-          item.get_quantity || 0          // NEW: get_quantity column
+          item.get_quantity || 0,         // NEW: get_quantity column
+          item.order_mode || order.order_mode // ADDED: order_mode from item or fallback to main order
         ]);
 
         await new Promise((resolve, reject) => {
@@ -212,7 +213,7 @@ router.post("/create-complete-order", async (req, res) => {
           });
         });
 
-        console.log("✅ Order items inserted with flash offer data");
+        console.log("✅ Order items inserted with flash offer data and order_mode");
 
         // ---------------------------------------------------
         // 3. CLEAR CART
@@ -261,6 +262,7 @@ router.post("/create-complete-order", async (req, res) => {
             <p><strong>Customer:</strong> ${order.customer_name}</p>
             <p><strong>Net Amount:</strong> ₹${order.net_payable}</p>
             <p><strong>Placed By:</strong> ${order.ordered_by}</p>
+            <p><strong>Order Mode:</strong> ${order.order_mode}</p>
             ${hasFlashOffers ? '<p><strong>Note:</strong> This order includes flash offer items</p>' : ''}
           `;
 
@@ -329,6 +331,7 @@ router.post("/create-complete-order", async (req, res) => {
           success: true,
           order_id: orderResult.insertId,
           order_number: order.order_number,
+          order_mode: order.order_mode,
           cart_cleared: clearCartResult.affectedRows,
           message: "Order created successfully",
         });
@@ -345,7 +348,6 @@ router.post("/create-complete-order", async (req, res) => {
     });
   });
 });
-
 
 
 module.exports = router;
@@ -1063,7 +1065,7 @@ router.put("/update-order/:order_number", async (req, res) => {
         console.log("🗑️ Old order items deleted");
 
         // ---------------------------------------------------
-        // 3. INSERT UPDATED ORDER ITEMS (WITH WEIGHT COLUMN)
+        // 3. INSERT UPDATED ORDER ITEMS (WITH ORDER_MODE)
         // ---------------------------------------------------
         const insertOrderItemsQuery = `
           INSERT INTO order_items (
@@ -1078,7 +1080,8 @@ router.put("/update-order/:order_number", async (req, res) => {
             discount_applied_scheme,
             flash_offer,
             buy_quantity,
-            get_quantity
+            get_quantity,
+            order_mode              -- ADDED: order_mode column
           ) VALUES ?
         `;
 
@@ -1090,11 +1093,11 @@ router.put("/update-order/:order_number", async (req, res) => {
           item.sale_price || 0,
           item.edited_sale_price || 0,
           item.net_price || 0,  // net_price
-          item.weight || null,  // weight - ADD THIS
+          item.weight || null,  // weight
           item.credit_charge || 0,
           item.customer_sale_price || 0,
           item.final_amount || 0,
-          item.quantity || 1,  // This is the quantity field - it should be present
+          item.quantity || 1,
           item.total_amount || 0,
           item.discount_percentage || 0,
           item.discount_amount || 0,
@@ -1111,24 +1114,26 @@ router.put("/update-order/:order_number", async (req, res) => {
           item.discount_applied_scheme || 'none',
           item.flash_offer || 0,
           item.buy_quantity || 0,
-          item.get_quantity || 0
+          item.get_quantity || 0,
+          item.order_mode || order.order_mode // ADDED: order_mode from item or fallback to main order
         ]);
 
         console.log("Order item values to insert:", orderItemValues.map(item => ({
           item_name: item[1],
           quantity: item[12],  // Index 12 is quantity
           weight: item[7],     // Index 7 is weight
-          net_price: item[6]   // Index 6 is net_price
+          net_price: item[6],  // Index 6 is net_price
+          order_mode: item[30] // Index 30 is order_mode (new last column)
         })));
 
-        await new Promise((resolve, reject) => {
+        const insertResult = await new Promise((resolve, reject) => {
           connection.query(insertOrderItemsQuery, [orderItemValues], (err, result) => {
             if (err) reject(err);
             else resolve(result);
           });
         });
 
-        console.log("✅ New order items inserted with weight:", orderItems.length);
+        console.log("✅ New order items inserted with order_mode:", orderItems.length);
 
         // ---------------------------------------------------
         // 4. COMMIT TRANSACTION
@@ -1210,7 +1215,7 @@ router.put("/update-order/:order_number", async (req, res) => {
               .map((item) => item.item_name)
               .join(", ");
 
-            const smsText = `Dear Customer, Your Order No. ${order_number} for ${productSummary} has been updated successfully. Updated Amount: ₹${order.net_payable}. - SHREE SHASHWATRAJ AGRO PRIVATE LIMITED`;
+            const smsText = `Dear Customer, Your Order No. ${order_number} for ${productSummary} has been updated successfully. Updated Amount: ₹${order.net_payable}. Order Mode: ${order.order_mode} - SHREE SHASHWATRAJ AGRO PRIVATE LIMITED`;
 
             const smsUrl = "https://www.smsjust.com/blank/sms/user/urlsms.php";
 
@@ -1241,9 +1246,11 @@ router.put("/update-order/:order_number", async (req, res) => {
         res.status(200).json({
           success: true,
           order_number: order_number,
+          order_mode: order.order_mode,
           message: "Order updated successfully",
           affected_rows: updateOrderResult.affectedRows,
           items_updated: orderItems.length,
+          inserted_items: insertResult.affectedRows
         });
       } catch (error) {
         connection.rollback(() => {

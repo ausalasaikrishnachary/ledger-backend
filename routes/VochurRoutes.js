@@ -6019,7 +6019,6 @@ const processTransaction = async (transactionData, transactionType, connection, 
   const hasItemSelection = selectedItemIds && selectedItemIds.length > 0;
   
   console.log("📋 Has item selection:", hasItemSelection ? `Yes (${selectedItemIds.length} items)` : "No");
-  
 if (orderNumber && (transactionType === "Sales" || transactionType === "stock transfer")) {
   console.log("✅ This is an order conversion. Updating order items and order status...");
   
@@ -6027,44 +6026,121 @@ if (orderNumber && (transactionType === "Sales" || transactionType === "stock tr
   const invoiceDate = transactionData.Date || new Date().toISOString().split('T')[0];
   
   try {
-   if (hasItemSelection && selectedItemIds.length > 0) {
-  const placeholders = selectedItemIds.map(() => '?').join(',');
-  const updateParams = [invoiceNumber, invoiceDate, orderNumber, ...selectedItemIds];
-  
-  await queryPromise(
-    connection,
-    `
-    UPDATE order_items SET 
-      invoice_number = ?, 
-      invoice_date = ?, 
-      invoice_status = 1, 
-      updated_at = NOW()
-    WHERE order_number = ? 
-      AND id IN (${placeholders})
-    `,
-    updateParams
-  );
-  
-  // ADD THIS: Update product_id for each item
-  for (const item of itemsWithCalculations) {
-    if (item.matched_product_id && item.originalItemId) {
+    // First, let's debug what we're receiving
+    console.log("🔍 DEBUG - Received items for order update:", items);
+    console.log("🔍 DEBUG - Selected Item IDs:", selectedItemIds);
+    
+    if (hasItemSelection && selectedItemIds.length > 0) {
+      // Update invoice details for selected items
+      const placeholders = selectedItemIds.map(() => '?').join(',');
+      const updateParams = [invoiceNumber, invoiceDate, orderNumber, ...selectedItemIds];
+      
       await queryPromise(
         connection,
         `
         UPDATE order_items SET 
-          product_id = ?,
+          invoice_number = ?, 
+          invoice_date = ?, 
+          invoice_status = 1, 
           updated_at = NOW()
         WHERE order_number = ? 
-          AND id = ?
+          AND id IN (${placeholders})
         `,
-        [item.matched_product_id, orderNumber, item.originalItemId]
+        updateParams
       );
-      console.log(`✅ Updated product_id for order_item ${item.originalItemId} to ${item.matched_product_id}`);
-    }
-  }
+      
+      console.log(`✅ Updated invoice details for ${selectedItemIds.length} items in order ${orderNumber}`);
+      
+// Update product_id for all items (regardless of selection)
+for (const item of items) {
+  console.log("🔍 Processing item for product_id update:", {
+    product: item.product,
+    product_id: item.product_id,
+    hasProductId: !!item.product_id,
+    originalItemId: item.originalItemId,
+    hasOriginalItemId: !!item.originalItemId
+  });
   
-  console.log(`✅ Updated ${selectedItemIds.length} selected items in order ${orderNumber} with invoice ${invoiceNumber}`);
+  if (item.product_id) {
+    try {
+      let updateResult;
+      
+      if (item.originalItemId) {
+        // Method 1: Use originalItemId if available
+        console.log(`📝 Using originalItemId: ${item.originalItemId} for ${item.product}`);
+        updateResult = await queryPromise(
+          connection,
+          `
+          UPDATE order_items SET 
+            product_id = ?,
+            updated_at = NOW()
+          WHERE id = ? 
+            AND order_number = ?
+          `,
+          [item.product_id, item.originalItemId, orderNumber]
+        );
+      } else {
+        // Method 2: Match by product name when originalItemId is not available
+        console.log(`🔍 No originalItemId, matching by product name: ${item.product}`);
+        
+        // First, check if we need to update - find existing product_id
+        const existingItem = await queryPromise(
+          connection,
+          `
+          SELECT id, product_id 
+          FROM order_items 
+          WHERE order_number = ? 
+            AND item_name LIKE ?
+          LIMIT 1
+          `,
+          [orderNumber, `%${item.product}%`]
+        );
+        
+        if (existingItem.length > 0) {
+          const existingProductId = existingItem[0].product_id;
+          
+          // Only update if product_id is different or null/0
+          if (!existingProductId || existingProductId === 0 || existingProductId !== item.product_id) {
+            updateResult = await queryPromise(
+              connection,
+              `
+              UPDATE order_items SET 
+                product_id = ?,
+                updated_at = NOW()
+              WHERE id = ? 
+                AND order_number = ?
+              `,
+              [item.product_id, existingItem[0].id, orderNumber]
+            );
+            
+            console.log(`✅ Updated product_id for "${item.product}" from ${existingProductId} to ${item.product_id}`);
+          } else {
+            console.log(`ℹ️ Product_id already set to ${item.product_id} for "${item.product}"`);
+            continue;
+          }
+        } else {
+          console.log(`⚠️ No matching item found in order for "${item.product}"`);
+          continue;
+        }
+      }
+      
+      if (updateResult) {
+        console.log(`✅ Update result for ${item.product}: ${updateResult.affectedRows} rows affected`);
+        
+        if (updateResult.affectedRows === 0) {
+          console.log(`ℹ️ No rows updated for ${item.product}. May already have correct product_id.`);
+        }
+      }
+      
+    } catch (error) {
+      console.error(`❌ Error updating product_id for ${item.product}:`, error.message);
+      // Don't throw, continue with other items
+    }
+  } else {
+    console.log(`⚠️ Skipping ${item.product} - no product_id provided`);
+  }
 }
+    } 
     
     // Update orders table WITH order_mode
     console.log(`🔄 Updating order status in orders table for: ${orderNumber}`);

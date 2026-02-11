@@ -1578,6 +1578,35 @@ router.get('/get-sales-products', async (req, res) => {
 
 
 
+// In your backend (Node.js/Express)
+router.get('/products/find-variant', async (req, res) => {
+  try {
+    const { goods_name, product_type } = req.query;
+    
+    if (!goods_name || !product_type) {
+      return res.status(400).json({ 
+        error: 'goods_name and product_type are required' 
+      });
+    }
+    
+    const [results] = await db.promise().query(
+      'SELECT * FROM products WHERE goods_name = ? AND product_type = ? LIMIT 1',
+      [goods_name, product_type.toUpperCase()]
+    );
+    
+    if (results.length === 0) {
+      return res.status(404).json({ 
+        error: 'Product variant not found' 
+      });
+    }
+    
+    res.json(results[0]);
+  } catch (err) {
+    console.error('Error finding product variant:', err);
+    res.status(500).json({ error: 'Failed to find product variant' });
+  }
+});
+
 
 
 module.exports = router;
