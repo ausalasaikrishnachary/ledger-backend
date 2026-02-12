@@ -312,7 +312,7 @@ router.delete("/accounts/:id", (req, res) => {
 });
 
 
-router.get("/api/get-sales-retailers/:id", (req, res) => {
+router.get("/get-sales-retailers/:id", (req, res) => {
       const staffId = req.params.id;
 
   const query = `
