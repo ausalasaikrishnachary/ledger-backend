@@ -4657,21 +4657,13 @@ router.delete("/transactions/:id", async (req, res) => {
 
         const voucherData = voucherResult[0];
         const transactionType = voucherData.TransactionType || "Sales";
-        const invoiceNumber = voucherData.InvoiceNumber; // Get the InvoiceNumber
+        const invoiceNumber = voucherData.InvoiceNumber;
 
-        // 2️⃣ Get ALL vouchers with the same InvoiceNumber
-        const allVouchers = await queryPromise(
-          connection,
-          "SELECT VoucherID, TransactionType, PartyID, order_number, TotalAmount FROM voucher WHERE InvoiceNumber = ?",
-          [invoiceNumber]
-        );
-
-        console.log(`Found ${allVouchers.length} vouchers with InvoiceNumber: ${invoiceNumber}`);
-
-        // Store all voucher IDs for deletion
-        const allVoucherIds = allVouchers.map(v => v.VoucherID);
-
-        // 3️⃣ Get batch details from voucherdetails table (for the requested voucher)
+        // 2️⃣ Check if this is a CreditNote or DebitNote
+        const isCreditNote = transactionType === "CreditNote";
+        const isDebitNote = transactionType === "DebitNote";
+        
+        // 3️⃣ Get batch details from voucherdetails table
         const batchDetails = await queryPromise(
           connection,
           "SELECT * FROM voucherdetails WHERE voucher_id = ?",
@@ -4679,7 +4671,7 @@ router.delete("/transactions/:id", async (req, res) => {
         );
 
         // -----------------------------------------------------------------------
-        // 4️⃣ Reverse stock based on transaction type (for the requested voucher only)
+        // 4️⃣ Reverse stock based on transaction type
         // -----------------------------------------------------------------------
         if (batchDetails.length > 0) {
           console.log(`Reversing STOCK for ${transactionType}`);
@@ -4720,36 +4712,18 @@ router.delete("/transactions/:id", async (req, res) => {
                   newQuantity = currentQuantity - qty;
                   
                   console.log(`Reversing ${transactionType}: Subtracting ${qty} from stock_in for batch ${item.batch}`);
-                  console.log(`Current: qty=${currentQuantity}, stock_in=${currentStockIn}, stock_out=${currentStockOut}`);
-                  console.log(`New: qty=${newQuantity}, stock_in=${newStockIn}, stock_out=${newStockOut}`);
                 } else if (isStockOut) {
                   // Reverse stock OUT transaction: decrease stock_out and increase quantity
                   newStockOut = Math.max(0, currentStockOut - qty);
                   newQuantity = currentQuantity + qty;
                   
                   console.log(`Reversing ${transactionType}: Subtracting ${qty} from stock_out for batch ${item.batch}`);
-                  console.log(`Current: qty=${currentQuantity}, stock_in=${currentStockIn}, stock_out=${currentStockOut}`);
-                  console.log(`New: qty=${newQuantity}, stock_in=${newStockIn}, stock_out=${newStockOut}`);
                 }
 
                 // Ensure quantities don't go negative
                 newQuantity = Math.max(0, newQuantity);
                 newStockIn = Math.max(0, newStockIn);
                 newStockOut = Math.max(0, newStockOut);
-
-                // Validate that newQuantity is a valid number
-                if (isNaN(newQuantity)) {
-                  console.error(`❌ Invalid quantity calculated: ${newQuantity}. Using current quantity instead.`);
-                  newQuantity = currentQuantity;
-                }
-                if (isNaN(newStockIn)) {
-                  console.error(`❌ Invalid stock_in calculated: ${newStockIn}. Using current stock_in instead.`);
-                  newStockIn = currentStockIn;
-                }
-                if (isNaN(newStockOut)) {
-                  console.error(`❌ Invalid stock_out calculated: ${newStockOut}. Using current stock_out instead.`);
-                  newStockOut = currentStockOut;
-                }
 
                 await queryPromise(
                   connection,
@@ -4761,35 +4735,18 @@ router.delete("/transactions/:id", async (req, res) => {
                   `✔ ${transactionType} reversed batch ${item.batch}: ` +
                   `qty=${newQuantity}, stock_in=${newStockIn}, stock_out=${newStockOut}`
                 );
-              } else {
-                console.warn(`⚠️ Batch ${item.batch} not found for product ${item.product_id} during ${transactionType} reversal`);
-                
-                // If batch doesn't exist but this was a stock IN transaction, we should create it
-                if (isStockIn) {
-                  console.log(`➕ Creating batch ${item.batch} since it doesn't exist but was added in ${transactionType}`);
-                  
-                  await queryPromise(
-                    connection,
-                    `INSERT INTO batches 
-                     (product_id, batch_number, quantity, stock_in, stock_out, created_at, updated_at) 
-                     VALUES (?, ?, 0, 0, 0, NOW(), NOW())`,
-                    [item.product_id, item.batch]
-                  );
-                  console.log(`✔ Created missing batch: ${item.batch}`);
-                }
               }
             }
           }
         }
 
         // -----------------------------------------------------------------------
-        // 5️⃣ Handle order status reversal if this was an invoice from an order
+        // 5️⃣ Handle order status reversal ONLY for Sales/stock transfer
         // -----------------------------------------------------------------------
-        if (voucherData.order_number) {
+        if ((transactionType === "Sales" || transactionType === "stock transfer") && voucherData.order_number) {
           console.log(`🔄 This was an invoice from order ${voucherData.order_number}. Reversing order status...`);
           
           try {
-            // Update order_items table
             await queryPromise(
               connection,
               `
@@ -4803,7 +4760,6 @@ router.delete("/transactions/:id", async (req, res) => {
               [voucherData.order_number, voucherData.InvoiceNumber]
             );
             
-            // Update orders table
             await queryPromise(
               connection,
               `
@@ -4821,12 +4777,11 @@ router.delete("/transactions/:id", async (req, res) => {
             console.log(`✅ Order ${voucherData.order_number} status reverted to 'Pending'`);
           } catch (error) {
             console.error(`⚠️ Error reverting order status:`, error.message);
-            // Don't fail the entire deletion if order reversal fails
           }
         }
 
         // -----------------------------------------------------------------------
-        // 6️⃣ Handle unpaid amount reversal if applicable
+        // 6️⃣ Handle unpaid amount reversal ONLY for Sales/stock transfer/stock inward
         // -----------------------------------------------------------------------
         if ((transactionType === "Sales" || transactionType === "stock transfer" || transactionType === "stock inward") && voucherData.PartyID) {
           console.log(`💰 Reversing unpaid amount for PartyID: ${voucherData.PartyID}`);
@@ -4849,7 +4804,6 @@ router.delete("/transactions/:id", async (req, res) => {
                 const totalAmount = parseFloat(voucherData.TotalAmount) || 0;
                 const newUnpaid = Math.max(0, currentUnpaid - totalAmount);
                 
-                // Check if balance_amount column exists
                 const balanceCheck = await queryPromise(
                   connection,
                   "SHOW COLUMNS FROM accounts LIKE 'balance_amount'"
@@ -4870,8 +4824,6 @@ router.delete("/transactions/:id", async (req, res) => {
                     `,
                     [newUnpaid, newBalanceAmount, voucherData.PartyID]
                   );
-                  
-                  console.log(`✅ Unpaid amount reversed: ${totalAmount}, New unpaid: ${newUnpaid}, New balance: ${newBalanceAmount}`);
                 } else {
                   await queryPromise(
                     connection,
@@ -4883,35 +4835,34 @@ router.delete("/transactions/:id", async (req, res) => {
                     `,
                     [newUnpaid, voucherData.PartyID]
                   );
-                  
-                  console.log(`✅ Unpaid amount reversed: ${totalAmount}, New unpaid: ${newUnpaid}`);
                 }
+                
+                console.log(`✅ Unpaid amount reversed: ${totalAmount}, New unpaid: ${newUnpaid}`);
               }
             }
           } catch (error) {
             console.error(`⚠️ Error reversing unpaid amount:`, error.message);
-            // Don't fail the entire deletion if unpaid reversal fails
           }
         }
 
         // -----------------------------------------------------------------------
-        // 7️⃣ Delete ALL voucherdetails with the same InvoiceNumber
+        // 7️⃣ Delete ONLY this voucher's details, NOT all with same InvoiceNumber
         // -----------------------------------------------------------------------
-        console.log(`Deleting ALL voucherdetails with InvoiceNumber: ${invoiceNumber}`);
+        console.log(`Deleting voucherdetails for VoucherID: ${voucherId}`);
         await queryPromise(
           connection,
-          "DELETE FROM voucherdetails WHERE InvoiceNumber = ?",
-          [invoiceNumber]
+          "DELETE FROM voucherdetails WHERE voucher_id = ?",
+          [voucherId]
         );
 
         // -----------------------------------------------------------------------
-        // 8️⃣ Delete ALL voucher records with the same InvoiceNumber
+        // 8️⃣ Delete ONLY this voucher, NOT all with same InvoiceNumber
         // -----------------------------------------------------------------------
-        console.log(`Deleting ALL vouchers with InvoiceNumber: ${invoiceNumber}`);
+        console.log(`Deleting voucher with VoucherID: ${voucherId}`);
         await queryPromise(
           connection,
-          "DELETE FROM voucher WHERE InvoiceNumber = ?",
-          [invoiceNumber]
+          "DELETE FROM voucher WHERE VoucherID = ?",
+          [voucherId]
         );
 
         // -----------------------------------------------------------------------
@@ -4931,10 +4882,14 @@ router.delete("/transactions/:id", async (req, res) => {
 
           connection.release();
 
-          console.log("✔ All transactions with InvoiceNumber deleted successfully");
+          console.log(`✔ Transaction ${voucherId} (${transactionType}) deleted successfully`);
 
-          let message = "Invoice deleted successfully";
-          if (transactionType === "stock inward") {
+          let message = "";
+          if (isCreditNote) {
+            message = "Credit Note deleted & stock reversed successfully";
+          } else if (isDebitNote) {
+            message = "Debit Note deleted & stock reversed successfully";
+          } else if (transactionType === "stock inward") {
             message = "Stock inward transaction deleted & stock reversed";
           } else if (transactionType === "stock transfer") {
             message = "Stock transfer deleted & stock reversed";
@@ -4944,15 +4899,13 @@ router.delete("/transactions/:id", async (req, res) => {
 
           res.send({
             success: true,
-            message: `${message} (and all related transactions with InvoiceNumber: ${invoiceNumber})`,
+            message: message,
             voucherId,
             invoiceNumber,
             transactionType,
-            allDeletedVoucherIds: allVoucherIds,
-            deletedCount: allVouchers.length,
-            stockReverted: true,
-            orderReverted: voucherData.order_number ? true : false,
-            unpaidReverted: voucherData.PartyID ? true : false
+            stockReverted: batchDetails.length > 0,
+            orderReverted: (transactionType === "Sales" || transactionType === "stock transfer") && voucherData.order_number ? true : false,
+            unpaidReverted: (transactionType === "Sales" || transactionType === "stock transfer" || transactionType === "stock inward") && voucherData.PartyID ? true : false
           });
         });
       } catch (error) {

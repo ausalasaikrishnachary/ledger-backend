@@ -74,42 +74,88 @@ router.get('/retailers', async (req, res) => {
  */
 router.get('/salesvisits', async (req, res) => {
   try {
-    const rows = await query('SELECT * FROM sales_visits ORDER BY created_at DESC');
-const data = rows.map(v => ({
-  ...v,
-  image_url: v.image_filename
-    ? `${req.protocol}://${req.get("host")}/uploads/visits/${v.image_filename}`
-    : null
-}));
+    const rows = await query(`
+      SELECT 
+        id,
+        retailer_id,
+        retailer_name,
+        staff_id,
+        staff_name,
+        visit_type,
+        visit_outcome,
+        sales_amount,
+        transaction_type,
+        description,
+        location,
+        image_filename,
+        DATE_FORMAT(date, '%Y-%m-%d') AS date,
+        created_at,
+        updated_at
+      FROM sales_visits
+      ORDER BY created_at DESC
+    `);
 
-res.json({ success: true, data });
+    const data = rows.map(v => ({
+      ...v,
+      image_url: v.image_filename
+        ? `${req.protocol}://${req.get("host")}/uploads/visits/${v.image_filename}`
+        : null
+    }));
+
+    res.json({ success: true, data });
+
   } catch (err) {
     console.error(err);
     res.status(500).json({ success: false, error: 'Server error' });
   }
 });
 
-/**
- * GET /api/salesvisits/:id
- */
 router.get('/salesvisits/:id', async (req, res) => {
   const { id } = req.params;
-  try {
-    const rows = await query('SELECT * FROM sales_visits WHERE id = ?', [id]);
-    if (!rows.length) return res.status(404).json({ success: false, error: 'Not found' });
-const data = rows.map(v => ({
-  ...v,
-  image_url: v.image_filename
-    ? `${req.protocol}://${req.get("host")}/uploads/visits/${v.image_filename}`
-    : null
-}));
 
-res.json({ success: true, data });
+  try {
+    const rows = await query(`
+      SELECT 
+        id,
+        retailer_id,
+        retailer_name,
+        staff_id,
+        staff_name,
+        visit_type,
+        visit_outcome,
+        sales_amount,
+        transaction_type,
+        description,
+        location,
+        image_filename,
+        DATE_FORMAT(date, '%Y-%m-%d') AS date,
+        created_at,
+        updated_at
+      FROM sales_visits
+      WHERE id = ?
+    `, [id]);
+
+    if (!rows.length) {
+      return res.status(404).json({ success: false, error: 'Not found' });
+    }
+
+    const v = rows[0];
+
+    const data = {
+      ...v,
+      image_url: v.image_filename
+        ? `${req.protocol}://${req.get("host")}/uploads/visits/${v.image_filename}`
+        : null
+    };
+
+    res.json({ success: true, data });
+
   } catch (err) {
     console.error(err);
     res.status(500).json({ success: false, error: 'Server error' });
   }
 });
+
 
 // routes/location.js or inside your routes file
 router.get('/reverse-geocode', async (req, res) => {
@@ -161,7 +207,8 @@ router.post('/salesvisits', upload.single('image'), async (req, res) => {
       sales_amount,
       transaction_type,
       description,
-      location
+      location,
+      date
     } = req.body;
 
     // ✅ Validate required fields
@@ -188,6 +235,9 @@ router.post('/salesvisits', upload.single('image'), async (req, res) => {
     // ✅ Handle image safely
     const image_filename = req.file ? req.file.filename : null;
 
+    // ✅ Use provided date or default to current date
+    const visitDate = date || new Date().toISOString().split('T')[0];
+
     const sql = `
       INSERT INTO sales_visits (
         retailer_id,
@@ -201,9 +251,10 @@ router.post('/salesvisits', upload.single('image'), async (req, res) => {
         description,
         location,
         image_filename,
+        date,
         created_at
       )
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW())
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW())
     `;
 
     const params = [
@@ -217,7 +268,8 @@ router.post('/salesvisits', upload.single('image'), async (req, res) => {
       transaction_type || null,
       description || null,
       location || null,
-      image_filename
+      image_filename,
+      visitDate
     ];
 
     const result = await query(sql, params);
@@ -243,6 +295,8 @@ router.post('/salesvisits', upload.single('image'), async (req, res) => {
 
 router.put('/salesvisits/:id', upload.single('image'), async (req, res) => {
   const { id } = req.params;
+  console.log("req.body:", req.body);
+  
   try {
     const {
       retailer_id,
@@ -254,13 +308,16 @@ router.put('/salesvisits/:id', upload.single('image'), async (req, res) => {
       sales_amount,
       transaction_type,
       description,
-      location  
+      location,
+      date,
+      remove_image
     } = req.body;
 
     let imageUpdate = '';
     let params = [];
     
     if (req.file) {
+      // If new image uploaded
       imageUpdate = ', image_filename = ?';
       params = [
         retailer_id,
@@ -272,11 +329,15 @@ router.put('/salesvisits/:id', upload.single('image'), async (req, res) => {
         sales_amount || null,
         transaction_type || null,
         description || null,
-        location || null,      // Add location
-        req.file.filename,     // Add new image filename
+        location || null,
+        date || null,
+        req.file.filename,
         id
       ];
-    } else {
+    } 
+    else if (remove_image === 'true') {
+      // If image should be removed
+      imageUpdate = ', image_filename = NULL';
       params = [
         retailer_id,
         retailer_name,
@@ -287,7 +348,25 @@ router.put('/salesvisits/:id', upload.single('image'), async (req, res) => {
         sales_amount || null,
         transaction_type || null,
         description || null,
-        location || null,      // Add location
+        location || null,
+        date || null,
+        id
+      ];
+    } 
+    else {
+      // No image change
+      params = [
+        retailer_id,
+        retailer_name,
+        staff_id,
+        staff_name,
+        visit_type,
+        visit_outcome,
+        sales_amount || null,
+        transaction_type || null,
+        description || null,
+        location || null,
+        date || null,
         id
       ];
     }
@@ -296,23 +375,25 @@ router.put('/salesvisits/:id', upload.single('image'), async (req, res) => {
       UPDATE sales_visits SET
       retailer_id = ?, retailer_name = ?, staff_id = ?, staff_name = ?,
       visit_type = ?, visit_outcome = ?, sales_amount = ?, 
-      transaction_type = ?, description = ?, location = ?${imageUpdate}
+      transaction_type = ?, description = ?, location = ?,
+      date = ?${imageUpdate}
       WHERE id = ?
     `;
 
     await query(sql, params);
+    
     const updated = await query('SELECT * FROM sales_visits WHERE id = ?', [id]);
-const visit = updated[0];
+    const visit = updated[0];
 
-res.json({
-  success: true,
-  data: {
-    ...visit,
-    image_url: visit.image_filename
-      ? `${req.protocol}://${req.get("host")}/uploads/visits/${visit.image_filename}`
-      : null
-  }
-});
+    res.json({
+      success: true,
+      data: {
+        ...visit,
+        image_url: visit.image_filename
+          ? `${req.protocol}://${req.get("host")}/uploads/visits/${visit.image_filename}`
+          : null
+      }
+    });
   } catch (err) {
     console.error(err);
     res.status(500).json({ success: false, error: 'Server error' });
