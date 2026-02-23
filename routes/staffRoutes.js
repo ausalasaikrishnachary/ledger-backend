@@ -212,6 +212,7 @@ router.get("/staff", (req, res) => {
       address,
       role, 
       designation,
+      password,
       department,
       joining_date,
       incentive_percent,
@@ -238,7 +239,7 @@ router.get("/staff", (req, res) => {
   });
 });
 
-// Get Single Staff Member - UPDATED: Added all new fields
+// Get Single Staff Member - UPDATED: Added password field
 router.get("/staff/:id", (req, res) => {
   const sql = `
     SELECT 
@@ -265,7 +266,8 @@ router.get("/staff/:id", (req, res) => {
       pan as pan_number,
       blood_group,
       emergency_contact,
-      status 
+      status,
+      password  /* Add this line */
     FROM accounts 
     WHERE id = ? AND \`group\` = 'staff'
   `;
@@ -279,6 +281,7 @@ router.get("/staff/:id", (req, res) => {
       return res.status(404).send({ error: "Staff member not found" });
     }
     
+    console.log("Staff data with password:", results[0]); // For debugging
     res.send(results[0]);
   });
 });
