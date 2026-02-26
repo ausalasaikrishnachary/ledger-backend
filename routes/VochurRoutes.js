@@ -1640,7 +1640,6 @@ router.delete("/transactions/:id", async (req, res) => {
 });
 
 
-
 // 19-11
 // Get transaction by ID - Single API endpoint
 router.get("/transactions/:id", (req, res) => {
@@ -1736,7 +1735,7 @@ router.get("/transactions/:id", (req, res) => {
 
 router.get("/transactions", (req, res) => {
 
-  // Fetch vouchers + customer details
+  // Fetch vouchers + customer details - FILTERED to show only rows with empty/null order_number
   const voucherQuery = `
     SELECT 
       v.*,
@@ -1758,6 +1757,8 @@ router.get("/transactions", (req, res) => {
       a.shipping_pin_code
     FROM voucher v
     LEFT JOIN accounts a ON v.PartyID = a.id
+    WHERE v.order_number IS NULL 
+      OR v.order_number = ''
     ORDER BY v.VoucherID DESC
   `;
 
@@ -3187,7 +3188,6 @@ else {
     ]);
   }
 
-  // STOCK MANAGEMENT - For Sales and stock transfer transactions
   for (const i of items) {
     if (transactionType === "Sales" || transactionType === "DebitNote" || transactionType === "stock transfer") {
       
