@@ -1811,6 +1811,10 @@ router.get("/transactions", (req, res) => {
   });
 });
 
+
+
+
+
 router.get('/invoices/:invoiceNumber', async (req, res) => {
   let connection;
 
@@ -3081,67 +3085,72 @@ else {
   balanceAmount = parseFloat(transactionData.balance_amount) || 0;
 }
   
-  // VOUCHER DATA with FLASH OFFER field
-  const voucherData = {
-    VoucherID: nextVoucherId,
-    TransactionType: transactionType,
-    data_type: dataType,
-    VchNo: vchNo,
-    InvoiceNumber: invoiceNumber,
-    order_number: orderNumber, 
-    order_mode: orderMode,
-    flash_offer: items.some(item => item.flash_offer === 1) ? 1 : 0,
-    due_date: transactionData.due_date || null,
-    Date: transactionData.Date || new Date().toISOString().split("T")[0],
-    PaymentTerms: transactionData.PaymentTerms || "Immediate",
-    Freight: parseFloat(transactionData.Freight) || 0,
-    TotalPacks: items.length,
-    TaxAmount: totalGST,
-    Subtotal: taxableAmount,
-    BillSundryAmount: parseFloat(transactionData.BillSundryAmount) || 0,
-    TotalAmount: grandTotal,
-    paid_amount: parseFloat(transactionData.paid_amount) || grandTotal,
-    total_discount: totalDiscount,
-    total_credit_charge: totalCreditCharge,
-    AccountID: accountID,
-    AccountName: account_name,      
-    business_name: business_name,   
-    PartyID: partyID,
-    retailer_mobile: transactionData.customerInfo?.phone || 
-                transactionData.fullAccountDetails?.mobile_number || 0,
-    PartyName: partyName,
-    BasicAmount: taxableAmount,
-    ValueOfGoods: taxableAmount,
-    EntryDate: new Date(),
-    SGSTPercentage: isKacha ? 0 : (parseFloat(transactionData.SGSTPercentage) || 0),
-    CGSTPercentage: isKacha ? 0 : (parseFloat(transactionData.CGSTPercentage) || 0),
-    IGSTPercentage: isKacha ? 0 : (parseFloat(transactionData.IGSTPercentage) || (items[0]?.igst || 0)),
-    SGSTAmount: isKacha ? 0 : (parseFloat(transactionData.SGSTAmount) || 0),
-    CGSTAmount: isKacha ? 0 : (parseFloat(transactionData.CGSTAmount) || 0),
-    IGSTAmount: isKacha ? 0 : (parseFloat(transactionData.IGSTAmount) || 0),
-    description_preview: transactionData.description_preview || 
-                        (transactionData.description ? 
-                         transactionData.description.substring(0, 200) : ''),
-    note_preview: transactionData.note_preview || 
-                 (transactionData.note ? transactionData.note.substring(0, 200) : ''),
-    TaxSystem: isKacha ? "KACHA_NO_GST" : (transactionData.TaxSystem || "GST"),
-    product_id: items[0]?.product_id || null,
-    batch_id: voucherBatchNumber,
-    DC: transactionType === "CreditNote" ? "C" : "D",
-    ChequeNo: transactionData.ChequeNo || "",
-    ChequeDate: transactionData.ChequeDate || null,
-    BankName: transactionData.BankName || "",
-    staffid: transactionData.staffid || null,
-    assigned_staff: transactionData.assigned_staff || null,
-    staff_incentive: staffIncentive,
-    created_at: new Date(),
-    balance_amount: balanceAmount, // This now has the correct value
-    status: transactionData.status || "active",
-    paid_date: transactionData.paid_date || null,
-    pdf_data: transactionData.pdf_data || null,
-    pdf_file_name: transactionData.pdf_file_name || null,
-    pdf_created_at: transactionData.pdf_created_at || null
-  };
+// VOUCHER DATA with FLASH OFFER field
+const voucherData = {
+  VoucherID: nextVoucherId,
+  TransactionType: transactionType,
+  data_type: dataType,
+  VchNo: vchNo,
+  InvoiceNumber: invoiceNumber,
+  order_number: orderNumber, 
+  order_mode: orderMode,
+  flash_offer: items.some(item => item.flash_offer === 1) ? 1 : 0,
+  due_date: transactionData.due_date || null,
+  Date: transactionData.Date || new Date().toISOString().split("T")[0],
+  PaymentTerms: transactionData.PaymentTerms || "Immediate",
+  Freight: parseFloat(transactionData.Freight) || 0,
+  TotalPacks: items.length,
+  TaxAmount: totalGST,
+  Subtotal: taxableAmount,
+  BillSundryAmount: parseFloat(transactionData.BillSundryAmount) || 0,
+  TotalAmount: grandTotal,
+  paid_amount: parseFloat(transactionData.paid_amount) || grandTotal,
+  total_discount: totalDiscount,
+  total_credit_charge: totalCreditCharge,
+  AccountID: accountID,
+  AccountName: account_name,      
+  business_name: business_name,   
+  PartyID: partyID,
+  retailer_mobile: transactionData.customerInfo?.phone || 
+              transactionData.fullAccountDetails?.mobile_number || 0,
+  PartyName: partyName,
+  BasicAmount: taxableAmount,
+  ValueOfGoods: taxableAmount,
+  EntryDate: new Date(),
+  SGSTPercentage: isKacha ? 0 : (parseFloat(transactionData.SGSTPercentage) || 0),
+  CGSTPercentage: isKacha ? 0 : (parseFloat(transactionData.CGSTPercentage) || 0),
+  IGSTPercentage: isKacha ? 0 : (parseFloat(transactionData.IGSTPercentage) || (items[0]?.igst || 0)),
+  SGSTAmount: isKacha ? 0 : (parseFloat(transactionData.SGSTAmount) || 0),
+  CGSTAmount: isKacha ? 0 : (parseFloat(transactionData.CGSTAmount) || 0),
+  // FIX: Use totalIGST from transactionData instead of items[0]?.igst
+  IGSTAmount: isKacha ? 0 : (parseFloat(transactionData.totalIGST) || // Try totalIGST first
+                           parseFloat(transactionData.IGSTAmount) || // Then try IGSTAmount
+                           
+                          
+                           0),
+  description_preview: transactionData.description_preview || 
+                      (transactionData.description ? 
+                       transactionData.description.substring(0, 200) : ''),
+  note_preview: transactionData.note_preview || 
+               (transactionData.note ? transactionData.note.substring(0, 200) : ''),
+  TaxSystem: isKacha ? "KACHA_NO_GST" : (transactionData.TaxSystem || "GST"),
+  product_id: items[0]?.product_id || null,
+  batch_id: voucherBatchNumber,
+  DC: transactionType === "CreditNote" ? "C" : "D",
+  ChequeNo: transactionData.ChequeNo || "",
+  ChequeDate: transactionData.ChequeDate || null,
+  BankName: transactionData.BankName || "",
+  staffid: transactionData.staffid || null,
+  assigned_staff: transactionData.assigned_staff || null,
+  staff_incentive: staffIncentive,
+  created_at: new Date(),
+  balance_amount: balanceAmount,
+  status: transactionData.status || "active",
+  paid_date: transactionData.paid_date || null,
+  pdf_data: transactionData.pdf_data || null,
+  pdf_file_name: transactionData.pdf_file_name || null,
+  pdf_created_at: transactionData.pdf_created_at || null
+};
 
   console.log(`🔍 FINAL Voucher Data - TransactionType: ${transactionType}, balance_amount: ${voucherData.balance_amount}`);
 
@@ -3900,5 +3909,83 @@ router.get("/voucher-list", (req, res) => {
   });
 });
 
+
+
+
+router.get("/gstreport", (req, res) => {
+
+  // Fetch vouchers + customer details (NO order_number filter)
+  const voucherQuery = `
+    SELECT 
+      v.*,
+      a.business_name,
+      a.email,
+      a.mobile_number,
+      a.gstin,
+      a.billing_address_line1,
+      a.billing_address_line2,
+      a.billing_city,
+      a.billing_state,
+      a.billing_country,
+      a.billing_pin_code,
+      a.shipping_address_line1,
+      a.shipping_address_line2,
+      a.shipping_city,
+      a.shipping_state,
+      a.shipping_country,
+      a.shipping_pin_code
+    FROM voucher v
+    LEFT JOIN accounts a ON v.PartyID = a.id
+    ORDER BY v.VoucherID DESC
+  `;
+
+  db.query(voucherQuery, (err, vouchers) => {
+    if (err) {
+      console.error("Error fetching vouchers:", err);
+      return res.status(500).send(err);
+    }
+
+    // Fetch all voucher details
+    const detailsQuery = `
+      SELECT 
+        vd.*,
+        p.goods_name,
+        p.unit
+      FROM voucherdetails vd
+      LEFT JOIN products p ON vd.product_id = p.id
+    `;
+
+    db.query(detailsQuery, (err, details) => {
+      if (err) {
+        console.error("Error fetching voucher details:", err);
+        return res.status(500).send(err);
+      }
+
+      // Group details by voucher_id
+      const detailsByVoucher = {};
+      details.forEach(row => {
+        if (!detailsByVoucher[row.voucher_id]) {
+          detailsByVoucher[row.voucher_id] = [];
+        }
+        detailsByVoucher[row.voucher_id].push(row);
+      });
+
+      // Attach details to vouchers
+      const finalResult = vouchers.map(v => {
+        const vDetails = detailsByVoucher[v.VoucherID] || [];
+
+        return {
+          ...v,
+          items: vDetails,
+          totalItems: vDetails.length,
+          totalQuantity: vDetails.reduce((sum, i) => sum + (parseFloat(i.quantity) || 0), 0),
+          totalAmount: vDetails.reduce((sum, i) => sum + (parseFloat(i.total) || 0), 0)
+        };
+      });
+
+      res.send(finalResult);
+    });
+  });
+});
 module.exports = router;
 
