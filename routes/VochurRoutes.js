@@ -3987,5 +3987,30 @@ router.get("/gstreport", (req, res) => {
     });
   });
 });
+
+
+router.delete("/clear-cart/:customerId", async (req, res) => {
+  const { customerId } = req.params;
+
+  if (!customerId) {
+    return res.status(400).json({ success: false, message: "customerId is required" });
+  }
+
+  try {
+    const [result] = await db.query(
+      "DELETE FROM cart WHERE customer_id = ?",
+      [customerId]
+    );
+
+    res.json({
+      success: true,
+      message: `Cart cleared successfully. ${result.affectedRows} item(s) removed.`,
+      deletedCount: result.affectedRows
+    });
+  } catch (err) {
+    console.error("Error clearing cart:", err);
+    res.status(500).json({ success: false, message: "Failed to clear cart", error: err.message });
+  }
+});
 module.exports = router;
 
