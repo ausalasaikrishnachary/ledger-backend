@@ -2257,16 +2257,20 @@ router.put("/transactions/:id", async (req, res) => {
             console.log(`✔ ${originalTransactionType} applied - added stock to batch ${item.batch}`);
 
           } else {
-  console.log(`⚠️ Allowing negative stock for batch ${item.batch}. Current: ${currentQuantity}, Deducting: ${itemQuantity}, New: ${currentQuantity - itemQuantity}`);
-  
-  await queryPromise(
-    connection,
-    "UPDATE batches SET quantity = quantity - ?, stock_out = stock_out + ?, updated_at = NOW() WHERE product_id = ? AND batch_number = ?",
-    [itemQuantity, itemQuantity, item.product_id, item.batch]
-  );
+            if (currentQuantity < itemQuantity) {
+              throw new Error(
+                `Insufficient quantity for ${originalTransactionType} update in batch ${item.batch}. Available: ${currentQuantity}, Required: ${item.quantity}`
+              );
+            }
 
-  console.log(`✔ ${originalTransactionType} applied - reduced stock from batch ${item.batch} (negative stock allowed)`);
-}
+            await queryPromise(
+              connection,
+              "UPDATE batches SET quantity = quantity - ?, stock_out = stock_out + ?, updated_at = NOW() WHERE product_id = ? AND batch_number = ?",
+              [itemQuantity, itemQuantity, item.product_id, item.batch]
+            );
+
+            console.log(`✔ ${originalTransactionType} applied - reduced stock from batch ${item.batch}`);
+          }
         }
 
         // -------------------------------------------------------------------
@@ -3211,64 +3215,63 @@ const voucherData = {
       const shouldUseSpecificBatch = specificBatch && specificBatch !== "DEFAULT";
       const isFromOrder = orderNumber;
       
-    if (shouldUseSpecificBatch) {
-  console.log(`🔍 Deducting from specific batch: ${specificBatch} for product ${i.product_id}`);
-  
-  try {
-    // First check if batch exists (don't check quantity)
-    const batchExists = await queryPromise(
-      connection,
-      `
-      SELECT batch_number, quantity 
-      FROM batches 
-      WHERE product_id = ? 
-        AND batch_number = ?
-      `,
-      [i.product_id, specificBatch]
-    );
-    
-    if (batchExists.length === 0) {
-      // Batch doesn't exist - create it with negative quantity
-      console.log(`⚠️ Batch ${specificBatch} not found. Creating with negative quantity...`);
-      
-      await queryPromise(
-        connection,
-        `
-        INSERT INTO batches (product_id, batch_number, quantity, stock_out, created_at, updated_at)
-        VALUES (?, ?, ?, ?, NOW(), NOW())
-        `,
-        [i.product_id, specificBatch, -remainingQuantity, remainingQuantity]
-      );
-      
-      console.log(`✅ Created new batch ${specificBatch} with quantity -${remainingQuantity}`);
-    } else {
-      // Batch exists - update quantity (allow negative)
-      const currentQty = batchExists[0].quantity;
-      console.log(`📊 Current quantity for batch ${specificBatch}: ${currentQty}`);
-      console.log(`➖ Deducting ${remainingQuantity} (will become ${currentQty - remainingQuantity})`);
-      
-      await queryPromise(
-        connection,
-        `
-        UPDATE batches 
-          SET quantity = quantity - ?, 
-              stock_out = stock_out + ?, 
-              updated_at = NOW()
-        WHERE product_id = ? 
-          AND batch_number = ?
-        `,
-        [remainingQuantity, remainingQuantity, i.product_id, specificBatch]
-      );
-    }
-    
-    console.log(`✅ Successfully deducted ${remainingQuantity} from batch ${specificBatch} (negative stock allowed)`);
-    remainingQuantity = 0;
-    
-  } catch (error) {
-    console.error(`❌ Error with specific batch ${specificBatch}:`, error.message);
-    throw error;
-  }
-} else if (isFromOrder) {
+      if (shouldUseSpecificBatch) {
+        console.log(`🔍 Deducting from specific batch: ${specificBatch} for product ${i.product_id}`);
+        
+        try {
+          const batchCheck = await queryPromise(
+            connection,
+            `
+            SELECT batch_number, quantity 
+            FROM batches 
+            WHERE product_id = ? 
+              AND batch_number = ? 
+              AND quantity >= ?
+            `,
+            [i.product_id, specificBatch, remainingQuantity]
+          );
+          
+          if (batchCheck.length === 0) {
+            const batchExists = await queryPromise(
+              connection,
+              `
+              SELECT batch_number, quantity 
+              FROM batches 
+              WHERE product_id = ? 
+                AND batch_number = ?
+              `,
+              [i.product_id, specificBatch]
+            );
+            
+            if (batchExists.length === 0) {
+              throw new Error(`Batch ${specificBatch} not found for product ID ${i.product_id}`);
+            } else {
+              throw new Error(`Insufficient stock in batch ${specificBatch} for product ID ${i.product_id}. Available: ${batchExists[0].quantity}, Required: ${remainingQuantity}`);
+            }
+          }
+          
+          await queryPromise(
+            connection,
+            `
+            UPDATE batches 
+              SET quantity = quantity - ?, 
+                  stock_out = stock_out + ?, 
+                  updated_at = NOW()
+            WHERE product_id = ? 
+              AND batch_number = ?
+            `,
+            [remainingQuantity, remainingQuantity, i.product_id, specificBatch]
+          );
+          
+          console.log(`✅ Successfully deducted ${remainingQuantity} from batch ${specificBatch}`);
+          remainingQuantity = 0;
+          
+        } catch (error) {
+          console.error(`❌ Error with specific batch ${specificBatch}:`, error.message);
+          throw error;
+        }
+        
+      } else if (isFromOrder) {
         // Order-based sale - use FIFO with mfg_date
         console.log(`📦 Order-based sale - Using FIFO with MFG date for product ${i.product_id}`);
         
@@ -3319,59 +3322,57 @@ const voucherData = {
           }
         }
         
-    } else {
-  console.log(`🛍️ Regular sale for product ${i.product_id} - allowing negative stock`);
-  
-  const defaultBatch = "DEFAULT";
-  
-  const batchExists = await queryPromise(
-    connection,
-    `
-    SELECT batch_number, quantity 
-    FROM batches 
-    WHERE product_id = ? 
-      AND batch_number = ?
-    `,
-    [i.product_id, defaultBatch]
-  );
-  
-  if (batchExists.length === 0) {
-    // Create DEFAULT batch with negative quantity
-    console.log(`⚠️ DEFAULT batch not found. Creating with negative quantity...`);
-    
-    await queryPromise(
-      connection,
-      `
-      INSERT INTO batches (product_id, batch_number, quantity, stock_out, created_at, updated_at)
-      VALUES (?, ?, ?, ?, NOW(), NOW())
-      `,
-      [i.product_id, defaultBatch, -remainingQuantity, remainingQuantity]
-    );
-    
-    console.log(`✅ Created DEFAULT batch with quantity -${remainingQuantity}`);
-  } else {
-    // Update DEFAULT batch (allow negative)
-    const currentQty = batchExists[0].quantity;
-    console.log(`📊 Current DEFAULT batch quantity: ${currentQty}`);
-    console.log(`➖ Deducting ${remainingQuantity} (will become ${currentQty - remainingQuantity})`);
-    
-    await queryPromise(
-      connection,
-      `
-      UPDATE batches 
-        SET quantity = quantity - ?, 
-            stock_out = stock_out + ?, 
-            updated_at = NOW()
-      WHERE product_id = ? 
-        AND batch_number = ?
-      `,
-      [remainingQuantity, remainingQuantity, i.product_id, defaultBatch]
-    );
-  }
-  
-  console.log(`✅ Successfully deducted ${remainingQuantity} using DEFAULT batch (negative stock allowed)`);
-  remainingQuantity = 0;
-}
+      } else {
+        // Regular sale (not from order)
+        console.log(`🛍️ Regular sale - Using any available stock for product ${i.product_id}`);
+        
+        const batches = await queryPromise(
+          connection,
+          `
+          SELECT batch_number, quantity
+          FROM batches 
+          WHERE product_id = ? 
+            AND quantity > 0 
+          ORDER BY created_at ASC
+          `,
+          [i.product_id]
+        );
+        
+        console.log(`📊 Found ${batches.length} batches for product ${i.product_id}`);
+        
+        if (batches.length === 0) {
+          throw new Error(`No stock available for product ID ${i.product_id}`);
+        }
+        
+        for (const batch of batches) {
+          if (remainingQuantity <= 0) break;
+          
+          const batchQtyAvailable = batch.quantity;
+          const batchNumber = batch.batch_number;
+          
+          const deductQty = Math.min(remainingQuantity, batchQtyAvailable);
+          
+          if (deductQty > 0) {
+            console.log(`➖ Deducting ${deductQty} from batch ${batchNumber}`);
+            
+            await queryPromise(
+              connection,
+              `
+              UPDATE batches 
+                SET quantity = quantity - ?, 
+                    stock_out = stock_out + ?, 
+                    updated_at = NOW()
+              WHERE product_id = ? 
+                AND batch_number = ? 
+                AND quantity >= ?
+              `,
+              [deductQty, deductQty, i.product_id, batchNumber, deductQty]
+            );
+            
+            remainingQuantity -= deductQty;
+          }
+        }
+      }
       
       if (remainingQuantity > 0) {
         throw new Error(`Insufficient stock for product ID ${i.product_id}. Required: ${i.stock_deduction_quantity || i.quantity}, Fulfilled: ${(i.stock_deduction_quantity || i.quantity) - remainingQuantity}, Shortage: ${remainingQuantity} units`);
