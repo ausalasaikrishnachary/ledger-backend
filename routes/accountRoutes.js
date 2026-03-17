@@ -55,8 +55,10 @@ router.post("/accounts", async (req, res) => {
     staffid,
     entity_type,
     group,
-    discount = 0,    // default 0
-    target = 100000, // Now lowercase, default 100000
+    discount = 0,   
+    target = 100000, 
+    opening_balance = 0,
+     opening_balance_type, 
     ...otherData
   } = cleanRequestBody;
 
@@ -68,8 +70,6 @@ router.post("/accounts", async (req, res) => {
     role = 'supplier';
   }
 
-  // Prepare data object for DB insertion
-  // Use 'Target' (uppercase) for database column since that's what your table expects
   const data = {
     name,
     email,
@@ -81,7 +81,9 @@ router.post("/accounts", async (req, res) => {
     entity_type,
     group,
     discount,
-    Target: target, // Map lowercase target to uppercase Target for DB
+    Target: target, 
+    opening_balance,
+    opening_balance_type, 
     ...otherData
   };
   
