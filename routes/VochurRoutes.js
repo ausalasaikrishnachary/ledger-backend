@@ -935,15 +935,11 @@ router.put("/debitnoteupdate/:id", async (req, res) => {
             throw new Error(`Debit Note amount (${newDebitNoteTotal}) cannot exceed original Purchase amount (${originalPurchaseTotal})`);
           }
 
-          // CORRECT FORMULA: Purchase Balance after update = Purchase Total - New Debit Note Total
-          // This gives the remaining amount after this debit note
           newPurchaseBalance = originalPurchaseTotal - newDebitNoteTotal;
           
           // Ensure balance doesn't go negative
           newPurchaseBalance = Math.max(0, newPurchaseBalance);
           
-          // Debit Note's balance_amount should be the SAME as the updated Purchase balance
-          // Both represent the remaining amount after this debit note
           debitNoteBalanceAmount = newPurchaseBalance;
           
           console.log("📊 Balance Calculations - Results:", {
@@ -2147,26 +2143,42 @@ router.put("/transactions/:id", async (req, res) => {
         let invoiceNumber =
           updateData.invoiceNumber || originalVoucher[0].InvoiceNumber;
 
-        // 🔥 UPDATED: Include staff fields in the UPDATE query
+        // 🔥 UPDATED: Added Party fields and Staff fields
         await queryPromise(
           connection,
           `UPDATE voucher 
-           SET VchNo = ?, InvoiceNumber = ?, Date = ?, PartyName = ?, 
-               BasicAmount = ?, TaxAmount = ?, TotalAmount = ?,
-               staffid = ?, assigned_staff = ?  -- 🔥 NEW STAFF FIELDS
+           SET VchNo = ?, 
+               InvoiceNumber = ?, 
+               Date = ?, 
+               PartyID = ?,
+               AccountID = ?,
+               AccountName = ?,
+               PartyName = ?, 
+               business_name = ?,
+               BasicAmount = ?, 
+               TaxAmount = ?, 
+               TotalAmount = ?,
+               staffid = ?, 
+               assigned_staff = ?
            WHERE VoucherID = ?`,
           [
             vchNo,
             invoiceNumber,
             updateData.invoiceDate || originalVoucher[0].Date,
-            updateData.supplierInfo?.name || originalVoucher[0].PartyName,
+            // 🔥 ADDED: Party fields
+            updateData.PartyID || updateData.selectedSupplierId || originalVoucher[0].PartyID,
+            updateData.AccountID || updateData.supplierInfo?.accountId || originalVoucher[0].AccountID,
+            updateData.AccountName || updateData.account_name || updateData.supplierInfo?.account_name || originalVoucher[0].AccountName,
+            updateData.PartyName || updateData.supplierInfo?.name || originalVoucher[0].PartyName,
+            updateData.business_name || updateData.supplierInfo?.business_name || originalVoucher[0].business_name,
+            // Amount fields
             parseFloat(updateData.taxableAmount) ||
             parseFloat(originalVoucher[0].BasicAmount),
             parseFloat(updateData.totalGST) ||
             parseFloat(originalVoucher[0].TaxAmount),
             parseFloat(updateData.grandTotal) ||
             parseFloat(originalVoucher[0].TotalAmount),
-            // 🔥 NEW: Staff data
+            // 🔥 ADDED: Staff fields
             updateData.selectedStaffId || updateData.staffid || originalVoucher[0].staffid,
             updateData.assigned_staff || originalVoucher[0].assigned_staff,
             voucherId,
@@ -2576,7 +2588,8 @@ const processTransaction = async (transactionData, transactionType, connection, 
         staff_incentive: itemStaffIncentive,
         flash_offer: flashOffer,
         buy_quantity: buyQuantity,
-        get_quantity: getQuantity
+        get_quantity: getQuantity,
+        hsn_code: i.hsn_code || ""  // ✅ ADD
       };
     } else {
       const gstPercentage = parseFloat(i.gst) || 0;
@@ -2606,7 +2619,8 @@ const processTransaction = async (transactionData, transactionType, connection, 
         staff_incentive: itemStaffIncentive,
         flash_offer: flashOffer,
         buy_quantity: buyQuantity,
-        get_quantity: getQuantity
+        get_quantity: getQuantity,
+        hsn_code: i.hsn_code || ""  // ✅ ADD
       };
     }
   });
@@ -3087,6 +3101,7 @@ const voucherData = {
   TransactionType: transactionType,
   data_type: dataType,
   VchNo: vchNo,
+  hsn_code: transactionData.batchDetails?.[0]?.hsn_code || null,
   InvoiceNumber: invoiceNumber,
   order_number: orderNumber, 
   order_mode: orderMode,
@@ -3145,7 +3160,12 @@ const voucherData = {
   paid_date: transactionData.paid_date || null,
   pdf_data: transactionData.pdf_data || null,
   pdf_file_name: transactionData.pdf_file_name || null,
-  pdf_created_at: transactionData.pdf_created_at || null
+  pdf_created_at: transactionData.pdf_created_at || null,
+   hsn_code: items[0]?.hsn_code || 
+            transactionData.items?.[0]?.hsn_code ||
+           
+            transactionData.batch_details?.[0]?.hsn_code ||
+            null,
 };
 
   console.log(`🔍 FINAL Voucher Data - TransactionType: ${transactionType}, balance_amount: ${voucherData.balance_amount}`);
