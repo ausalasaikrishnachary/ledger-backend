@@ -14,37 +14,25 @@ const toMySQLDateTime = (value) => {
 
 // --------------------- CREATE ACCOUNT ---------------------
 router.post("/accounts", async (req, res) => {
-  // Clean the request body first - handle case inconsistencies
+  // Clean request body
   const cleanRequestBody = {};
   const processedKeys = new Set();
   
-  // Process all keys in request body, handling case inconsistencies
   Object.keys(req.body).forEach(key => {
     const lowerKey = key.toLowerCase();
-    
-    // If we haven't processed this key yet (case-insensitive)
     if (!processedKeys.has(lowerKey)) {
       processedKeys.add(lowerKey);
-      
-      // Handle target field specifically
       if (lowerKey === 'target') {
-        // Use the value from 'target' if it exists, otherwise use 'Target'
-        const targetValue = req.body.target !== undefined ? req.body.target : 
-                           req.body.Target !== undefined ? req.body.Target : 100000;
+        const targetValue = req.body.target ?? req.body.Target ?? 100000;
         cleanRequestBody['target'] = targetValue;
       } else {
-        // For other fields, keep the original key
         cleanRequestBody[key] = req.body[key];
       }
     }
   });
-  
-  // Remove any uppercase Target if it exists
-  if (cleanRequestBody.Target) {
-    delete cleanRequestBody.Target;
-  }
+  if (cleanRequestBody.Target) delete cleanRequestBody.Target;
 
-  // Now destructure from cleaned request body
+  // Destructure
   let {
     name,
     email,
@@ -55,14 +43,14 @@ router.post("/accounts", async (req, res) => {
     staffid,
     entity_type,
     group,
-    discount = 0,   
-    target = 100000, 
+    discount = 0,
+    target = 100000,
     opening_balance = 0,
-     opening_balance_type, 
+    opening_balance_type,
     ...otherData
   } = cleanRequestBody;
 
-  // Supplier-specific adjustments
+  // Supplier adjustments
   if (group === 'SUPPLIERS') {
     assigned_staff = assigned_staff || null;
     staffid = staffid || null;
@@ -81,77 +69,71 @@ router.post("/accounts", async (req, res) => {
     entity_type,
     group,
     discount,
-    Target: target, 
+    Target: target,
     opening_balance,
-    opening_balance_type, 
+    opening_balance_type,
     ...otherData
   };
-  
-  // Replace undefined or empty strings with null
+
   Object.keys(data).forEach(key => {
     if (data[key] === undefined || data[key] === '') data[key] = null;
   });
-
-  // Remove any lowercase target from data since we're using uppercase Target
-  if (data.target) {
-    delete data.target;
-  }
+  if (data.target) delete data.target;
 
   const sql = "INSERT INTO accounts SET ?";
 
   try {
     const [result] = await db.promise().query(sql, data);
 
-    // Send email only for retailer
-    if (role === 'retailer') {
-      const transporter = nodemailer.createTransport({
-        service: "gmail",
-        auth: {
-          user: "bharathsiripuram98@gmail.com",
-          pass: "alsishqgybtzonoj",
-        },
-        tls: { rejectUnauthorized: false },
-      });
+    // Determine dual account message (only if is_dual_account = 1)
+    let messageText = null;
+    const roleLower = role?.toLowerCase();
+    const groupUpper = group?.toUpperCase();
+    if (data.is_dual_account == 1 || data.is_dual_account === '1') {
+      if (roleLower === 'retailer') {
+        messageText = "Supplier enabled for this retailer";
+      } else if (roleLower === 'supplier' || groupUpper === 'SUPPLIERS') {
+        messageText = "Retailer enabled for this supplier";
+      }
+    }
 
-      const mailOptions = {
-        from: "bharathsiripuram98@gmail.com",
-        to: email,
-        subject: "Your Retailer Account Details",
-        text: `
+    // Send email always
+    const transporter = nodemailer.createTransport({
+      service: "gmail",
+      auth: { user: "bharathsiripuram98@gmail.com", pass: "alsishqgybtzonoj" },
+      tls: { rejectUnauthorized: false },
+    });
+
+    const mailOptions = {
+      from: "bharathsiripuram98@gmail.com",
+      to: email,
+      subject: "Your Account Details",
+      text: `
 Hello ${name},
 
-Your retailer account has been successfully created.
+Your account has been successfully created.
 Phone Number: ${phone_number}
 Role: ${role}
 Email: ${email}
 Password: ${password}
 
-Please keep this information secure.
-        `,
-      };
+${messageText ? messageText : ''}
+      `,
+    };
 
-      try {
-        await transporter.sendMail(mailOptions);
-        res.status(201).json({
-          message: "Retailer added and email sent successfully!",
-          id: result.insertId,
-          ...data,
-        });
-      } catch (mailErr) {
-        console.error("Email Error:", mailErr);
-        res.status(201).json({
-          message: "Retailer added but failed to send email",
-          id: result.insertId,
-          ...data,
-        });
-      }
-    } else {
-      res.status(201).json({
-        message: "Supplier added successfully!",
-        id: result.insertId,
-        ...data,
-      });
+    try {
+      await transporter.sendMail(mailOptions);
+    } catch (err) {
+      console.error("Email Error:", err);
     }
+
+    // Respond
+    res.status(201).json({
+      id: result.insertId,
+      ...data,
+      ...(messageText && { message: messageText })
+    });
+
   } catch (dbErr) {
     console.error("DB Insert Error:", dbErr);
     if (dbErr.code === 'ER_BAD_NULL_ERROR') {
@@ -163,7 +145,6 @@ Please keep this information secure.
     res.status(500).json({ error: "Failed to add user to database" });
   }
 });
-
 // --------------------- GET ALL ACCOUNTS ---------------------
 router.get("/accounts", (req, res) => {
   db.query("SELECT * FROM accounts", (err, results) => {
@@ -189,41 +170,55 @@ router.post("/accounts/login", async (req, res) => {
     return res.status(400).json({ error: "Email and password are required" });
   }
 
-  const sql = "SELECT * FROM accounts WHERE email = ? AND password = ? AND role = 'retailer'";
-
   try {
+    // Fetch account regardless of role
+    const sql = "SELECT * FROM accounts WHERE email = ? AND password = ?";
     const [results] = await db.promise().query(sql, [email, password]);
-    
+
     if (results.length === 0) {
       return res.status(401).json({ error: "Invalid email or password" });
     }
 
-    // Login successful
     const user = results[0];
-    res.status(200).json({
-      message: "Login successful",
-      user: {
-        id: user.id,
-        name: user.name,
-        email: user.email,
-        role: user.role,
-        mobile_number:user.mobile_number,
-        entity_type:user.entity_type,
-        business_name:user.business_name,
-        discount:user.discount,
-        shipping_address_line1: user.shipping_address_line1,
-        shipping_address_line2:user.shipping_address_line2,
-        shipping_city:user.shipping_city,
-        shipping_pin_code:user.shipping_pin_code,
-        shipping_state:user.shipping_state,
-        shipping_country:user.shipping_country,
-        staffid:user.staffid,
-        assigned_staff:user.assigned_staff
+    const roleLower = user.role?.toLowerCase();
+    const groupUpper = user.group?.toUpperCase();
 
+    // Login logic:
+    // 1. Retailers always allowed
+    // 2. Suppliers with group = 'SUPPLIERS' only if is_dual_account = 1
+    if (
+      roleLower === 'retailer' ||
+      (groupUpper === 'SUPPLIERS' && user.is_dual_account == 1)
+    ) {
+      return res.status(200).json({
+        message: "Login successful",
+        user: {
+          id: user.id,
+          name: user.name,
+          email: user.email,
+          role: user.role,
+          mobile_number: user.mobile_number,
+          entity_type: user.entity_type,
+          business_name: user.business_name,
+          discount: user.discount,
+          shipping_address_line1: user.shipping_address_line1,
+          shipping_address_line2: user.shipping_address_line2,
+          shipping_city: user.shipping_city,
+          shipping_pin_code: user.shipping_pin_code,
+          shipping_state: user.shipping_state,
+          shipping_country: user.shipping_country,
+          staffid: user.staffid,
+          assigned_staff: user.assigned_staff,
+          is_dual_account: user.is_dual_account
+          // Add other fields if needed
+        }
+      });
+    } else {
+      return res.status(403).json({
+        error: "Supplier account not enabled for login. Please contact admin."
+      });
+    }
 
-        // Add other fields you need
-      }
-    });
   } catch (err) {
     console.error("Login Error:", err);
     res.status(500).json({ error: "Database query failed", details: err.message });
@@ -242,12 +237,8 @@ router.get("/accounts/:id", (req, res) => {
   });
 });
 
-// ================= UPDATE ACCOUNT =================
-router.put("/accounts/:id", (req, res) => {
+router.put("/accounts/:id", async (req, res) => {
   const { id } = req.params;
-
-  console.log("🔥 RAW BODY:", req.body);
-
   const updates = { ...req.body };
 
   // ❌ Block system-controlled fields
@@ -255,51 +246,95 @@ router.put("/accounts/:id", (req, res) => {
   delete updates.created_at;
   delete updates.updated_at;
 
-  // ✅ Fix DATETIME fields (VERY IMPORTANT)
-  const datetimeFields = [
-    "last_score_calculated",
-    "otp_expires_at"
-  ];
-
+  // ✅ Fix DATETIME fields
+  const datetimeFields = ["last_score_calculated", "otp_expires_at"];
   datetimeFields.forEach((field) => {
-    if (updates[field]) {
-      updates[field] = toMySQLDateTime(updates[field]);
-    }
+    if (updates[field]) updates[field] = toMySQLDateTime(updates[field]);
   });
 
   const fields = [];
   const values = [];
-
   for (const key in updates) {
     fields.push(`\`${key}\` = ?`);
     values.push(updates[key] === "" ? null : updates[key]);
   }
+  if (fields.length === 0) return res.status(400).json({ message: "No valid fields to update" });
 
-  // ❌ Safety check
-  if (fields.length === 0) {
-    return res.status(400).json({ message: "No valid fields to update" });
-  }
+  try {
+    // Fetch old account BEFORE update
+    const [oldRows] = await db.promise().query("SELECT * FROM accounts WHERE id = ?", [id]);
+    const oldAccount = oldRows[0];
 
-  const sql = `UPDATE accounts SET ${fields.join(", ")} WHERE id = ?`;
+    // Perform the update
+    const sql = `UPDATE accounts SET ${fields.join(", ")} WHERE id = ?`;
+    const [result] = await db.promise().query(sql, [...values, id]);
 
-  console.log("🔥 SQL:", sql);
-  console.log("🔥 VALUES:", [...values, id]);
+    // Fetch updated account AFTER update
+    const [rows] = await db.promise().query("SELECT * FROM accounts WHERE id = ?", [id]);
+    const updatedAccount = rows[0];
 
-  db.query(sql, [...values, id], (err, result) => {
-    if (err) {
-      console.error("❌ FULL SQL ERROR:", err);
-      return res.status(500).json({
-        message: "SQL ERROR",
-        code: err.code,
-        sqlMessage: err.sqlMessage
-      });
+    // Determine message based on dual account change
+    let messageText = null;
+    const role = updatedAccount.role?.toLowerCase();
+    const group = updatedAccount.group?.toUpperCase();
+
+    if ((oldAccount.is_dual_account == 0) && (updatedAccount.is_dual_account == 1)) {
+      // 0 -> 1
+      if (role === 'retailer') {
+        messageText = "Supplier enabled for this retailer ";
+      } else if (role === 'supplier' || group === 'SUPPLIERS') {
+        messageText = "Retailer enabled for this supplier";
+      }
+    } else if ((oldAccount.is_dual_account == 1) && (updatedAccount.is_dual_account == 0)) {
+      // 1 -> 0
+      if (role === 'retailer') {
+        messageText = "Supplier disabled for this retailer";
+      } else if (role === 'supplier' || group === 'SUPPLIERS') {
+        messageText = "Retailer disabled for this supplier";
+      }
     }
 
+    // Send email always, include messageText if exists
+    const transporter = nodemailer.createTransport({
+      service: "gmail",
+      auth: { user: "bharathsiripuram98@gmail.com", pass: "alsishqgybtzonoj" },
+      tls: { rejectUnauthorized: false },
+    });
+
+    const mailOptions = {
+      from: "bharathsiripuram98@gmail.com",
+      to: updatedAccount.email,
+      subject: "Your Account Updated",
+      text: `
+Hello ${updatedAccount.name},
+
+Your account has been updated.
+Phone Number: ${updatedAccount.phone_number}
+Role: ${updatedAccount.role}
+Email: ${updatedAccount.email}
+Password: ${updatedAccount.password || updates.password || 'N/A'}
+
+${messageText ? messageText : ''}
+      `,
+    };
+
+    try {
+      await transporter.sendMail(mailOptions);
+    } catch (err) {
+      console.error("Email Error:", err);
+    }
+
+    // JSON response
     res.json({
       success: true,
-      affectedRows: result.affectedRows
+      affectedRows: result.affectedRows,
+      ...(messageText && { message: messageText }),
     });
-  });
+
+  } catch (err) {
+    console.error("SQL ERROR:", err);
+    res.status(500).json({ message: "SQL ERROR", code: err.code, sqlMessage: err.sqlMessage });
+  }
 });
 
 // --------------------- DELETE ACCOUNT ---------------------
@@ -371,9 +406,47 @@ router.put("/update-retailer-info/:id", (req, res) => {
   });
 });
 
-module.exports = router;
+router.put('/accounts/:id/status', (req, res) => {
+  const { id } = req.params;
+  const { status } = req.body;
+
+  db.query(
+    "UPDATE accounts SET status = ? WHERE id = ?",
+    [status, id],
+    (err, result) => {
+      if (err) {
+        console.error(err);
+        return res.status(500).json({ error: "Failed to update status" });
+      }
+
+      res.json({ message: "Status updated successfully" });
+    }
+  );
+});
 
 
+router.get("/admin", (req, res) => {
+  const query = `
+    SELECT email, password 
+    FROM accounts 
+    WHERE role = 'admin'
+    LIMIT 1
+  `;
 
+  db.query(query, (err, results) => {
+    if (err) {
+      return res.status(500).json({ success: false, error: "Database error" });
+    }
+
+    if (results.length === 0) {
+      return res.json({ success: false, error: "Admin not found" });
+    }
+
+    return res.json({
+      success: true,
+      admin: results[0]
+    });
+  });
+});
 
 module.exports = router;
