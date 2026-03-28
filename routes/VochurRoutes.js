@@ -967,40 +967,34 @@ router.put("/debitnoteupdate/:id", async (req, res) => {
             IGSTPercentage = ?,
             paid_amount = ?,
             data_type = ?,
-            balance_amount = ?  /* 👈 ADDED balance_amount */
+            balance_amount = ? 
           WHERE VoucherID = ?`,
           [
             updateData.VchNo || updateData.creditNoteNumber || originalVoucher.VchNo,
 
-            // ✅ FIXED DATETIME
             toMySQLDateTime(updateData.Date || originalVoucher.Date),
 
             updateData.InvoiceNumber || originalVoucher.InvoiceNumber,
             updateData.PartyName || originalVoucher.PartyName,
 
             Number(updateData.BasicAmount) || originalVoucher.BasicAmount,
-            taxAmount, // Store in TaxAmount column
+            taxAmount,
             Number(updateData.TotalAmount) || originalVoucher.TotalAmount,
 
-            // Subtotal = BasicAmount
             Number(updateData.BasicAmount) || originalVoucher.Subtotal,
 
-            // For IGST: Set SGST and CGST to 0
             hasIGST ? 0 : (Number(updateData.SGSTAmount) || originalVoucher.SGSTAmount || 0),
             hasIGST ? 0 : (Number(updateData.CGSTAmount) || originalVoucher.CGSTAmount || 0),
-            // For IGST: Store tax amount in IGSTAmount
             hasIGST ? taxAmount : (Number(updateData.IGSTAmount) || originalVoucher.IGSTAmount || 0),
 
-            // For IGST: Set SGST and CGST percentages to 0
             hasIGST ? 0 : (Number(updateData.SGSTPercentage) || originalVoucher.SGSTPercentage || 0),
             hasIGST ? 0 : (Number(updateData.CGSTPercentage) || originalVoucher.CGSTPercentage || 0),
-            // Store IGST percentage
             hasIGST ? igstPercentage : (Number(updateData.IGSTPercentage) || originalVoucher.IGSTPercentage || 0),
 
             Number(updateData.TotalAmount) || originalVoucher.paid_amount,
             updateData.data_type || originalVoucher.data_type || null,
 
-            debitNoteBalanceAmount, /* 👈 ADDED balance_amount value */
+            debitNoteBalanceAmount, 
 
             voucherId,
           ]
@@ -3151,8 +3145,8 @@ const voucherData = {
   ChequeNo: transactionData.ChequeNo || "",
   ChequeDate: transactionData.ChequeDate || null,
   BankName: transactionData.BankName || "",
-  staffid: transactionData.staffid || null,
-  assigned_staff: transactionData.assigned_staff || null,
+staffid: transactionData.supplierInfo?.staffid || transactionData.staffid || null,
+assigned_staff: transactionData.supplierInfo?.assigned_staff || transactionData.assigned_staff || null,
   staff_incentive: staffIncentive,
   created_at: new Date(),
   balance_amount: balanceAmount,

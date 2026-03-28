@@ -71,7 +71,7 @@ router.get('/retailer-scores', (req, res) => {
   const { page = 1, limit = 50, tier, sortBy = 'score', sortOrder = 'DESC' } = req.query;
   const offset = (page - 1) * limit;
   
-  let whereClause = 'WHERE role = "retailer"';
+let whereClause = 'WHERE (role = "retailer" OR (role = "supplier" AND is_dual_account = 1))';
   let queryParams = [];
   
   if (tier && tier !== 'all') {
@@ -164,8 +164,8 @@ router.get('/retailer-scores/:retailerId', (req, res) => {
         ), 0
       ) as lifetime_orders
     FROM accounts a
-    WHERE a.id = ? AND a.role = 'retailer'
-  `;
+WHERE a.id = ? 
+AND (a.role = 'retailer' OR (a.role = 'supplier' AND a.is_dual_account = 1))  `;
   
   db.query(query, [retailerId], (err, results) => {
     if (err) {

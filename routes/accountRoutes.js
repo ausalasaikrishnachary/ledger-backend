@@ -425,5 +425,28 @@ router.put('/accounts/:id/status', (req, res) => {
 });
 
 
+router.get("/admin", (req, res) => {
+  const query = `
+    SELECT email, password 
+    FROM accounts 
+    WHERE role = 'admin'
+    LIMIT 1
+  `;
+
+  db.query(query, (err, results) => {
+    if (err) {
+      return res.status(500).json({ success: false, error: "Database error" });
+    }
+
+    if (results.length === 0) {
+      return res.json({ success: false, error: "Admin not found" });
+    }
+
+    return res.json({
+      success: true,
+      admin: results[0]
+    });
+  });
+});
 
 module.exports = router;
