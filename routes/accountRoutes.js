@@ -186,10 +186,13 @@ router.post("/accounts/login", async (req, res) => {
     // Login logic:
     // 1. Retailers always allowed
     // 2. Suppliers with group = 'SUPPLIERS' only if is_dual_account = 1
-    if (
-      roleLower === 'retailer' ||
-      (groupUpper === 'SUPPLIERS' && user.is_dual_account == 1)
-    ) {
+if (
+  (
+    roleLower === 'retailer' ||
+    (roleLower === 'supplier' && user.is_dual_account == 1)
+  ) &&
+  user.status == 1
+)  {
       return res.status(200).json({
         message: "Login successful",
         user: {
@@ -214,11 +217,17 @@ router.post("/accounts/login", async (req, res) => {
         }
       });
     } else {
-      return res.status(403).json({
-        error: "Supplier account not enabled for login. Please contact admin."
-      });
-    }
+  const roleName =
+    roleLower === 'retailer'
+      ? 'Retailer'
+      : roleLower === 'supplier'
+      ? 'Supplier'
+      : 'User';
 
+  return res.status(403).json({
+    error: `${roleName} account not enabled for login. Please contact admin.`
+  });
+}
   } catch (err) {
     console.error("Login Error:", err);
     res.status(500).json({ error: "Database query failed", details: err.message });
@@ -408,18 +417,26 @@ router.put("/update-retailer-info/:id", (req, res) => {
 
 router.put('/accounts/:id/status', (req, res) => {
   const { id } = req.params;
-  const { status } = req.body;
+
+  // convert to number (important)
+  const dualValue = Number(req.body.status);
+
 
   db.query(
     "UPDATE accounts SET status = ? WHERE id = ?",
-    [status, id],
+    [dualValue, id],
     (err, result) => {
       if (err) {
-        console.error(err);
-        return res.status(500).json({ error: "Failed to update status" });
+        console.error("❌ DB ERROR:", err);
+        return res.status(500).json({ error: "Failed to update dual account" });
       }
 
-      res.json({ message: "Status updated successfully" });
+
+      res.json({
+        message: "Dual account updated successfully",
+        affectedRows: result.affectedRows,
+        changedRows: result.changedRows
+      });
     }
   );
 });
