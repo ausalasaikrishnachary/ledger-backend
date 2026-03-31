@@ -427,7 +427,8 @@ router.get("/staff/:id", (req, res) => {
 
 router.put("/staff/:id", (req, res) => {
   const {
-    fullName,
+    // Frontend sends snake_case, we need to map them properly
+    full_name,           // ✅ Frontend sends full_name, not fullName
     mobileNumber,
     alternateNumber,
     email,
@@ -458,7 +459,7 @@ router.put("/staff/:id", (req, res) => {
     additional_business_name,
     fax,
     discount,
-    Target,
+    Target,               // ✅ Note: Capital T in frontend
     credit_limit,
     opening_balance,
     opening_balance_type,
@@ -499,8 +500,8 @@ router.put("/staff/:id", (req, res) => {
     billing_gstin,
   } = req.body;
 
-  // Validate required fields
-  if (!fullName || !email || !role) {
+  // Validate required fields - use full_name (snake_case) instead of fullName
+  if (!full_name || !email || !role) {
     return res.status(400).send({ error: "Full name, email, and role are required" });
   }
 
@@ -510,7 +511,7 @@ router.put("/staff/:id", (req, res) => {
     return res.status(400).send({ error: "Please provide a valid email address" });
   }
 
-  const password = `${fullName.replace(/\s+/g, "")}@123`;
+  const password = `${full_name.replace(/\s+/g, "")}@123`;
   const isDualAccount = is_dual_account === 1 ? 1 : 0;
 
   // Fetch current staff data to detect changes for email notification
@@ -530,14 +531,14 @@ router.put("/staff/:id", (req, res) => {
     const current = currentData[0];
 
     const hasChanges =
-      current.name !== fullName ||
+      current.name !== full_name ||
       current.email !== email ||
       current.role !== role ||
       current.is_dual_account !== isDualAccount ||
       current.status !== status;
 
     const updateData = {
-      name:                     fullName,
+      name:                     full_name,  // ✅ Changed from fullName to full_name
       mobile_number:            mobileNumber || null,
       alternate_number:         alternateNumber || null,
       email:                    email,
@@ -551,9 +552,9 @@ router.put("/staff/:id", (req, res) => {
       incentive_percent:        incentivePercent || null,
       salary:                   salary || null,
 
-      // Retailer financial fields — fixed snake_case from frontend
+      // Retailer financial fields
       discount:                 discount || 0,
-      target:                   Target || 100000,
+      target:                   Target || 100000,  // ✅ Target (capital T) from frontend maps to target
       credit_limit:             credit_limit || null,
       opening_balance:          opening_balance || null,
       opening_balance_type:     opening_balance_type || null,
@@ -587,7 +588,7 @@ router.put("/staff/:id", (req, res) => {
       gst_registered_name:      gst_registered_name || null,
       business_name:            business_name || null,
       additional_business_name: additional_business_name || null,
-      display_name:             display_name || fullName,
+      display_name:             display_name || null,
       fax:                      fax || null,
 
       // Shipping address
@@ -628,7 +629,7 @@ router.put("/staff/:id", (req, res) => {
 
       // Send notification email only if key fields changed
       if (hasChanges) {
-        let emailText = `Hello ${fullName},
+        let emailText = `Hello ${full_name},
 
 Your staff account has been successfully updated.
 

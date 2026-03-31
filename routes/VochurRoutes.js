@@ -3,14 +3,30 @@ const router = express.Router();
 const db = require('../db');
 const axios = require('axios'); // ADD THIS LINE
 
-// Get next sales invoice number
 router.get("/next-invoice-number", async (req, res) => {
   try {
+    const getFinancialYear = () => {
+      const now = new Date();
+      const year = now.getFullYear();
+      const month = now.getMonth(); 
+      
+      if (month >= 3) {
+        return `${year.toString().slice(-2)}-${(year + 1).toString().slice(-2)}`;
+      } else { // January to March
+        return `${(year - 1).toString().slice(-2)}-${year.toString().slice(-2)}`;
+      }
+    };
+    
+    const currentFY = getFinancialYear();
+    const prefix = `SSA/`;
+    const suffix = `/${currentFY}`;
+    
     const query = `
-      SELECT MAX(CAST(SUBSTRING(InvoiceNumber, 4) AS UNSIGNED)) as maxNumber 
+      SELECT MAX(CAST(SUBSTRING(InvoiceNumber, LOCATE('/', InvoiceNumber) + 1, 
+             LOCATE('/', InvoiceNumber, LOCATE('/', InvoiceNumber) + 1) - LOCATE('/', InvoiceNumber) - 1) AS UNSIGNED)) as maxNumber 
       FROM voucher 
       WHERE TransactionType IN ('Sales', 'stock transfer') 
-      AND InvoiceNumber LIKE 'INV%'
+      AND InvoiceNumber LIKE 'SSA/%/${currentFY}'
     `;
 
     db.query(query, (err, results) => {
@@ -24,8 +40,8 @@ router.get("/next-invoice-number", async (req, res) => {
         nextNumber = parseInt(results[0].maxNumber) + 1;
       }
 
-      const nextInvoiceNumber = `INV${nextNumber.toString().padStart(3, '0')}`;
-
+      const nextInvoiceNumber = `${prefix}${nextNumber.toString().padStart(6, '0')}${suffix}`;
+      
       res.send({ nextInvoiceNumber });
     });
   } catch (error) {
