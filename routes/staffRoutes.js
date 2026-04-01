@@ -2,11 +2,9 @@ const express = require('express');
 const router = express.Router();
 const db = require('../db');
 const nodemailer = require('nodemailer');
-
-// Create Staff Account
 router.post("/staff", (req, res) => {
   const {
-    fullName,
+    full_name,
     mobileNumber,
     alternateNumber,
     email,
@@ -19,25 +17,31 @@ router.post("/staff", (req, res) => {
     joiningDate,
     incentivePercent,
     salary,
-    bankAccountNumber,
+    accountNumber,
+    accountName,
     ifscCode,
     bankName,
     branchName,
     upiId,
+    accountType,
     aadhaarNumber,
     panNumber,
+    tanNumber,
+    tdsSlabRate,
+    currency,
+    termsOfPayment,
+    reverseCharge,
+    exportSez,
     bloodGroup,
     emergencyContact,
     status = "Active",
-    invoiceEnabled,
-    discount,           // ✅ New field
-    target,             // ✅ New field
-    creditLimit,        // ✅ New field
-    openingBalance,     // ✅ New field
-    openingBalanceType, // ✅ New field
-    accountGroupId,     // ✅ New field
-    
-    // New Retailer Fields
+    is_dual_account,
+    discount,
+    Target,
+    credit_limit,
+    opening_balance,
+    opening_balance_type,
+    accountGroupId,
     entity_type,
     gstin,
     business_name,
@@ -45,17 +49,6 @@ router.post("/staff", (req, res) => {
     gst_registered_name,
     additional_business_name,
     fax,
-    accountNumber,
-    accountName,
-    account_type,
-    tanNumber,
-    tdsSlabRate,
-    currency,
-    termsOfPayment,
-    reverseCharge,
-    exportSez,
-    
-    // Shipping & Billing Address Fields
     shipping_address_line1,
     shipping_address_line2,
     shipping_city,
@@ -64,7 +57,6 @@ router.post("/staff", (req, res) => {
     shipping_country,
     shipping_branch_name,
     shipping_gstin,
-    
     billing_address_line1,
     billing_address_line2,
     billing_city,
@@ -72,123 +64,113 @@ router.post("/staff", (req, res) => {
     billing_state,
     billing_country,
     billing_branch_name,
-    billing_gstin
+    billing_gstin,
   } = req.body;
 
-  // Validate required fields
-  if (!fullName || !mobileNumber || !email || !role) {
-    return res.status(400).send({ 
-      error: "Full name, mobile number, email, and role are required" 
+  if (!full_name || !mobileNumber || !email || !role) {
+    return res.status(400).send({
+      error: "Full name, mobile number, email, and role are required",
     });
   }
 
-  // Validate mobile number format
   if (!/^\d{10}$/.test(mobileNumber)) {
-    return res.status(400).send({ 
-      error: "Mobile number must be 10 digits" 
+    return res.status(400).send({
+      error: "Mobile number must be 10 digits",
     });
   }
 
-  // Validate email format
   const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
   if (!emailRegex.test(email)) {
-    return res.status(400).send({ 
-      error: "Please provide a valid email address" 
+    return res.status(400).send({
+      error: "Please provide a valid email address",
     });
   }
 
-  // Check if mobile number already exists
   const checkMobileSql = "SELECT id FROM accounts WHERE mobile_number = ?";
   db.query(checkMobileSql, [mobileNumber], (err, results) => {
     if (err) return res.status(500).send({ error: "Database error" });
-    
+
     if (results.length > 0) {
-      return res.status(400).send({ 
-        error: "Mobile number already exists" 
+      return res.status(400).send({
+        error: "Mobile number already exists",
       });
     }
 
-    // Generate password
-    const password = `${fullName.replace(/\s+/g, "")}@123`;
-    const isDualAccount = invoiceEnabled === 1 ? 1 : 0;
+    const password = `${full_name.replace(/\s+/g, "")}@123`;
+    const isDualAccount = is_dual_account === 1 ? 1 : 0;
 
-    // Prepare staff data with all new fields
     const staffData = {
-      account_group_id: accountGroupId || null,
-      'group': "staff", 
-      title: "Mr.",
-      entity_type: entity_type || "Individual",
-      name: fullName,
-      role: role,
-      opening_balance: openingBalance || null,
-      opening_balance_type: openingBalanceType || null,
-      mobile_number: mobileNumber,
-      alternate_number: alternateNumber || null,
-      email: email,
-      date_of_birth: dateOfBirth || null,
-      gender: gender || null,
-      address: address || null,
-      designation: designation || null,
-      department: department || null,
-      joining_date: joiningDate || null,
-      incentive_percent: incentivePercent || null,
-      salary: salary || null,
-      discount: discount || 0,
-      target: target || 100000,
-      credit_limit: creditLimit || null,
-      bank_account_number: bankAccountNumber || null,
-      ifsc_code: ifscCode || null,
-      bank_name: bankName || null,
-      account_type: account_type || null,
-      branch_name: branchName || null,
-      upi_id: upiId || null,
-      aadhaar_number: aadhaarNumber || null,
-      pan: panNumber || null,
-      tan: tanNumber || null,
-      blood_group: bloodGroup || null,
-      emergency_contact: emergencyContact || null,
-      tds_slab_rate: tdsSlabRate || null,
-      currency: currency || "INR",
-      terms_of_payment: termsOfPayment || null,
-      reverse_charge: reverseCharge || "No",
-      export_sez: exportSez || "Not Applicable",
-      
-      // Shipping Address Fields
-      shipping_address_line1: shipping_address_line1 || null,
-      shipping_address_line2: shipping_address_line2 || null,
-      shipping_city: shipping_city || null,
-      shipping_pin_code: shipping_pin_code || null,
-      shipping_state: shipping_state || null,
-      shipping_country: shipping_country || "India",
-      shipping_branch_name: shipping_branch_name || null,
-      shipping_gstin: shipping_gstin || null,
-      
-      // Billing Address Fields
-      billing_address_line1: billing_address_line1 || null,
-      billing_address_line2: billing_address_line2 || null,
-      billing_city: billing_city || null,
-      billing_pin_code: billing_pin_code || null,
-      billing_state: billing_state || null,
-      billing_country: billing_country || "India",
-      billing_branch_name: billing_branch_name || null,
-      billing_gstin: billing_gstin || null,
-      
-      // Additional Business Fields
-      gstin: gstin || null,
-      gst_registered_name: gst_registered_name || null,
-      business_name: business_name || null,
+      account_group_id:         accountGroupId || null,
+      'group':                  "staff",
+      title:                    "Mr.",
+      entity_type:              entity_type || "Individual",
+      name:                     full_name,
+      role:                     role,
+      opening_balance:          opening_balance || null,
+      opening_balance_type:     opening_balance_type || null,
+      mobile_number:            mobileNumber,
+      alternate_number:         alternateNumber || null,
+      email:                    email,
+      date_of_birth:            dateOfBirth || null,
+      gender:                   gender || null,
+      address:                  address || null,
+      designation:              designation || null,
+      department:               department || null,
+      joining_date:             joiningDate || null,
+      incentive_percent:        incentivePercent || null,
+      salary:                   salary || null,
+      discount:                 discount || 0,
+      target:                   Target || 100000,
+      credit_limit:             credit_limit || null,
+      bank_account_number:      accountNumber || null,
+      ifsc_code:                ifscCode || null,
+      bank_name:                bankName || null,
+      account_type:             accountType || null,
+      branch_name:              branchName || null,
+      upi_id:                   upiId || null,
+      aadhaar_number:           aadhaarNumber || null,
+      pan:                      panNumber || null,
+      tan:                      tanNumber || null,
+      blood_group:              bloodGroup || null,
+      emergency_contact:        emergencyContact || null,
+      tds_slab_rate:            tdsSlabRate || null,
+      currency:                 currency || "INR",
+      terms_of_payment:         termsOfPayment || null,
+      reverse_charge:           reverseCharge || "No",
+      export_sez:               exportSez || "Not Applicable",
+
+      shipping_address_line1:   shipping_address_line1 || null,
+      shipping_address_line2:   shipping_address_line2 || null,
+      shipping_city:            shipping_city || null,
+      shipping_pin_code:        shipping_pin_code || null,
+      shipping_state:           shipping_state || null,
+      shipping_country:         shipping_country || "India",
+      shipping_branch_name:     shipping_branch_name || null,
+      shipping_gstin:           shipping_gstin || null,
+
+      billing_address_line1:    billing_address_line1 || null,
+      billing_address_line2:    billing_address_line2 || null,
+      billing_city:             billing_city || null,
+      billing_pin_code:         billing_pin_code || null,
+      billing_state:            billing_state || null,
+      billing_country:          billing_country || "India",
+      billing_branch_name:      billing_branch_name || null,
+      billing_gstin:            billing_gstin || null,
+
+      gstin:                    gstin || null,
+      gst_registered_name:      gst_registered_name || null,
+      business_name:            business_name || null,
       additional_business_name: additional_business_name || null,
-      display_name: display_name || fullName,
-      fax: fax || null,
-      
-      // Account Information
-      account_number: accountNumber || null,
-      account_name: accountName || null,
-      
-      password: password,
-      phone_number: null,
-      status: status,
-      is_dual_account: isDualAccount
+      display_name:             display_name || full_name,
+      fax:                      fax || null,
+
+      account_number:           accountNumber || null,
+      account_name:             accountName || null,
+
+      password:                 password,
+      phone_number:             null,
+      status:                   status,
+      is_dual_account:          isDualAccount,
     };
 
     const sql = "INSERT INTO accounts SET ?";
@@ -198,9 +180,8 @@ router.post("/staff", (req, res) => {
         return res.status(500).send({ error: "Failed to create staff account" });
       }
 
-      // Prepare email content based on is_dual_account
       let emailText = `
-Hello ${fullName},
+Hello ${full_name},
 
 Your staff account has been successfully created.
 
@@ -210,10 +191,8 @@ Email: ${email}
 Password: ${password}
 `;
 
-      // Add invoice creation message only if is_dual_account is 1
       if (isDualAccount === 1) {
         emailText += `
-
 ✅ You have been enabled to create invoices. You can now access the invoice creation feature in your account.`;
       }
 
@@ -221,12 +200,11 @@ Password: ${password}
 
 Please keep this information secure.`;
 
-      // Send email
       const transporter = nodemailer.createTransport({
         service: "gmail",
         auth: {
-            user: "bharathsiripuram98@gmail.com",
-            pass: "alsishqgybtzonoj",
+          user: "bharathsiripuram98@gmail.com",
+          pass: "alsishqgybtzonoj",
         },
         tls: { rejectUnauthorized: false },
       });
@@ -244,7 +222,7 @@ Please keep this information secure.`;
           message: "Staff account created successfully and email sent",
           id: result.insertId,
           defaultPassword: password,
-          is_dual_account: isDualAccount
+          is_dual_account: isDualAccount,
         });
       } catch (mailErr) {
         console.error("Email error:", mailErr);
@@ -252,7 +230,7 @@ Please keep this information secure.`;
           message: "Staff account created but failed to send email",
           id: result.insertId,
           defaultPassword: password,
-          is_dual_account: isDualAccount
+          is_dual_account: isDualAccount,
         });
       }
     });
