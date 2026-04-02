@@ -36,7 +36,7 @@ router.post("/accounts", async (req, res) => {
   let {
     name,
     email,
-    phone_number,
+    mobile_number,
     password,
     role,
     assigned_staff,
@@ -61,7 +61,7 @@ router.post("/accounts", async (req, res) => {
   const data = {
     name,
     email,
-    phone_number,
+    mobile_number,
     password,
     role,
     assigned_staff,
@@ -112,7 +112,7 @@ router.post("/accounts", async (req, res) => {
 Hello ${name},
 
 Your account has been successfully created.
-Phone Number: ${phone_number}
+Mobile Number: ${mobile_number}
 Role: ${role}
 Email: ${email}
 Password: ${password}
@@ -318,7 +318,7 @@ router.put("/accounts/:id", async (req, res) => {
 Hello ${updatedAccount.name},
 
 Your account has been updated.
-Phone Number: ${updatedAccount.phone_number}
+Mobile Number: ${updatedAccount.mobile_number}
 Role: ${updatedAccount.role}
 Email: ${updatedAccount.email}
 Password: ${updatedAccount.password || updates.password || 'N/A'}

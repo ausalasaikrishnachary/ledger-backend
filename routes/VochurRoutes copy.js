@@ -5140,6 +5140,7 @@ router.get('/invoices/:invoiceNumber', async (req, res) => {
         v.IGSTPercentage,
         v.SGSTAmount,
         v.CGSTAmount,
+        v.hsn_code,
         v.IGSTAmount,
         v.TaxSystem,
         v.paid_amount,

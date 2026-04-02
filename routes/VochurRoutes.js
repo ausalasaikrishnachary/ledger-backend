@@ -1871,6 +1871,7 @@ router.get('/invoices/:invoiceNumber', async (req, res) => {
         v.TaxSystem,
         v.paid_amount,
         v.created_at,
+        v.hsn_code,
         v.balance_amount,
         v.status,
         v.paid_date,
@@ -2051,7 +2052,6 @@ router.put("/transactions/:id", async (req, res) => {
 
           console.log("♻️ Reversing:", originalTransactionType, item);
 
-          // First, check current batch stock
           const batchCheck = await queryPromise(
             connection,
             "SELECT quantity, stock_out, stock_in FROM batches WHERE product_id = ? AND batch_number = ?",
@@ -2061,7 +2061,6 @@ router.put("/transactions/:id", async (req, res) => {
           if (batchCheck.length === 0) {
             console.warn(`⚠️ Batch ${item.batch} not found during reversal - creating it`);
             
-            // Create the batch if it doesn't exist
             await queryPromise(
               connection,
               `INSERT INTO batches 
@@ -2072,7 +2071,6 @@ router.put("/transactions/:id", async (req, res) => {
             console.log(`✔ Created missing batch: ${item.batch}`);
           }
 
-          // Re-fetch batch data after potential creation
           const updatedBatchCheck = await queryPromise(
             connection,
             "SELECT quantity, stock_out, stock_in FROM batches WHERE product_id = ? AND batch_number = ?",
@@ -2084,13 +2082,11 @@ router.put("/transactions/:id", async (req, res) => {
           const currentStockIn = parseFloat(updatedBatchCheck[0].stock_in);
           const itemQuantity = parseFloat(item.quantity);
 
-          // Check if transaction adds stock (Purchase, CreditNote, stock inward) or removes stock (Sales, DebitNote, stock transfer)
           const isStockInTransaction = originalTransactionType === "Purchase" || 
                                        originalTransactionType === "CreditNote" || 
                                        originalTransactionType === "stock inward";
           
           if (isStockInTransaction) {
-            // Reverse stock addition: subtract from quantity and stock_in
             if (currentQuantity < itemQuantity) {
               console.warn(`⚠️ Insufficient stock for reversal in batch ${item.batch}. Available: ${currentQuantity}, Required: ${item.quantity}. Adjusting...`);
               
@@ -2109,11 +2105,8 @@ router.put("/transactions/:id", async (req, res) => {
                 [itemQuantity, itemQuantity, item.product_id, item.batch]
               );
             }
-
             console.log(`✔ Reversed ${originalTransactionType} for batch ${item.batch}`);
-
           } else {
-            // Reverse stock removal: add back to quantity and subtract from stock_out
             if (currentStockOut < itemQuantity) {
               console.warn(`⚠️ stock_out less than reversal quantity in batch ${item.batch}. Current: ${currentStockOut}, Required: ${item.quantity}. Adjusting...`);
               
@@ -2131,7 +2124,6 @@ router.put("/transactions/:id", async (req, res) => {
                 [itemQuantity, itemQuantity, item.product_id, item.batch]
               );
             }
-
             console.log(`✔ Reversed ${originalTransactionType} for batch ${item.batch}`);
           }
         }
@@ -2150,10 +2142,31 @@ router.put("/transactions/:id", async (req, res) => {
         }
 
         let vchNo = updateData.invoiceNumber || originalVoucher[0].VchNo;
-        let invoiceNumber =
-          updateData.invoiceNumber || originalVoucher[0].InvoiceNumber;
+        let invoiceNumber = updateData.invoiceNumber || originalVoucher[0].InvoiceNumber;
+        
+        // Get staff values - prioritize frontend data
+        const staffIdToUpdate = updateData.selectedStaffId || 
+                               updateData.staffid || 
+                               originalVoucher[0].staffid;
+        
+        const assignedStaffToUpdate = updateData.assigned_staff || 
+                                     originalVoucher[0].assigned_staff;
+        
+        // Get mobile number
+        const mobileNumber = updateData.mobile_number || 
+                            updateData.customer_mobile ||
+                            updateData.supplierInfo?.mobile_number ||
+                            updateData.supplierInfo?.phone_number ||
+                            originalVoucher[0].retailer_mobile ||
+                            0;
 
-        // 🔥 UPDATED: Added Party fields and Staff fields
+        console.log("📝 Updating with staff values:", {
+          staffIdToUpdate,
+          assignedStaffToUpdate,
+          mobileNumber
+        });
+
+        // ✅ FIXED: UPDATE query with correct parameter order
         await queryPromise(
           connection,
           `UPDATE voucher 
@@ -2169,35 +2182,32 @@ router.put("/transactions/:id", async (req, res) => {
                TaxAmount = ?, 
                TotalAmount = ?,
                staffid = ?, 
-               assigned_staff = ?
+               assigned_staff = ?,
+               retailer_mobile = ?
            WHERE VoucherID = ?`,
           [
             vchNo,
             invoiceNumber,
             updateData.invoiceDate || originalVoucher[0].Date,
-            // 🔥 ADDED: Party fields
             updateData.PartyID || updateData.selectedSupplierId || originalVoucher[0].PartyID,
             updateData.AccountID || updateData.supplierInfo?.accountId || originalVoucher[0].AccountID,
             updateData.AccountName || updateData.account_name || updateData.supplierInfo?.account_name || originalVoucher[0].AccountName,
             updateData.PartyName || updateData.supplierInfo?.name || originalVoucher[0].PartyName,
             updateData.business_name || updateData.supplierInfo?.business_name || originalVoucher[0].business_name,
-            // Amount fields
-            parseFloat(updateData.taxableAmount) ||
-            parseFloat(originalVoucher[0].BasicAmount),
-            parseFloat(updateData.totalGST) ||
-            parseFloat(originalVoucher[0].TaxAmount),
-            parseFloat(updateData.grandTotal) ||
-            parseFloat(originalVoucher[0].TotalAmount),
-            // 🔥 ADDED: Staff fields
-            updateData.selectedStaffId || updateData.staffid || originalVoucher[0].staffid,
-            updateData.assigned_staff || originalVoucher[0].assigned_staff,
-            voucherId,
+            parseFloat(updateData.taxableAmount) || parseFloat(originalVoucher[0].BasicAmount),
+            parseFloat(updateData.totalGST) || parseFloat(originalVoucher[0].TaxAmount),
+            parseFloat(updateData.grandTotal) || parseFloat(originalVoucher[0].TotalAmount),
+            staffIdToUpdate,        // staffid
+            assignedStaffToUpdate,  // assigned_staff
+            mobileNumber,           // retailer_mobile
+            voucherId               // WHERE VoucherID = ?
           ]
         );
 
         console.log("✅ Staff data updated in voucher:", {
-          staffid: updateData.selectedStaffId || updateData.staffid,
-          assigned_staff: updateData.assigned_staff
+          staffid: staffIdToUpdate,
+          assigned_staff: assignedStaffToUpdate,
+          retailer_mobile: mobileNumber
         });
 
         // -------------------------------------------------------------------
@@ -2229,24 +2239,21 @@ router.put("/transactions/:id", async (req, res) => {
         }
 
         // -------------------------------------------------------------------
-        // 4️⃣ APPLY **NEW** STOCK CHANGES (WITH BATCH CREATION IF NEEDED)
+        // 4️⃣ APPLY **NEW** STOCK CHANGES
         // -------------------------------------------------------------------
         for (const item of newBatchDetails) {
           if (!item.batch || !item.product_id) continue;
 
           const itemQuantity = parseFloat(item.quantity);
 
-          // Check if batch exists before applying changes
           const batchExists = await queryPromise(
             connection,
             "SELECT quantity, stock_in, stock_out FROM batches WHERE product_id = ? AND batch_number = ?",
             [item.product_id, item.batch]
           );
 
-          // If batch doesn't exist, create it first
           if (batchExists.length === 0) {
             console.log(`➕ Creating new batch: ${item.batch} for product ${item.product_id}`);
-            
             await queryPromise(
               connection,
               `INSERT INTO batches 
@@ -2254,7 +2261,6 @@ router.put("/transactions/:id", async (req, res) => {
                VALUES (?, ?, 0, 0, 0, NOW(), NOW())`,
               [item.product_id, item.batch]
             );
-            console.log(`✔ Created new batch: ${item.batch}`);
           }
 
           const currentBatch = await queryPromise(
@@ -2264,7 +2270,6 @@ router.put("/transactions/:id", async (req, res) => {
           );
 
           const currentQuantity = parseFloat(currentBatch[0].quantity);
-
           const isStockInTransaction = originalTransactionType === "Purchase" || 
                                        originalTransactionType === "CreditNote" || 
                                        originalTransactionType === "stock inward";
@@ -2275,20 +2280,16 @@ router.put("/transactions/:id", async (req, res) => {
               "UPDATE batches SET quantity = quantity + ?, stock_in = stock_in + ?, updated_at = NOW() WHERE product_id = ? AND batch_number = ?",
               [itemQuantity, itemQuantity, item.product_id, item.batch]
             );
-
             console.log(`✔ ${originalTransactionType} applied - added stock to batch ${item.batch}`);
-
           } else {
-  console.log(`⚠️ Allowing negative stock for batch ${item.batch}. Current: ${currentQuantity}, Deducting: ${itemQuantity}, New: ${currentQuantity - itemQuantity}`);
-  
-  await queryPromise(
-    connection,
-    "UPDATE batches SET quantity = quantity - ?, stock_out = stock_out + ?, updated_at = NOW() WHERE product_id = ? AND batch_number = ?",
-    [itemQuantity, itemQuantity, item.product_id, item.batch]
-  );
-
-  console.log(`✔ ${originalTransactionType} applied - reduced stock from batch ${item.batch} (negative stock allowed)`);
-}
+            console.log(`⚠️ Allowing negative stock for batch ${item.batch}. Current: ${currentQuantity}, Deducting: ${itemQuantity}, New: ${currentQuantity - itemQuantity}`);
+            await queryPromise(
+              connection,
+              "UPDATE batches SET quantity = quantity - ?, stock_out = stock_out + ?, updated_at = NOW() WHERE product_id = ? AND batch_number = ?",
+              [itemQuantity, itemQuantity, item.product_id, item.batch]
+            );
+            console.log(`✔ ${originalTransactionType} applied - reduced stock from batch ${item.batch}`);
+          }
         }
 
         // -------------------------------------------------------------------
@@ -2307,13 +2308,13 @@ router.put("/transactions/:id", async (req, res) => {
             success: true,
             message: "Transaction updated successfully",
             voucherId,
-            staffid: updateData.selectedStaffId || updateData.staffid,
-            assigned_staff: updateData.assigned_staff
+            staffid: staffIdToUpdate,
+            assigned_staff: assignedStaffToUpdate,
+            retailer_mobile: mobileNumber
           });
         });
       } catch (err) {
         console.error("❌ Error:", err);
-
         connection.rollback(() => {
           connection.release();
           res.status(500).json({ success: false, message: err.message });
@@ -3132,8 +3133,11 @@ const voucherData = {
   AccountName: account_name,      
   business_name: business_name,   
   PartyID: partyID,
-  retailer_mobile: transactionData.customerInfo?.phone || 
-              transactionData.fullAccountDetails?.mobile_number || 0,
+ retailer_mobile: transactionData.customerInfo?.phone || 
+                 transactionData.fullAccountDetails?.mobile_number || 
+                            
+                 transactionData.supplierInfo?.mobile_number ||       
+                 transactionData.supplierInfo?.phone_number ||   0,
   PartyName: partyName,
   BasicAmount: taxableAmount,
   ValueOfGoods: taxableAmount,
