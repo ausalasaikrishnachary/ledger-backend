@@ -1878,7 +1878,11 @@ router.get('/invoices/:invoiceNumber', async (req, res) => {
         v.pdf_data,
         v.DC,
         v.pdf_file_name,
-        v.pdf_created_at
+        v.pdf_created_at,
+                v.transport_name,
+        v.gr_rr_number,
+        v.vehicle_number,
+v.station_name
       FROM voucher v
       LEFT JOIN accounts a ON v.PartyID = a.id
       WHERE v.InvoiceNumber = ?
@@ -1994,6 +1998,8 @@ router.put("/transactions/:id", async (req, res) => {
     staffid: updateData.selectedStaffId,
     assigned_staff: updateData.assigned_staff
   });
+
+
 
   db.getConnection((err, connection) => {
     if (err) return res.status(500).send({ error: "Database connection failed" });
@@ -2160,13 +2166,37 @@ router.put("/transactions/:id", async (req, res) => {
                             originalVoucher[0].retailer_mobile ||
                             0;
 
+        // ✅ GET TRANSPORTATION VALUES
+        const transportName = updateData.transportDetails?.transport || 
+                             updateData.transport_name || 
+                             originalVoucher[0].transport_name || null;
+        
+        const grRrNumber = updateData.transportDetails?.grNumber || 
+                          updateData.gr_rr_number || 
+                          originalVoucher[0].gr_rr_number || null;
+        
+        const vehicleNumber = updateData.transportDetails?.vehicleNo || 
+                             updateData.vehicle_number || 
+                             originalVoucher[0].vehicle_number || null;
+        
+        const stationName = updateData.transportDetails?.station || 
+                           updateData.station_name || 
+                           originalVoucher[0].station_name || null;
+
         console.log("📝 Updating with staff values:", {
           staffIdToUpdate,
           assignedStaffToUpdate,
           mobileNumber
         });
 
-        // ✅ FIXED: UPDATE query with correct parameter order
+        console.log("🚛 Updating with transportation values:", {
+          transportName,
+          grRrNumber,
+          vehicleNumber,
+          stationName
+        });
+
+        // ✅ UPDATED UPDATE query with transportation fields
         await queryPromise(
           connection,
           `UPDATE voucher 
@@ -2183,7 +2213,11 @@ router.put("/transactions/:id", async (req, res) => {
                TotalAmount = ?,
                staffid = ?, 
                assigned_staff = ?,
-               retailer_mobile = ?
+               retailer_mobile = ?,
+               transport_name = ?,
+               gr_rr_number = ?,
+               vehicle_number = ?,
+               station_name = ?
            WHERE VoucherID = ?`,
           [
             vchNo,
@@ -2200,6 +2234,10 @@ router.put("/transactions/:id", async (req, res) => {
             staffIdToUpdate,        // staffid
             assignedStaffToUpdate,  // assigned_staff
             mobileNumber,           // retailer_mobile
+            transportName,          // transport_name ✅ NEW
+            grRrNumber,            // gr_rr_number ✅ NEW
+            vehicleNumber,         // vehicle_number ✅ NEW
+            stationName,           // station_name ✅ NEW
             voucherId               // WHERE VoucherID = ?
           ]
         );
@@ -2208,6 +2246,13 @@ router.put("/transactions/:id", async (req, res) => {
           staffid: staffIdToUpdate,
           assigned_staff: assignedStaffToUpdate,
           retailer_mobile: mobileNumber
+        });
+
+        console.log("✅ Transportation data updated in voucher:", {
+          transport_name: transportName,
+          gr_rr_number: grRrNumber,
+          vehicle_number: vehicleNumber,
+          station_name: stationName
         });
 
         // -------------------------------------------------------------------
@@ -2310,7 +2355,13 @@ router.put("/transactions/:id", async (req, res) => {
             voucherId,
             staffid: staffIdToUpdate,
             assigned_staff: assignedStaffToUpdate,
-            retailer_mobile: mobileNumber
+            retailer_mobile: mobileNumber,
+            transportation: {
+              transport_name: transportName,
+              gr_rr_number: grRrNumber,
+              vehicle_number: vehicleNumber,
+              station_name: stationName
+            }
           });
         });
       } catch (err) {
@@ -3180,6 +3231,14 @@ assigned_staff: transactionData.supplierInfo?.assigned_staff || transactionData.
            
             transactionData.batch_details?.[0]?.hsn_code ||
             null,
+              transport_name: transactionData.transportDetails?.transport || 
+                  transactionData.transport_name || null,
+  gr_rr_number: transactionData.transportDetails?.grNumber || 
+                transactionData.gr_rr_number || null,
+  vehicle_number: transactionData.transportDetails?.vehicleNo || 
+                  transactionData.vehicle_number || null,
+  station_name: transactionData.transportDetails?.station || 
+                transactionData.station_name || null
 };
 
   console.log(`🔍 FINAL Voucher Data - TransactionType: ${transactionType}, balance_amount: ${voucherData.balance_amount}`);
