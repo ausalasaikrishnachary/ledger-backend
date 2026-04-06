@@ -1702,7 +1702,10 @@ router.get("/transactions/:id", (req, res) => {
         batch, 
         quantity, 
         price, 
+          original_price, 
+          inclusive_gst,
         discount, 
+         hsn_code,
         gst, 
         cgst, 
         sgst, 
@@ -1820,7 +1823,6 @@ router.get("/transactions", (req, res) => {
 
 
 
-
 router.get('/invoices/:invoiceNumber', async (req, res) => {
   let connection;
 
@@ -1832,7 +1834,11 @@ router.get('/invoices/:invoiceNumber', async (req, res) => {
       });
     });
 
-    const { invoiceNumber } = req.params;
+    // ✅ Decode the invoice number if it was encoded
+    let { invoiceNumber } = req.params;
+    invoiceNumber = decodeURIComponent(invoiceNumber);
+
+    console.log('Searching for invoice:', invoiceNumber);
 
     const query = `
       SELECT 
@@ -1871,7 +1877,6 @@ router.get('/invoices/:invoiceNumber', async (req, res) => {
         v.TaxSystem,
         v.paid_amount,
         v.created_at,
-        v.hsn_code,
         v.balance_amount,
         v.status,
         v.paid_date,
@@ -1879,10 +1884,10 @@ router.get('/invoices/:invoiceNumber', async (req, res) => {
         v.DC,
         v.pdf_file_name,
         v.pdf_created_at,
-                v.transport_name,
+        v.transport_name,
         v.gr_rr_number,
         v.vehicle_number,
-v.station_name
+        v.station_name
       FROM voucher v
       LEFT JOIN accounts a ON v.PartyID = a.id
       WHERE v.InvoiceNumber = ?
@@ -1894,8 +1899,7 @@ v.station_name
           WHEN v.TransactionType = 'purchase voucher' THEN 4
           WHEN v.TransactionType = 'Purchase' THEN 5
           WHEN v.TransactionType = 'stock transfer' THEN 5
-                   WHEN v.TransactionType = 'stock inward' THEN 6
- 
+          WHEN v.TransactionType = 'stock inward' THEN 6
           ELSE 6
         END,
         v.created_at ASC
@@ -1915,9 +1919,9 @@ v.station_name
       });
     }
 
+    // Rest of your code remains the same...
     const voucherIDs = vouchers.map(v => v.VoucherID);
 
-    // Load line items from voucherdetails
     const itemQuery = `
       SELECT 
         vd.*,
@@ -1943,7 +1947,6 @@ v.station_name
       v.items = groupedItems[v.VoucherID] || [];
     });
 
-    // Build categorized response
     res.json({
       success: true,
       data: {
@@ -1952,7 +1955,7 @@ v.station_name
         creditnotes: vouchers.filter(v => v.TransactionType === "CreditNote"),
         purchases: vouchers.filter(v => v.TransactionType === "Purchase"),
         purchasevoucher: vouchers.filter(v => v.TransactionType === "purchase voucher"),
-         stocktransfer: vouchers.find(v => v.TransactionType === "stock transfer") || null, // ADD THIS
+        stocktransfer: vouchers.find(v => v.TransactionType === "stock transfer") || null,
         allEntries: vouchers
       }
     });
@@ -1968,8 +1971,6 @@ v.station_name
     if (connection) connection.release();
   }
 });
-
-
 
 
 router.get("/last-invoice", (req, res) => {
@@ -2044,7 +2045,8 @@ router.put("/transactions/:id", async (req, res) => {
             sgst: detail.sgst,
             igst: detail.igst,
             cess: detail.cess,
-            total: detail.total
+            total: detail.total,
+              hsn_code: detail.hsn_code 
           }));
         } catch {
           originalBatchDetails = [];
@@ -2231,14 +2233,14 @@ router.put("/transactions/:id", async (req, res) => {
             parseFloat(updateData.taxableAmount) || parseFloat(originalVoucher[0].BasicAmount),
             parseFloat(updateData.totalGST) || parseFloat(originalVoucher[0].TaxAmount),
             parseFloat(updateData.grandTotal) || parseFloat(originalVoucher[0].TotalAmount),
-            staffIdToUpdate,        // staffid
-            assignedStaffToUpdate,  // assigned_staff
-            mobileNumber,           // retailer_mobile
-            transportName,          // transport_name ✅ NEW
-            grRrNumber,            // gr_rr_number ✅ NEW
-            vehicleNumber,         // vehicle_number ✅ NEW
-            stationName,           // station_name ✅ NEW
-            voucherId               // WHERE VoucherID = ?
+            staffIdToUpdate,       
+            assignedStaffToUpdate, 
+            mobileNumber,           
+            transportName,          
+            grRrNumber,           
+            vehicleNumber,         
+            stationName,          
+            voucherId              
           ]
         );
 
@@ -2262,8 +2264,8 @@ router.put("/transactions/:id", async (req, res) => {
           await queryPromise(
             connection,
             `INSERT INTO voucherdetails 
-              (voucher_id, product, product_id, InvoiceNumber, batch, quantity, price, discount, gst, cgst, sgst, igst, cess, total)
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+              (voucher_id, product, product_id, InvoiceNumber, batch, quantity, price,original_price, discount, gst, cgst, sgst, igst, cess, total,hsn_code)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
             [
               voucherId,
               item.product || "",
@@ -2272,6 +2274,7 @@ router.put("/transactions/:id", async (req, res) => {
               item.batch || "",
               parseFloat(item.quantity) || 0,
               parseFloat(item.price) || 0,
+             parseFloat(item.original_price) || 0, 
               parseFloat(item.discount) || 0,
               parseFloat(item.gst) || 0,
               parseFloat(item.cgst) || 0,
@@ -2279,6 +2282,7 @@ router.put("/transactions/:id", async (req, res) => {
               parseFloat(item.igst) || 0,
               parseFloat(item.cess) || 0,
               parseFloat(item.total) || 0,
+                item.hsn_code || null,
             ]
           );
         }
@@ -2637,6 +2641,7 @@ const processTransaction = async (transactionData, transactionType, connection, 
         quantity: billingQuantity,
         stock_deduction_quantity: stockDeductionQuantity,
         price: parseFloat(i.price) || 0,
+             original_price: parseFloat(i.original_price) || 0,  
         discount: parseFloat(i.discount) || 0,
         discount_amount: discountAmount,
         credit_charge: creditCharge,
@@ -2651,7 +2656,8 @@ const processTransaction = async (transactionData, transactionType, connection, 
         flash_offer: flashOffer,
         buy_quantity: buyQuantity,
         get_quantity: getQuantity,
-        hsn_code: i.hsn_code || ""  // ✅ ADD
+        hsn_code: i.hsn_code || ""  ,
+         inclusive_gst: i.inclusive_gst || null  
       };
     } else {
       const gstPercentage = parseFloat(i.gst) || 0;
@@ -2668,6 +2674,7 @@ const processTransaction = async (transactionData, transactionType, connection, 
         quantity: billingQuantity,
         stock_deduction_quantity: stockDeductionQuantity,
         price: parseFloat(i.price) || 0,
+         original_price: parseFloat(i.original_price) || 0,  
         discount: parseFloat(i.discount) || 0,
         discount_amount: discountAmount,
         credit_charge: creditCharge,
@@ -2682,7 +2689,8 @@ const processTransaction = async (transactionData, transactionType, connection, 
         flash_offer: flashOffer,
         buy_quantity: buyQuantity,
         get_quantity: getQuantity,
-        hsn_code: i.hsn_code || ""  // ✅ ADD
+        hsn_code: i.hsn_code || ""  ,
+         inclusive_gst: i.inclusive_gst || null
       };
     }
   });
@@ -3163,7 +3171,6 @@ const voucherData = {
   TransactionType: transactionType,
   data_type: dataType,
   VchNo: vchNo,
-  hsn_code: transactionData.batchDetails?.[0]?.hsn_code || null,
   InvoiceNumber: invoiceNumber,
   order_number: orderNumber, 
   order_mode: orderMode,
@@ -3226,11 +3233,7 @@ assigned_staff: transactionData.supplierInfo?.assigned_staff || transactionData.
   pdf_data: transactionData.pdf_data || null,
   pdf_file_name: transactionData.pdf_file_name || null,
   pdf_created_at: transactionData.pdf_created_at || null,
-   hsn_code: items[0]?.hsn_code || 
-            transactionData.items?.[0]?.hsn_code ||
-           
-            transactionData.batch_details?.[0]?.hsn_code ||
-            null,
+
               transport_name: transactionData.transportDetails?.transport || 
                   transactionData.transport_name || null,
   gr_rr_number: transactionData.transportDetails?.grNumber || 
@@ -3238,7 +3241,7 @@ assigned_staff: transactionData.supplierInfo?.assigned_staff || transactionData.
   vehicle_number: transactionData.transportDetails?.vehicleNo || 
                   transactionData.vehicle_number || null,
   station_name: transactionData.transportDetails?.station || 
-                transactionData.station_name || null
+                transactionData.station_name || null,
 };
 
   console.log(`🔍 FINAL Voucher Data - TransactionType: ${transactionType}, balance_amount: ${voucherData.balance_amount}`);
@@ -3250,14 +3253,14 @@ assigned_staff: transactionData.supplierInfo?.assigned_staff || transactionData.
     [voucherData]
   );
 
-  // FIXED INSERT QUERY - Added missing field
   const insertDetailQuery = `
-    INSERT INTO voucherdetails (
-      voucher_id, product, product_id, transaction_type, InvoiceNumber,
-      batch, quantity, get_quantity, price, discount,
-      gst, cgst, sgst, igst, cess, total, created_at
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW())
-  `;
+  INSERT INTO voucherdetails (
+    voucher_id, product, product_id, transaction_type, InvoiceNumber,
+    batch, quantity, get_quantity, price, original_price, discount,
+    gst, cgst, sgst, igst, cess, total, inclusive_gst, hsn_code, created_at
+  ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW())
+`;
+
 
   for (const i of items) {
     const itemGST = isKacha ? 0 : i.gst;
@@ -3275,14 +3278,17 @@ assigned_staff: transactionData.supplierInfo?.assigned_staff || transactionData.
       i.batch,               
       i.quantity,         
       i.get_quantity || 0,   
-      i.price,            
+      i.price,    
+      i.original_price || 0,        
       i.discount,         
       itemGST,              
       itemCGST,             
       itemSGST,           
       itemIGST,           
       itemCess,             
-      i.total,              
+      i.total,    
+        i.inclusive_gst || null, 
+         i.hsn_code || null,       
     ]);
   }
 
