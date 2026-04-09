@@ -5,12 +5,19 @@ const axios = require('axios'); // ADD THIS LINE
 
 router.get("/next-invoice-number", async (req, res) => {
   try {
+    const { transactionType } = req.query; // Get transaction type from request
+    
+    // Validate transaction type
+    if (!transactionType || !['Sales', 'stock transfer'].includes(transactionType)) {
+      return res.status(400).send({ error: 'Valid transactionType is required (Sales or stock transfer)' });
+    }
+    
     const getFinancialYear = () => {
       const now = new Date();
       const year = now.getFullYear();
       const month = now.getMonth(); 
       
-      if (month >= 3) {
+      if (month >= 3) { // April to March
         return `${year.toString().slice(-2)}-${(year + 1).toString().slice(-2)}`;
       } else { // January to March
         return `${(year - 1).toString().slice(-2)}-${year.toString().slice(-2)}`;
@@ -21,15 +28,15 @@ router.get("/next-invoice-number", async (req, res) => {
     const prefix = `SSA/`;
     const suffix = `/${currentFY}`;
     
+    // Modified query to consider both TransactionType and financial year
     const query = `
-      SELECT MAX(CAST(SUBSTRING(InvoiceNumber, LOCATE('/', InvoiceNumber) + 1, 
-             LOCATE('/', InvoiceNumber, LOCATE('/', InvoiceNumber) + 1) - LOCATE('/', InvoiceNumber) - 1) AS UNSIGNED)) as maxNumber 
+      SELECT MAX(CAST(SUBSTRING_INDEX(SUBSTRING_INDEX(InvoiceNumber, '/', 2), '/', -1) AS UNSIGNED)) as maxNumber 
       FROM voucher 
-      WHERE TransactionType IN ('Sales', 'stock transfer') 
+      WHERE TransactionType = ? 
       AND InvoiceNumber LIKE 'SSA/%/${currentFY}'
     `;
 
-    db.query(query, (err, results) => {
+    db.query(query, [transactionType], (err, results) => {
       if (err) {
         console.error('Error fetching next invoice number:', err);
         return res.status(500).send({ error: 'Failed to get next invoice number' });
@@ -42,7 +49,11 @@ router.get("/next-invoice-number", async (req, res) => {
 
       const nextInvoiceNumber = `${prefix}${nextNumber.toString().padStart(6, '0')}${suffix}`;
       
-      res.send({ nextInvoiceNumber });
+      res.send({ 
+        nextInvoiceNumber,
+        transactionType,
+        financialYear: currentFY
+      });
     });
   } catch (error) {
     console.error('Error in next-invoice-number:', error);
@@ -1865,6 +1876,7 @@ router.get('/invoices/:invoiceNumber', async (req, res) => {
         v.AccountName,
         v.business_name,
         v.PartyID,
+        v.data_type ,
         a.name AS PartyName,
         v.BasicAmount,
         v.ValueOfGoods,
