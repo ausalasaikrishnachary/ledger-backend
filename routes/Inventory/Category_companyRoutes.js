@@ -373,6 +373,25 @@ router.put("/units/:id", (req, res) => {
   });
 });
 
+// Get Unit By ID
+router.get("/units/:id", (req, res) => {
+  const { id } = req.params;
+
+  const sql = "SELECT id, name FROM units WHERE id = ?";
+
+  db.query(sql, [id], (err, results) => {
+    if (err) {
+      console.error("Error fetching unit by ID:", err);
+      return res.status(500).send(err);
+    }
+
+    if (results.length === 0) {
+      return res.status(404).json({ message: "Unit not found" });
+    }
+
+    res.json(results[0]); // ✅ return single object
+  });
+});
 // Delete Unit
 router.delete("/units/:id", (req, res) => {
   const id = req.params.id;

@@ -1702,6 +1702,7 @@ router.get("/transactions/:id", (req, res) => {
         batch, 
         quantity, 
         price, 
+        unit_id,
           original_price, 
           inclusive_gst,
         discount, 
@@ -2039,6 +2040,8 @@ router.put("/transactions/:id", async (req, res) => {
             batch: detail.batch,
             quantity: detail.quantity,
             price: detail.price,
+            unit_id: detail.unit_id,
+             original_price: detail.original_price,
             discount: detail.discount,
             gst: detail.gst,
             cgst: detail.cgst,
@@ -2046,7 +2049,8 @@ router.put("/transactions/:id", async (req, res) => {
             igst: detail.igst,
             cess: detail.cess,
             total: detail.total,
-              hsn_code: detail.hsn_code 
+              hsn_code: detail.hsn_code ,
+               inclusive_gst: detail.inclusive_gst  
           }));
         } catch {
           originalBatchDetails = [];
@@ -2264,14 +2268,15 @@ router.put("/transactions/:id", async (req, res) => {
           await queryPromise(
             connection,
             `INSERT INTO voucherdetails 
-              (voucher_id, product, product_id, InvoiceNumber, batch, quantity, price,original_price, discount, gst, cgst, sgst, igst, cess, total,hsn_code)
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+              (voucher_id, product, product_id, InvoiceNumber, batch,unit_id, quantity, price,original_price, discount, gst, cgst, sgst, igst, cess, total,hsn_code, inclusive_gst)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?,?, ?, ?, ?, ?, ?, ?, ?, ?,?)`,
             [
               voucherId,
               item.product || "",
               item.product_id || "",
               invoiceNumber,
               item.batch || "",
+                item.unit_id || null,
               parseFloat(item.quantity) || 0,
               parseFloat(item.price) || 0,
              parseFloat(item.original_price) || 0, 
@@ -2283,6 +2288,7 @@ router.put("/transactions/:id", async (req, res) => {
               parseFloat(item.cess) || 0,
               parseFloat(item.total) || 0,
                 item.hsn_code || null,
+                  item.inclusive_gst || ""
             ]
           );
         }
@@ -2657,7 +2663,8 @@ const processTransaction = async (transactionData, transactionType, connection, 
         buy_quantity: buyQuantity,
         get_quantity: getQuantity,
         hsn_code: i.hsn_code || ""  ,
-         inclusive_gst: i.inclusive_gst || null  
+         inclusive_gst: i.inclusive_gst || null  ,
+           unit_id: i.unit_id || null  
       };
     } else {
       const gstPercentage = parseFloat(i.gst) || 0;
@@ -2690,7 +2697,8 @@ const processTransaction = async (transactionData, transactionType, connection, 
         buy_quantity: buyQuantity,
         get_quantity: getQuantity,
         hsn_code: i.hsn_code || ""  ,
-         inclusive_gst: i.inclusive_gst || null
+         inclusive_gst: i.inclusive_gst || null,
+         unit_id: i.unit_id || null
       };
     }
   });
@@ -3256,9 +3264,9 @@ assigned_staff: transactionData.supplierInfo?.assigned_staff || transactionData.
   const insertDetailQuery = `
   INSERT INTO voucherdetails (
     voucher_id, product, product_id, transaction_type, InvoiceNumber,
-    batch, quantity, get_quantity, price, original_price, discount,
+    batch, quantity, get_quantity, unit_id, price, original_price, discount,
     gst, cgst, sgst, igst, cess, total, inclusive_gst, hsn_code, created_at
-  ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW())
+  ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?,?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW())
 `;
 
 
@@ -3277,7 +3285,8 @@ assigned_staff: transactionData.supplierInfo?.assigned_staff || transactionData.
       invoiceNumber,        
       i.batch,               
       i.quantity,         
-      i.get_quantity || 0,   
+      i.get_quantity || 0,
+      i.unit_id || null,   
       i.price,    
       i.original_price || 0,        
       i.discount,         
