@@ -39,7 +39,7 @@ router.get("/next-invoice-number", async (req, res) => {
         prefix = `SSA/`;
         break;
       case 'stock transfer':
-        prefix = `SSK/`;
+        prefix = `CS/`;
         break;
       case 'stock inward':
         prefix = `SSk/`;
@@ -1890,6 +1890,8 @@ router.get('/invoices/:invoiceNumber', async (req, res) => {
         v.TotalPacks,
         v.TaxAmount,
         v.Subtotal,
+        v.additional_charges_type,
+        additional_charges_amount,
         v.assigned_staff,
         v.BillSundryAmount,
         v.TotalAmount,
@@ -2259,7 +2261,9 @@ router.put("/transactions/:id", async (req, res) => {
                transport_name = ?,
                gr_rr_number = ?,
                vehicle_number = ?,
-               station_name = ?
+               station_name = ?,
+                 additional_charges_type = ?,
+       additional_charges_amount = ?
            WHERE VoucherID = ?`,
           [
             vchNo,
@@ -2279,7 +2283,9 @@ router.put("/transactions/:id", async (req, res) => {
             transportName,          
             grRrNumber,           
             vehicleNumber,         
-            stationName,          
+            stationName,   
+             updateData.additional_charges_type || null,  
+    parseFloat(updateData.additional_charges_amount) || 0,        
             voucherId              
           ]
         );
@@ -3235,6 +3241,8 @@ const voucherData = {
   AccountName: account_name,      
   business_name: business_name,   
   PartyID: partyID,
+    additional_charges_type: transactionData.additional_charges_type || null,
+  additional_charges_amount: parseFloat(transactionData.additional_charges_amount) || 0,
  retailer_mobile: transactionData.customerInfo?.phone || 
                  transactionData.fullAccountDetails?.mobile_number || 
                             
