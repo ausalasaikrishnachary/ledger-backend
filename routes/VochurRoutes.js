@@ -2263,7 +2263,9 @@ router.put("/transactions/:id", async (req, res) => {
                vehicle_number = ?,
                station_name = ?,
                  additional_charges_type = ?,
-       additional_charges_amount = ?
+       additional_charges_amount = ?,
+       discount_charges = ?,
+discount_charges_amount = ?
            WHERE VoucherID = ?`,
           [
             vchNo,
@@ -2284,9 +2286,12 @@ router.put("/transactions/:id", async (req, res) => {
             grRrNumber,           
             vehicleNumber,         
             stationName,   
-             updateData.additional_charges_type || null,  
-    parseFloat(updateData.additional_charges_amount) || 0,        
-            voucherId              
+            
+      updateData.additional_charges_type || null,
+parseFloat(updateData.additional_charges_amount) || 0,
+updateData.discount_charges || "amount",
+parseFloat(updateData.discount_charges_amount) || 0,
+voucherId             
           ]
         );
 
@@ -2413,7 +2418,9 @@ router.put("/transactions/:id", async (req, res) => {
               gr_rr_number: grRrNumber,
               vehicle_number: vehicleNumber,
               station_name: stationName
-            }
+            },
+            discount_charges: updateData.discount_charges || "amount",          // ← ADD
+  discount_charges_amount: parseFloat(updateData.discount_charges_amount) || 0  // ← ADD
           });
         });
       } catch (err) {
@@ -3241,6 +3248,8 @@ const voucherData = {
   AccountName: account_name,      
   business_name: business_name,   
   PartyID: partyID,
+    discount_charges: transactionData.discount_charges || null,
+  discount_charges_amount: parseFloat(transactionData.discount_charges_amount) || 0,
     additional_charges_type: transactionData.additional_charges_type || null,
   additional_charges_amount: parseFloat(transactionData.additional_charges_amount) || 0,
  retailer_mobile: transactionData.customerInfo?.phone || 
