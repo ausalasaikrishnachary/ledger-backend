@@ -4043,5 +4043,41 @@ router.get("/hsnreport", (req, res) => {
     });
   });
 });
+router.get("/Salesreportdetail/:id", (req, res) => {
+  const { id } = req.params;
+
+  const query = `
+    SELECT 
+      v.VoucherID,
+      v.TransactionType,
+      v.VchNo,
+      v.PartyName,
+      v.Date,
+      d.id,
+      d.product AS product,
+      d.product_id,
+      d.price,
+      d.quantity,
+      (d.price * d.quantity) AS total
+    FROM voucher v
+    JOIN voucherdetails d 
+      ON v.VoucherID = d.voucher_id
+    WHERE v.TransactionType IN ('Sales', 'Purchase')
+      AND d.product_id = ?   -- ✅ FIXED HERE
+    ORDER BY v.VoucherID DESC, d.id DESC
+  `;
+
+  db.query(query, [id], (err, result) => {
+    if (err) {
+      console.error(err);
+      return res.status(500).json({ success: false });
+    }
+
+    res.json({
+      success: true,
+      data: result
+    });
+  });
+});
 module.exports = router;
 
