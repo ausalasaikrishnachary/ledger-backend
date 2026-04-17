@@ -1536,17 +1536,27 @@ router.get('/get-sales-products', async (req, res) => {
         p.can_be_sold,
         p.net_price,
         p.weight,
-        MAX(b.product_type) AS product_type,   -- ✅ FROM BATCHES
+
         c.category_name,
-        MAX(b.exp_date) AS exp_date
+
+        MAX(b.product_type) AS product_type,
+        MAX(b.exp_date) AS exp_date,
+        SUM(b.quantity) AS total_quantity  
+
       FROM products p
+
       LEFT JOIN categories c 
         ON p.category_id = c.id
+
       LEFT JOIN batches b
         ON b.product_id = p.id
-      WHERE p.group_by = 'Salescatalog'
-         OR (p.group_by = 'Purchaseditems' AND p.can_be_sold = 1)
+
+      WHERE 
+        p.group_by = 'Salescatalog'
+        OR (p.group_by = 'Purchaseditems' AND p.can_be_sold = 1)
+
       GROUP BY p.id
+
       ORDER BY p.created_at DESC
     `);
 
@@ -1557,27 +1567,33 @@ router.get('/get-sales-products', async (req, res) => {
       price: item.price,
       mrp: item.mrp,
       unit: item.unit,
-      weight:item.weight,
+      weight: item.weight,
+
       category_id: item.category_id,
       category: item.category_name,
+
       gst_rate: item.gst_rate,
       inclusive_gst: item.inclusive_gst,
+
       images: item.images,
       group_by: item.group_by,
       can_be_sold: item.can_be_sold,
+
       net_price: item.net_price,
-      product_type: item.product_type || "",   // ✅ NOW COMES FROM BATCHES
-      exp_date: item.exp_date
+
+      product_type: item.product_type || "",
+      exp_date: item.exp_date,
+
+      quantity: item.total_quantity || 0   
     }));
 
     res.json(products);
 
   } catch (err) {
-    console.error('Error fetching products with category:', err);
+    console.error('Error fetching products with category + quantity:', err);
     res.status(500).json({ message: 'Failed to fetch products' });
   }
 });
-  
 
 
 
