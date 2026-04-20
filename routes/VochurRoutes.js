@@ -1811,11 +1811,17 @@ router.put("/transactions/:id", async (req, res) => {
   const voucherId = req.params.id;
   const updateData = req.body;
 
-  console.log("👤 UPDATE - Staff Data Received:", {
-    staffid: updateData.selectedStaffId,
-    assigned_staff: updateData.assigned_staff
-  });
+console.log("📋 Voucher document_type:", updateData.document_type);
+console.log("📋 Items document_type:", updateData.batchDetails?.map(item => ({ 
+  product: item.product, 
+  document_type: item.document_type 
+})));
 
+// After updating voucher table
+console.log("✅ Voucher document_type saved:", updateData.document_type);
+
+// After inserting voucherdetails
+console.log("✅ Items document_type saved:", updateData.batchDetails?.map(item => item.document_type));
 
 
   db.getConnection((err, connection) => {
@@ -1865,7 +1871,8 @@ router.put("/transactions/:id", async (req, res) => {
             cess: detail.cess,
             total: detail.total,
               hsn_code: detail.hsn_code ,
-               inclusive_gst: detail.inclusive_gst  
+               inclusive_gst: detail.inclusive_gst  ,
+                  document_type: detail.document_type 
           }));
         } catch {
           originalBatchDetails = [];
@@ -2043,7 +2050,10 @@ router.put("/transactions/:id", async (req, res) => {
        additional_charges_amount = ?,
        discount_charges = ?,
 discount_charges_amount = ?,
- round_off = ? 
+ round_off = ? ,
+  document_type = ?  ,
+  bb_bc = ?,
+       L_I = ?
            WHERE VoucherID = ?`,
           [
             vchNo,
@@ -2070,6 +2080,9 @@ parseFloat(updateData.additional_charges_amount) || 0,
 updateData.discount_charges || "amount",
 parseFloat(updateData.discount_charges_amount) || 0,
  parseFloat(updateData.roundOff) || 0,
+ updateData.document_type || null,
+  updateData.bb_bc || updateData.customerType || 'b2b',  // 'b2b' or 'b2c'
+    updateData.L_I || '',  
 voucherId             
           ]
         );
@@ -2094,12 +2107,13 @@ voucherId
           await queryPromise(
             connection,
             `INSERT INTO voucherdetails 
-              (voucher_id, product, product_id, InvoiceNumber, batch,unit_id, quantity, price,original_price, discount, gst, cgst, sgst, igst, cess, total,hsn_code, inclusive_gst)
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?,?, ?, ?, ?, ?, ?, ?, ?, ?,?)`,
+              (voucher_id, product, product_id,transaction_type, InvoiceNumber, batch,unit_id, quantity, price,original_price, discount, gst, cgst, sgst, igst, cess, total,hsn_code, inclusive_gst, document_type)
+             VALUES (?, ?, ?, ?, ?, ?, ?,?, ?,?, ?, ?, ?, ?, ?, ?, ?, ?,?, ?)`,
             [
               voucherId,
               item.product || "",
               item.product_id || "",
+                 originalTransactionType,
               invoiceNumber,
               item.batch || "",
                 item.unit_id || null,
@@ -2114,7 +2128,8 @@ voucherId
               parseFloat(item.cess) || 0,
               parseFloat(item.total) || 0,
                 item.hsn_code || null,
-                  item.inclusive_gst || ""
+                  item.inclusive_gst || "",
+                  item.document_type || null 
             ]
           );
         }
@@ -2467,7 +2482,7 @@ const processTransaction = async (transactionData, transactionType, connection, 
     
     totalDiscount += discountAmount;  
     totalCreditCharge += creditCharge;
-
+const itemDocumentType = i.document_type || null;
     if (isKacha) {
       return {
         product: i.product || "",
@@ -2493,7 +2508,8 @@ const processTransaction = async (transactionData, transactionType, connection, 
         get_quantity: getQuantity,
         hsn_code: i.hsn_code || ""  ,
          inclusive_gst: i.inclusive_gst || null  ,
-           unit_id: i.unit_id || null  
+           unit_id: i.unit_id || null  ,
+           document_type: itemDocumentType
       };
     } else {
       const gstPercentage = parseFloat(i.gst) || 0;
@@ -2527,7 +2543,8 @@ const processTransaction = async (transactionData, transactionType, connection, 
         get_quantity: getQuantity,
         hsn_code: i.hsn_code || ""  ,
          inclusive_gst: i.inclusive_gst || null,
-         unit_id: i.unit_id || null
+         unit_id: i.unit_id || null,
+          document_type: itemDocumentType
       };
     }
   });
@@ -3013,6 +3030,7 @@ const voucherData = {
   order_mode: orderMode,
   flash_offer: items.some(item => item.flash_offer === 1) ? 1 : 0,
   due_date: transactionData.due_date || null,
+  document_type: transactionData.document_type || null, 
   Date: transactionData.Date || new Date().toISOString().split("T")[0],
   PaymentTerms: transactionData.PaymentTerms || "Immediate",
   Freight: parseFloat(transactionData.Freight) || 0,
@@ -3084,6 +3102,8 @@ assigned_staff: transactionData.supplierInfo?.assigned_staff || transactionData.
                   transactionData.vehicle_number || null,
   station_name: transactionData.transportDetails?.station || 
                 transactionData.station_name || null,
+                bb_bc: transactionData.bb_bc || transactionData.customerType || 'b2b',
+  L_I: transactionData.L_I || '',  
 };
 
   console.log(`🔍 FINAL Voucher Data - TransactionType: ${transactionType}, balance_amount: ${voucherData.balance_amount}`);
@@ -3099,8 +3119,8 @@ assigned_staff: transactionData.supplierInfo?.assigned_staff || transactionData.
   INSERT INTO voucherdetails (
     voucher_id, product, product_id, transaction_type, InvoiceNumber,
     batch, quantity, get_quantity, unit_id, price, original_price, discount,
-    gst, cgst, sgst, igst, cess, total, inclusive_gst, hsn_code, created_at
-  ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?,?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW())
+    gst, cgst, sgst, igst, cess, total, inclusive_gst, hsn_code,document_type, created_at
+  ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?,?, ?, ?, ?, ?, ?, ?, ?, ?,?,?, NOW())
 `;
 
 
@@ -3131,7 +3151,8 @@ assigned_staff: transactionData.supplierInfo?.assigned_staff || transactionData.
       itemCess,             
       i.total,    
         i.inclusive_gst || null, 
-         i.hsn_code || null,       
+         i.hsn_code || null,   
+           i.document_type || null    
     ]);
   }
 
@@ -4063,7 +4084,7 @@ router.get("/Salesreportdetail/:id", (req, res) => {
     JOIN voucherdetails d 
       ON v.VoucherID = d.voucher_id
     WHERE v.TransactionType IN ('Sales', 'Purchase')
-      AND d.product_id = ?   -- ✅ FIXED HERE
+      AND d.product_id = ?  
     ORDER BY v.VoucherID DESC, d.id DESC
   `;
 
