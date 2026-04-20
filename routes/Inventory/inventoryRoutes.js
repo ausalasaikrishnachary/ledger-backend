@@ -532,8 +532,7 @@ router.post('/products', async (req, res) => {
       ...cleanProduct,
       unit: data.unit,
       product_type: data.product_type || null,
-      weight: data.weight || 0,
-        document_type: data.document_type || null,
+      weight: data.weight || 0, // Add weight column
       price: data.price || 0,
       purchase_price: data.purchase_price || 0,
       mrp: data.mrp || 0,
@@ -785,8 +784,6 @@ router.put('/products/:id', async (req, res) => {
       cess_rate: data.cess_rate || existing.cess_rate,
       cess_amount: data.cess_amount || existing.cess_amount,
       sku: data.sku || existing.sku,
-     document_type: data.document_type || existing.document_type || null,  // ✅ Make sure this line exists
-
       weight: data.weight || existing.weight,
       min_stock_alert: data.min_stock_alert || existing.min_stock_alert,
       max_stock_alert: data.max_stock_alert || existing.max_stock_alert,
@@ -804,7 +801,6 @@ router.put('/products/:id', async (req, res) => {
       price: updateData.price,
       purchase_price: updateData.purchase_price,
       mrp: updateData.mrp,
-      document_type: updateData.document_type,
       weight: updateData.weight, 
       maintain_batch: updateData.maintain_batch,
       opening_stock_date: updateData.opening_stock_date
