@@ -2053,7 +2053,8 @@ discount_charges_amount = ?,
  round_off = ? ,
   document_type = ?  ,
   bb_bc = ?,
-       L_I = ?
+       L_I = ?,
+        gstin = ? 
            WHERE VoucherID = ?`,
           [
             vchNo,
@@ -2081,8 +2082,9 @@ updateData.discount_charges || "amount",
 parseFloat(updateData.discount_charges_amount) || 0,
  parseFloat(updateData.roundOff) || 0,
  updateData.document_type || null,
-  updateData.bb_bc || updateData.customerType || 'b2b',  // 'b2b' or 'b2c'
+  updateData.bb_bc || updateData.customerType || '',  
     updateData.L_I || '',  
+     updateData.gstin || null,  
 voucherId             
           ]
         );
@@ -3102,8 +3104,9 @@ assigned_staff: transactionData.supplierInfo?.assigned_staff || transactionData.
                   transactionData.vehicle_number || null,
   station_name: transactionData.transportDetails?.station || 
                 transactionData.station_name || null,
-                bb_bc: transactionData.bb_bc || transactionData.customerType || 'b2b',
+                bb_bc: transactionData.bb_bc || transactionData.customerType || '',
   L_I: transactionData.L_I || '',  
+  gstin: transactionData.gstin || null
 };
 
   console.log(`🔍 FINAL Voucher Data - TransactionType: ${transactionType}, balance_amount: ${voucherData.balance_amount}`);
@@ -3870,34 +3873,24 @@ router.get("/voucher-list", (req, res) => {
     res.status(200).json(result);
   });
 });
-
-
-
-
 router.get("/gstreport", (req, res) => {
-
-  // Fetch vouchers + customer details (NO order_number filter)
+  // Fetch only required fields from vouchers
   const voucherQuery = `
     SELECT 
-      v.*,
-      a.business_name,
-      a.email,
-      a.mobile_number,
-      a.gstin,
-      a.billing_address_line1,
-      a.billing_address_line2,
-      a.billing_city,
-      a.billing_state,
-      a.billing_country,
-      a.billing_pin_code,
-      a.shipping_address_line1,
-      a.shipping_address_line2,
-      a.shipping_city,
-      a.shipping_state,
-      a.shipping_country,
-      a.shipping_pin_code
+      v.VoucherID,
+      v.VchNo,
+      v.Date,
+      v.PartyName,
+      v.gstin,
+      v.bb_bc,
+      v.Subtotal,
+      v.SGSTAmount,
+      v.CGSTAmount,
+      v.IGSTAmount,
+      v.TotalAmount,
+      v.TransactionType
     FROM voucher v
-    LEFT JOIN accounts a ON v.PartyID = a.id
+    WHERE v.TransactionType = 'Sales'
     ORDER BY v.VoucherID DESC
   `;
 
@@ -3907,14 +3900,16 @@ router.get("/gstreport", (req, res) => {
       return res.status(500).send(err);
     }
 
-    // Fetch all voucher details
+    // Fetch only required fields from voucher details
     const detailsQuery = `
       SELECT 
-        vd.*,
-        p.goods_name,
-        p.unit
+        vd.voucher_id,
+        vd.hsn_code,
+        vd.gst,
+        vd.quantity,
+        vd.total
       FROM voucherdetails vd
-      LEFT JOIN products p ON vd.product_id = p.id
+      WHERE vd.voucher_id IN (${vouchers.map(v => v.VoucherID).join(',') || 0})
     `;
 
     db.query(detailsQuery, (err, details) => {
@@ -3932,24 +3927,36 @@ router.get("/gstreport", (req, res) => {
         detailsByVoucher[row.voucher_id].push(row);
       });
 
-      // Attach details to vouchers
-      const finalResult = vouchers.map(v => {
-        const vDetails = detailsByVoucher[v.VoucherID] || [];
-
-        return {
-          ...v,
-          items: vDetails,
-          totalItems: vDetails.length,
-          totalQuantity: vDetails.reduce((sum, i) => sum + (parseFloat(i.quantity) || 0), 0),
-          totalAmount: vDetails.reduce((sum, i) => sum + (parseFloat(i.total) || 0), 0)
-        };
-      });
+      // Attach only required details to vouchers
+      const finalResult = vouchers.map(v => ({
+        VoucherID: v.VoucherID,
+        VchNo: v.VchNo,
+        Date: v.Date,
+        PartyName: v.PartyName,
+        gstin: v.gstin,
+        bb_bc: v.bb_bc,
+        Subtotal: v.Subtotal,
+        SGSTAmount: v.SGSTAmount,
+        CGSTAmount: v.CGSTAmount,
+        IGSTAmount: v.IGSTAmount,
+        TotalAmount: v.TotalAmount,
+        TransactionType: v.TransactionType,
+        items: (detailsByVoucher[v.VoucherID] || []).map(item => ({
+          hsn_code: item.hsn_code,
+          gst: item.gst,
+          subtotal: item.subtotal,
+          sgst_amount: item.sgst_amount,
+          cgst_amount: item.cgst_amount,
+          igst_amount: item.igst_amount,
+          quantity: item.quantity,
+          total: item.total
+        }))
+      }));
 
       res.send(finalResult);
     });
   });
 });
-
 
 router.delete("/clear-cart/:customerId", async (req, res) => {
   const { customerId } = req.params;
