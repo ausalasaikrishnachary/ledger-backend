@@ -3982,6 +3982,8 @@ router.delete("/clear-cart/:customerId", async (req, res) => {
   }
 });
 
+
+
 router.get("/hsnreport", (req, res) => {
   const { fromDate, toDate } = req.query;
 
