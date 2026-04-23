@@ -4001,73 +4001,60 @@ router.get("/hsnreport", (req, res) => {
 
   const voucherQuery = `
     SELECT 
-      v.*,
-      a.business_name,
-      a.email,
-      a.mobile_number,
-      a.gstin,
-      a.billing_address_line1,
-      a.billing_address_line2,
-      a.billing_city,
-      a.billing_state,
-      a.billing_country,
-      a.billing_pin_code,
-      a.shipping_address_line1,
-      a.shipping_address_line2,
-      a.shipping_city,
-      a.shipping_state,
-      a.shipping_country,
-      a.shipping_pin_code
+      v.VoucherID,
+      v.Date,
+      v.TransactionType,
+      v.TotalAmount,
+      v.Subtotal,
+      v.SGSTAmount,
+      v.CGSTAmount,
+      v.IGSTAmount
     FROM voucher v
-    LEFT JOIN accounts a ON v.PartyID = a.id
     ${dateFilter}
     ORDER BY v.VoucherID DESC
   `;
 
   db.query(voucherQuery, params, (err, vouchers) => {
-    if (err) {
-      console.error("Error fetching vouchers:", err);
-      return res.status(500).send(err);
-    }
+    if (err) return res.status(500).send(err);
 
     const detailsQuery = `
       SELECT 
-        vd.*,
-        p.goods_name,
-        p.unit
+        vd.voucher_id,
+        vd.product_id,
+        vd.quantity,
+        vd.total,
+        vd.gst,
+        p.hsn_code,
+        p.goods_name
       FROM voucherdetails vd
       LEFT JOIN products p ON vd.product_id = p.id
+      WHERE vd.product_id IS NOT NULL
+        AND p.hsn_code IS NOT NULL
     `;
 
     db.query(detailsQuery, (err, details) => {
-      if (err) {
-        console.error("Error fetching voucher details:", err);
-        return res.status(500).send(err);
-      }
+      if (err) return res.status(500).send(err);
 
-      const detailsByVoucher = {};
+      // Group details by voucher_id
+      const detailsMap = {};
       details.forEach((row) => {
-        if (!detailsByVoucher[row.voucher_id]) {
-          detailsByVoucher[row.voucher_id] = [];
+        if (!detailsMap[row.voucher_id]) {
+          detailsMap[row.voucher_id] = [];
         }
-        detailsByVoucher[row.voucher_id].push(row);
+        detailsMap[row.voucher_id].push(row);
       });
 
-      const finalResult = vouchers.map((v) => {
-        const vDetails = detailsByVoucher[v.VoucherID] || [];
-        return {
+      // Map vouchers with items, filter out empty ones
+      const result = vouchers
+        .map((v) => ({
           ...v,
-          items: vDetails,
-          totalItems: vDetails.length,
-          totalAmount: vDetails.reduce(
-            (sum, i) => sum + (parseFloat(i.total) || 0),
-            0
-          ),
-        };
-      });
+          items: (detailsMap[v.VoucherID] || []).filter(
+            (item) => item.product_id !== null && item.hsn_code !== null
+          )
+        }))
+        .filter((v) => v.items.length > 0); // ✅ empty items vouchers remove
 
-      console.log("Total vouchers processed:", finalResult.length);
-      res.send(finalResult);
+      res.send(result);
     });
   });
 });
