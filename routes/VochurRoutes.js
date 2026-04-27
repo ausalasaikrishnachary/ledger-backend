@@ -4096,5 +4096,815 @@ router.get("/Salesreportdetail/:id", (req, res) => {
     });
   });
 });
+
+
+router.post('/production/create', (req, res) => {
+  const { voucherNo, invoiceDate, productionItems } = req.body;
+
+  if (!productionItems || productionItems.length === 0) {
+    return res.status(400).json({
+      success: false,
+      message: 'No production items to save'
+    });
+  }
+
+  // Get connection
+  db.getConnection((err, connection) => {
+    if (err) {
+      console.error('Connection error:', err);
+      return res.status(500).json({ success: false, message: err.message });
+    }
+
+    // Start transaction
+    connection.beginTransaction(err => {
+      if (err) {
+        connection.release();
+        return res.status(500).json({ success: false, message: err.message });
+      }
+
+      let completedVouchers = 0;
+      let voucherIds = [];
+
+      // Create a separate voucher for each item (since each item has its own product_id, batch_id)
+      productionItems.forEach((item, idx) => {
+        const itemTotal = (parseFloat(item.qty) || 0) * (parseFloat(item.rate) || 0);
+        
+        const voucherQuery = `
+          INSERT INTO voucher (
+            VchNo,
+            Date,
+            TransactionType,
+            product_id,
+            batch_id,
+            batch_number,
+            TotalAmount,
+            TotalPacks,
+            EntryDate
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+        `;
+
+        const voucherValues = [
+          `${voucherNo}`,        
+          invoiceDate,                       // Date
+          item.type,                         // TransactionType (Production/Consumption)
+          item.itemId,                       // product_id
+          item.batchId,                      // batch_id
+          item.batchNo,                      // batch_number
+          item.amount || itemTotal,          // TotalAmount
+          1,                                 // TotalPacks (1 item per voucher)
+          new Date()                         // EntryDate
+        ];
+
+        connection.query(voucherQuery, voucherValues, (err, result) => {
+          if (err) {
+            return connection.rollback(() => {
+              connection.release();
+              console.error('Voucher insert error:', err);
+              res.status(500).json({ success: false, message: err.message });
+            });
+          }
+
+          const voucherId = result.insertId;
+          voucherIds.push({ id: voucherId, item: item, idx: idx });
+
+          completedVouchers++;
+
+          // When all vouchers are inserted, process details
+          if (completedVouchers === productionItems.length) {
+            processDetails();
+          }
+        });
+      });
+
+      function processDetails() {
+        let completedDetails = 0;
+
+        productionItems.forEach((item, idx) => {
+          const voucherInfo = voucherIds.find(v => v.idx === idx);
+          
+          if (!voucherInfo) {
+            return connection.rollback(() => {
+              connection.release();
+              res.status(500).json({ success: false, message: `No voucher found for item: ${idx}` });
+            });
+          }
+
+          // Insert into voucherdetails
+          const detailsQuery = `
+            INSERT INTO voucherdetails (
+              voucher_id,
+              product,
+              product_id,
+              batch,
+              batch_id,
+              quantity,
+              price,
+              transaction_type,
+              total,
+              created_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+          `;
+
+          const itemTotal = (parseFloat(item.qty) || 0) * (parseFloat(item.rate) || 0);
+
+          connection.query(
+            detailsQuery,
+            [
+              voucherInfo.id,
+              item.itemName,
+              item.itemId,
+              item.batchNo,
+              item.batchId,
+              item.qty,
+              item.rate,
+              item.type,
+              item.amount || itemTotal,
+              new Date()
+            ],
+            (err) => {
+              if (err) {
+                return connection.rollback(() => {
+                  connection.release();
+                  console.error('Details insert error:', err);
+                  res.status(500).json({ success: false, message: err.message });
+                });
+              }
+
+              // Update stock in batches table
+              let updateStockQuery = '';
+              let updateValues = [];
+
+              if (item.type === 'Production') {
+                updateStockQuery = `
+                  UPDATE batches 
+                  SET 
+                    stock_in = stock_in + ?,
+                    quantity = quantity + ?
+                  WHERE product_id = ? AND batch_number = ?
+                `;
+                updateValues = [item.qty, item.qty, item.itemId, item.batchNo];
+              } 
+              else if (item.type === 'Consumption') {
+                updateStockQuery = `
+                  UPDATE batches 
+                  SET 
+                    stock_out = stock_out + ?,
+                    quantity = quantity - ?
+                  WHERE product_id = ? AND batch_number = ?
+                `;
+                updateValues = [item.qty, item.qty, item.itemId, item.batchNo];
+              }
+
+              if (updateStockQuery && item.batchId) {
+                connection.query(updateStockQuery, updateValues, (err, updateResult) => {
+                  if (err) {
+                    return connection.rollback(() => {
+                      connection.release();
+                      console.error('Stock update error:', err);
+                      res.status(500).json({ success: false, message: 'Failed to update stock: ' + err.message });
+                    });
+                  }
+
+                  completedDetails++;
+                  finalizeTransaction();
+                });
+              } else {
+                completedDetails++;
+                finalizeTransaction();
+              }
+
+              function finalizeTransaction() {
+                if (completedDetails === productionItems.length) {
+                  connection.commit(err => {
+                    if (err) {
+                      return connection.rollback(() => {
+                        connection.release();
+                        res.status(500).json({ success: false, message: err.message });
+                      });
+                    }
+
+                    connection.release();
+                    res.status(201).json({
+                      success: true,
+                      message: 'Production saved successfully',
+                      data: {
+                        vouchersCreated: productionItems.length,
+                        itemsCount: productionItems.length
+                      }
+                    });
+                  });
+                }
+              }
+            }
+          );
+        });
+      }
+    });
+  });
+});
+// PUT API - Update production by ID
+router.put('/production/update/:id', (req, res) => {
+  const { id } = req.params;
+  const { voucherNo, invoiceDate, productionItems } = req.body;
+
+  if (!productionItems || productionItems.length === 0) {
+    return res.status(400).json({
+      success: false,
+      message: 'No production items to save'
+    });
+  }
+
+  // Get connection
+  db.getConnection((err, connection) => {
+    if (err) {
+      console.error('Connection error:', err);
+      return res.status(500).json({ success: false, message: err.message });
+    }
+
+    // Start transaction
+    connection.beginTransaction(err => {
+      if (err) {
+        connection.release();
+        return res.status(500).json({ success: false, message: err.message });
+      }
+
+      // First, get old items to revert stock changes
+      const getOldItemsQuery = `
+        SELECT vd.*, v.TransactionType, v.product_id, v.batch_id, v.batch_number
+        FROM voucherdetails vd
+        JOIN voucher v ON vd.voucher_id = v.VoucherID
+        WHERE v.VoucherID = ?
+      `;
+
+      connection.query(getOldItemsQuery, [id], (err, oldItems) => {
+        if (err) {
+          return connection.rollback(() => {
+            connection.release();
+            console.error('Error fetching old items:', err);
+            res.status(500).json({ success: false, message: err.message });
+          });
+        }
+
+        // Revert old stock changes
+        let revertCompleted = 0;
+        
+        if (oldItems.length > 0) {
+          oldItems.forEach((oldItem) => {
+            let revertQuery = '';
+            let revertValues = [];
+
+            if (oldItem.transaction_type === 'Production') {
+              // Reverse Production: Subtract from stock
+              revertQuery = `
+                UPDATE batches 
+                SET 
+                  stock_in = stock_in - ?,
+                  quantity = quantity - ?
+                WHERE product_id = ? AND batch_number = ?
+              `;
+              revertValues = [oldItem.quantity, oldItem.quantity, oldItem.product_id, oldItem.batch_number];
+            } 
+            else if (oldItem.transaction_type === 'Consumption') {
+              // Reverse Consumption: Add back to stock
+              revertQuery = `
+                UPDATE batches 
+                SET 
+                  stock_out = stock_out - ?,
+                  quantity = quantity + ?
+                WHERE product_id = ? AND batch_number = ?
+              `;
+              revertValues = [oldItem.quantity, oldItem.quantity, oldItem.product_id, oldItem.batch_number];
+            }
+
+            if (revertQuery && oldItem.batch_id) {
+              connection.query(revertQuery, revertValues, (err) => {
+                if (err) {
+                  return connection.rollback(() => {
+                    connection.release();
+                    console.error('Error reverting stock:', err);
+                    res.status(500).json({ success: false, message: err.message });
+                  });
+                }
+                revertCompleted++;
+                proceedWithUpdate();
+              });
+            } else {
+              revertCompleted++;
+              proceedWithUpdate();
+            }
+          });
+        } else {
+          proceedWithUpdate();
+        }
+
+        function proceedWithUpdate() {
+          if (revertCompleted !== oldItems.length && oldItems.length > 0) {
+            return;
+          }
+
+          // Delete old voucher details
+          const deleteDetailsQuery = `DELETE FROM voucherdetails WHERE voucher_id = ?`;
+          connection.query(deleteDetailsQuery, [id], (err) => {
+            if (err) {
+              return connection.rollback(() => {
+                connection.release();
+                console.error('Error deleting old details:', err);
+                res.status(500).json({ success: false, message: err.message });
+              });
+            }
+
+            // Update voucher main record
+            const updateVoucherQuery = `
+              UPDATE voucher 
+              SET 
+                VchNo = ?,
+                Date = ?,
+                TotalAmount = ?,
+                TotalPacks = ?
+              WHERE VoucherID = ?
+            `;
+
+            // Calculate new totals
+            let totalAmount = 0;
+            productionItems.forEach(item => {
+              const itemTotal = (parseFloat(item.qty) || 0) * (parseFloat(item.rate) || 0);
+              totalAmount += (item.amount || itemTotal);
+            });
+
+            connection.query(updateVoucherQuery, [
+              voucherNo,
+              invoiceDate,
+              totalAmount,
+              productionItems.length,
+              id
+            ], (err) => {
+              if (err) {
+                return connection.rollback(() => {
+                  connection.release();
+                  console.error('Error updating voucher:', err);
+                  res.status(500).json({ success: false, message: err.message });
+                });
+              }
+
+              // Insert new voucher details and update stock
+              let completedDetails = 0;
+              const newVoucherIds = [];
+
+              productionItems.forEach((item, idx) => {
+                const itemTotal = (parseFloat(item.qty) || 0) * (parseFloat(item.rate) || 0);
+
+                // Insert new details
+                const detailsQuery = `
+                  INSERT INTO voucherdetails (
+                    voucher_id,
+                    product,
+                    product_id,
+                    batch,
+                    batch_id,
+                    quantity,
+                    price,
+                    transaction_type,
+                    total,
+                    created_at
+                  ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                `;
+
+                connection.query(detailsQuery, [
+                  id,
+                  item.itemName,
+                  item.itemId,
+                  item.batchNo,
+                  item.batchId,
+                  item.qty,
+                  item.rate,
+                  item.type,
+                  item.amount || itemTotal,
+                  new Date()
+                ], (err, result) => {
+                  if (err) {
+                    return connection.rollback(() => {
+                      connection.release();
+                      console.error('Error inserting details:', err);
+                      res.status(500).json({ success: false, message: err.message });
+                    });
+                  }
+
+                  newVoucherIds.push(result.insertId);
+
+                  // Update stock with new values
+                  let stockQuery = '';
+                  let stockValues = [];
+
+                  if (item.type === 'Production') {
+                    stockQuery = `
+                      UPDATE batches 
+                      SET 
+                        stock_in = stock_in + ?,
+                        quantity = quantity + ?
+                      WHERE product_id = ? AND batch_number = ?
+                    `;
+                    stockValues = [item.qty, item.qty, item.itemId, item.batchNo];
+                  } 
+                  else if (item.type === 'Consumption') {
+                    stockQuery = `
+                      UPDATE batches 
+                      SET 
+                        stock_out = stock_out + ?,
+                        quantity = quantity - ?
+                      WHERE product_id = ? AND batch_number = ?
+                    `;
+                    stockValues = [item.qty, item.qty, item.itemId, item.batchNo];
+                  }
+
+                  if (stockQuery && item.batchId) {
+                    connection.query(stockQuery, stockValues, (err) => {
+                      if (err) {
+                        return connection.rollback(() => {
+                          connection.release();
+                          console.error('Error updating stock:', err);
+                          res.status(500).json({ success: false, message: err.message });
+                        });
+                      }
+                      completedDetails++;
+                      finalizeUpdate();
+                    });
+                  } else {
+                    completedDetails++;
+                    finalizeUpdate();
+                  }
+
+                  function finalizeUpdate() {
+                    if (completedDetails === productionItems.length) {
+                      connection.commit(err => {
+                        if (err) {
+                          return connection.rollback(() => {
+                            connection.release();
+                            res.status(500).json({ success: false, message: err.message });
+                          });
+                        }
+
+                        connection.release();
+                        res.status(200).json({
+                          success: true,
+                          message: 'Production updated successfully',
+                          data: {
+                            voucherId: id,
+                            itemsCount: productionItems.length
+                          }
+                        });
+                      });
+                    }
+                  }
+                });
+              });
+            });
+          });
+        }
+      });
+    });
+  });
+});
+
+// DELETE API - Delete production by ID
+router.delete('/production/delete/:id', (req, res) => {
+  const { id } = req.params;
+
+  db.getConnection((err, connection) => {
+    if (err) {
+      return res.status(500).json({ success: false, message: err.message });
+    }
+
+    connection.beginTransaction(err => {
+      if (err) {
+        connection.release();
+        return res.status(500).json({ success: false, message: err.message });
+      }
+
+      // Get items to revert stock
+      connection.query(`
+        SELECT vd.*, v.product_id, v.batch_id, v.batch_number
+        FROM voucherdetails vd
+        JOIN voucher v ON vd.voucher_id = v.VoucherID
+        WHERE v.VoucherID = ?
+      `, [id], (err, items) => {
+        if (err) {
+          return connection.rollback(() => {
+            connection.release();
+            res.status(500).json({ success: false, message: err.message });
+          });
+        }
+
+        if (items.length === 0) {
+          return connection.rollback(() => {
+            connection.release();
+            res.status(404).json({ success: false, message: 'Record not found' });
+          });
+        }
+
+        let completed = 0;
+
+        // Revert stock based on transaction type
+        items.forEach(item => {
+          let query = '';
+          let values = [];
+
+          if (item.transaction_type === 'Production') {
+            // Production: Subtract from stock_in and quantity
+            query = `UPDATE batches SET stock_in = stock_in - ?, quantity = quantity - ? WHERE product_id = ? AND batch_number = ?`;
+            values = [item.quantity, item.quantity, item.product_id, item.batch_number];
+          } 
+          else if (item.transaction_type === 'Consumption') {
+            // Consumption: Subtract from stock_out and add back to quantity
+            query = `UPDATE batches SET stock_out = stock_out - ?, quantity = quantity + ? WHERE product_id = ? AND batch_number = ?`;
+            values = [item.quantity, item.quantity, item.product_id, item.batch_number];
+          }
+
+          if (query) {
+            connection.query(query, values, (err) => {
+              if (err) {
+                return connection.rollback(() => {
+                  connection.release();
+                  res.status(500).json({ success: false, message: err.message });
+                });
+              }
+              
+              completed++;
+              if (completed === items.length) {
+                // Delete voucher details
+                connection.query('DELETE FROM voucherdetails WHERE voucher_id = ?', [id], (err) => {
+                  if (err) {
+                    return connection.rollback(() => {
+                      connection.release();
+                      res.status(500).json({ success: false, message: err.message });
+                    });
+                  }
+                  
+                  // Delete voucher
+                  connection.query('DELETE FROM voucher WHERE VoucherID = ?', [id], (err) => {
+                    if (err) {
+                      return connection.rollback(() => {
+                        connection.release();
+                        res.status(500).json({ success: false, message: err.message });
+                      });
+                    }
+                    
+                    // Commit transaction
+                    connection.commit((err) => {
+                      if (err) {
+                        return connection.rollback(() => {
+                          connection.release();
+                          res.status(500).json({ success: false, message: err.message });
+                        });
+                      }
+                      
+                      connection.release();
+                      res.status(200).json({ 
+                        success: true, 
+                        message: 'Deleted successfully' 
+                      });
+                    });
+                  });
+                });
+              }
+            });
+          } else {
+            completed++;
+            if (completed === items.length) {
+              connection.query('DELETE FROM voucherdetails WHERE voucher_id = ?', [id], (err) => {
+                if (err) {
+                  return connection.rollback(() => {
+                    connection.release();
+                    res.status(500).json({ success: false, message: err.message });
+                  });
+                }
+                
+                connection.query('DELETE FROM voucher WHERE VoucherID = ?', [id], (err) => {
+                  if (err) {
+                    return connection.rollback(() => {
+                      connection.release();
+                      res.status(500).json({ success: false, message: err.message });
+                    });
+                  }
+                  
+                  connection.commit((err) => {
+                    if (err) {
+                      return connection.rollback(() => {
+                        connection.release();
+                        res.status(500).json({ success: false, message: err.message });
+                      });
+                    }
+                    
+                    connection.release();
+                    res.status(200).json({ 
+                      success: true, 
+                      message: 'Deleted successfully' 
+                    });
+                  });
+                });
+              });
+            }
+          }
+        });
+      });
+    });
+  });
+});
+
+// GET API - Fetch last voucher number for Production
+router.get('/production/last-voucher', (req, res) => {
+  const query = `
+    SELECT VchNo 
+    FROM voucher 
+    WHERE TransactionType = 'Production' 
+      AND VchNo LIKE 'PROD-%'
+    ORDER BY VoucherID DESC 
+    LIMIT 1
+  `;
+
+  db.query(query, (err, results) => {
+    if (err) {
+      console.error('Error fetching last voucher:', err);
+      return res.status(500).json({
+        success: false,
+        message: 'Failed to fetch last voucher',
+        error: err.message
+      });
+    }
+
+    if (results.length === 0) {
+      return res.status(200).json({
+        success: true,
+        voucherNo: null,
+        nextVoucherNo: 'PROD-001'
+      });
+    }
+
+    const lastVoucherNo = results[0].VchNo;
+    const match = lastVoucherNo.match(/PROD-(\d+)/);
+    let nextNumber = 1;
+    
+    if (match) {
+      nextNumber = parseInt(match[1]) + 1;
+    }
+    
+    const nextVoucherNo = `PROD-${String(nextNumber).padStart(3, '0')}`;
+    
+    res.status(200).json({
+      success: true,
+      voucherNo: lastVoucherNo,
+      nextVoucherNo: nextVoucherNo
+    });
+  });
+});
+
+router.get('/production/list', (req, res) => {
+  const query = `
+    SELECT 
+      v.VoucherID,
+      v.VchNo,
+      v.Date,
+      v.TransactionType,
+      v.product_id,
+      v.batch_id,
+      v.batch_number,
+      v.TotalAmount,
+      v.TotalPacks,
+      v.EntryDate,
+      vd.id as detail_id,
+      vd.product,
+      vd.quantity,
+      vd.price,
+      vd.total,
+      vd.created_at as detail_created_at
+    FROM voucher v
+    LEFT JOIN voucherdetails vd ON v.VoucherID = vd.voucher_id
+    WHERE v.TransactionType IN ('Production', 'Consumption')
+    ORDER BY v.EntryDate DESC, v.VoucherID DESC
+  `;
+
+  db.query(query, (err, results) => {
+    if (err) {
+      console.error('Error fetching production records:', err);
+      return res.status(500).json({
+        success: false,
+        message: 'Failed to fetch production records',
+        error: err.message
+      });
+    }
+
+    // Group results by voucher
+    const groupedResults = {};
+    
+    results.forEach(row => {
+      if (!groupedResults[row.VoucherID]) {
+        groupedResults[row.VoucherID] = {
+          VoucherID: row.VoucherID,
+          VchNo: row.VchNo,
+          Date: row.Date,
+          TransactionType: row.TransactionType,
+          product_id: row.product_id,
+          batch_id: row.batch_id,
+          batch_number: row.batch_number,
+          TotalAmount: row.TotalAmount,
+          TotalPacks: row.TotalPacks,
+          EntryDate: row.EntryDate,
+          items: []
+        };
+      }
+      
+      if (row.detail_id) {
+        groupedResults[row.VoucherID].items.push({
+          id: row.detail_id,
+          product: row.product,
+          quantity: row.quantity,
+          price: row.price,
+          total: row.total,
+          created_at: row.detail_created_at
+        });
+      }
+    });
+
+    res.status(200).json({
+      success: true,
+      data: Object.values(groupedResults)
+    });
+  });
+});
+
+// GET API - Fetch single production by ID
+router.get('/production/:id', (req, res) => {
+  const { id } = req.params;
+  
+  const voucherQuery = `
+    SELECT 
+      VoucherID,
+      VchNo,
+      Date,
+      TransactionType,
+      product_id,
+      batch_id,
+      batch_number,
+      TotalAmount,
+      TotalPacks,
+      EntryDate
+    FROM voucher
+    WHERE VoucherID = ? AND TransactionType IN ('Production', 'Consumption')
+  `;
+
+  db.query(voucherQuery, [id], (err, voucherResult) => {
+    if (err) {
+      console.error('Error fetching production:', err);
+      return res.status(500).json({
+        success: false,
+        message: 'Failed to fetch production record',
+        error: err.message
+      });
+    }
+
+    if (voucherResult.length === 0) {
+      return res.status(404).json({
+        success: false,
+        message: 'Production record not found'
+      });
+    }
+
+    const detailsQuery = `
+      SELECT 
+        id,
+        product,
+        product_id,
+        batch,
+        batch_id,
+        quantity,
+        price,
+        transaction_type,
+        total,
+        created_at
+      FROM voucherdetails
+      WHERE voucher_id = ?
+      ORDER BY id ASC
+    `;
+
+    db.query(detailsQuery, [id], (err, detailsResult) => {
+      if (err) {
+        console.error('Error fetching production details:', err);
+        return res.status(500).json({
+          success: false,
+          message: 'Failed to fetch production details',
+          error: err.message
+        });
+      }
+
+      res.status(200).json({
+        success: true,
+        data: {
+          ...voucherResult[0],
+          items: detailsResult
+        }
+      });
+    });
+  });
+});
+
 module.exports = router;
 
