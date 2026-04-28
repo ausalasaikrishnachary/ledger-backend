@@ -45,6 +45,8 @@ const retailerScoreRoutes = require('./routes/retailerScore');
 const creditPeriodFixRoutes = require('./routes/CreditPeriod/CreditPeriodRoutes');
 const inventory = require('./routes/Retailer/InventoryRoutesRetailer');
 const OfferFlashSale = require('./routes/OfferFlashSale');
+const Journalroutes = require('./routes/Journalroutes');
+
 const { baseurl } = require('./baseUrl');
 const port = 5000;
 
@@ -83,6 +85,7 @@ app.use("/api", debitnoteRoutes);
 app.use('/api', voucher);
 app.use('/api', orderRoutes);
 app.use('/api', categoriesRoutes);
+app.use('/api', Journalroutes);
 
 app.use("/api/reports", retailerReportRoutes);
 app.use("/api/reports", expenseReportRoutes);

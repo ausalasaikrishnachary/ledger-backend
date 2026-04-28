@@ -4710,13 +4710,14 @@ router.delete('/production/delete/:id', (req, res) => {
   });
 });
 
+
 // GET API - Fetch last voucher number for Production
 router.get('/production/last-voucher', (req, res) => {
   const query = `
     SELECT VchNo 
     FROM voucher 
     WHERE TransactionType = 'Production' 
-      AND VchNo LIKE 'PROD-%'
+      AND VchNo LIKE 'COS-%'
     ORDER BY VoucherID DESC 
     LIMIT 1
   `;
@@ -4906,5 +4907,20 @@ router.get('/production/:id', (req, res) => {
   });
 });
 
+
+
+
+router.put("/update-account-balance/:id", (req, res) => {
+  const party_id = req.params.id;
+  const { balance, balance_type } = req.body;
+
+  console.log("Updating:", party_id, balance, balance_type); // ✅ add this to verify
+
+  const query = `UPDATE accounts SET balance = ?, balance_type = ? WHERE id = ?`;
+  db.query(query, [balance, balance_type, party_id], (err, result) => {
+    if (err) return res.status(500).json({ message: "Database error" });
+    res.json({ message: "Balance updated successfully" });
+  });
+});
 module.exports = router;
 
