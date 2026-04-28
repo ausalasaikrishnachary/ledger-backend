@@ -4736,19 +4736,19 @@ router.get('/production/last-voucher', (req, res) => {
       return res.status(200).json({
         success: true,
         voucherNo: null,
-        nextVoucherNo: 'PROD-001'
+        nextVoucherNo: 'COS-001'
       });
     }
 
     const lastVoucherNo = results[0].VchNo;
-    const match = lastVoucherNo.match(/PROD-(\d+)/);
+    const match = lastVoucherNo.match(/COS-(\d+)/);
     let nextNumber = 1;
     
     if (match) {
       nextNumber = parseInt(match[1]) + 1;
     }
     
-    const nextVoucherNo = `PROD-${String(nextNumber).padStart(3, '0')}`;
+    const nextVoucherNo = `COS-${String(nextNumber).padStart(3, '0')}`;
     
     res.status(200).json({
       success: true,
