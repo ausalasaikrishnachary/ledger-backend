@@ -20,14 +20,15 @@ router.get('/jrroutes', (req, res) => {
   );
 });
 
-// Get single voucher by ID
+// Get single voucher by ID - returns ONLY that specific row
 router.get('/jrroutes/:id', (req, res) => {
+  const { id } = req.params;
+
   db.query(
     `SELECT * FROM voucher WHERE VoucherID = ? AND TransactionType = 'Journal'`,
-    [req.params.id],
+    [id],
     (err, rows) => {
       if (err) {
-        console.error('Error fetching voucher:', err);
         return res.status(500).json({ success: false, message: err.message });
       }
       
@@ -35,7 +36,11 @@ router.get('/jrroutes/:id', (req, res) => {
         return res.status(404).json({ success: false, message: 'Voucher not found' });
       }
       
-      res.json({ success: true, data: rows[0] });
+      // Return only the single row
+      res.json({ 
+        success: true, 
+        data: rows[0]
+      });
     }
   );
 });
@@ -62,99 +67,141 @@ router.get('/last-voucher/journal', (req, res) => {
   );
 });
 
-// Create new voucher (Journal Entry)
+// Create journal voucher
 router.post('/journalcreate', (req, res) => {
-  const {
-    voucherNo,
-    invoiceDate,
-    partyName,
-    partyId,        // Add this field
-    balance_amount,
-    totalAmount,
-    transactionType = 'Journal'
-  } = req.body;
+  const { journalItems = [] } = req.body;
 
-  // Validate required fields
-  if (!voucherNo || !invoiceDate || !partyName || !totalAmount) {
+  if (journalItems.length === 0) {
     return res.status(400).json({ 
       success: false, 
-      message: 'Missing required fields: voucherNo, invoiceDate, partyName, totalAmount' 
+      message: 'At least one journal entry is required' 
     });
   }
 
-  // Use partyId if provided, otherwise use accountId
-  const finalPartyId = partyId || accountId || null;
+  let inserted = 0;
+  let errors = [];
+  let insertedVchNo = null;
 
-  db.query(
-    `INSERT INTO voucher (
-      TransactionType, VchNo, Date, 
-      PartyID, PartyName, balance_amount, TotalAmount, EntryDate, status, created_at
-    ) VALUES (?, ?, ?, ?,  ?, ?, ?, NOW(), 'active', NOW())`,
-    [
-      transactionType,
+  journalItems.forEach((item) => {
+    const {
       voucherNo,
       invoiceDate,
-    
-      finalPartyId,        // Store PartyID properly
+      partyId,
       partyName,
-      balance_amount || 0,
-      totalAmount || 0
-    ],
-    (err, result) => {
-      if (err) {
-        console.error('Error creating voucher:', err);
-        return res.status(500).json({ success: false, message: err.message });
-      }
-      
-      res.json({
-        success: true,
-        message: 'Voucher created successfully',
-        data: { VoucherID: result.insertId }
-      });
+      balance_amount,
+      amount,
+      amount_type,
+      transactionType = 'Journal'
+    } = item;
+
+    let newBalance = parseFloat(balance_amount || 0);
+    const amt = parseFloat(amount || 0);
+    
+    if (amount_type === 'Dr') {
+      newBalance += amt;
+    } else {
+      newBalance -= amt;
     }
-  );
+
+    db.query(
+      `INSERT INTO voucher (
+        TransactionType, VchNo, Date, PartyID, PartyName, 
+        balance_amount, TotalAmount, amount_type, EntryDate, status, created_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, NOW(), 'active', NOW())`,
+      [
+        transactionType,
+        voucherNo,
+        invoiceDate,
+        partyId || null,
+        partyName,
+        balance_amount || 0,
+        amt,
+        amount_type, // Store Dr or Cr
+      ],
+      (err, result) => {
+        if (err) {
+          errors.push(err.message);
+        } else {
+          insertedVchNo = voucherNo;
+        }
+        inserted++;
+        
+        if (!err && partyId) {
+          db.query(
+            'UPDATE accounts SET balance = ?, updated_at = NOW() WHERE id = ?',
+            [Math.abs(newBalance), partyId],
+            (accErr) => {
+              if (accErr) console.error('Account update error:', accErr);
+            }
+          );
+        }
+        
+        if (inserted === journalItems.length) {
+          if (errors.length > 0) {
+            return res.status(500).json({ 
+              success: false, 
+              message: 'Some entries failed', 
+              errors: errors 
+            });
+          }
+          res.json({ 
+            success: true, 
+            message: `${inserted} journal entries created successfully`,
+            voucherNo: insertedVchNo
+          });
+        }
+      }
+    );
+  });
 });
 
-// Update voucher
 router.put('/journalupdate/:id', (req, res) => {
   const { id } = req.params;
   const {
     voucherNo,
     invoiceDate,
-  
+    partyId,
     partyName,
-    partyId,        // Add this field
     balance_amount,
-    totalAmount
+    totalAmount,
+    amount_type
   } = req.body;
 
-  // Use partyId if provided, otherwise use accountId
-  const finalPartyId = partyId || accountId || null;
+  // Calculate new balance
+  let newBalance = parseFloat(balance_amount || 0);
+  const amt = parseFloat(totalAmount || 0);
+  
+  if (amount_type === 'Dr') {
+    newBalance += amt;
+  } else {
+    newBalance -= amt;
+  }
 
+  // Update the specific row with amount_type
   db.query(
-    `UPDATE voucher SET
-      VchNo = ?,
-      Date = ?,
-    
-      PartyID = ?,
-      PartyName = ?,
-      balance_amount = ?,
+    `UPDATE voucher SET 
+      Date = ?, 
+      PartyID = ?, 
+      PartyName = ?, 
+      balance_amount = ?, 
       TotalAmount = ?,
+      amount_type = ?,
+      TransactionType = ?,
       updated_at = NOW()
-    WHERE VoucherID = ? AND TransactionType = 'Journal'`,
+     WHERE VoucherID = ? AND TransactionType = 'Journal'`,
     [
-      voucherNo,
-      invoiceDate,
-    
-      finalPartyId,        // Update PartyID properly
-      partyName,
-      balance_amount || 0,
+      invoiceDate, 
+      partyId || null, 
+      partyName, 
+      balance_amount || 0, 
       totalAmount || 0,
+      amount_type, // Store Dr or Cr
+      amount_type === 'Dr' ? 'Dr' : 'Cr',
       id
     ],
     (err, result) => {
       if (err) {
-        console.error('Error updating voucher:', err);
+        console.error(err);
         return res.status(500).json({ success: false, message: err.message });
       }
       
@@ -162,30 +209,53 @@ router.put('/journalupdate/:id', (req, res) => {
         return res.status(404).json({ success: false, message: 'Voucher not found' });
       }
       
-      res.json({
-        success: true,
-        message: 'Voucher updated successfully'
-      });
+      // Update account balance
+      if (partyId) {
+        db.query(
+          'UPDATE accounts SET balance = ?, updated_at = NOW() WHERE id = ?',
+          [Math.abs(newBalance), partyId],
+          (accErr) => {
+            if (accErr) console.error('Account update error:', accErr);
+          }
+        );
+      }
+      
+      res.json({ success: true, message: 'Journal voucher updated successfully' });
     }
   );
 });
 
-// Delete voucher
+// Delete voucher and all its items
 router.delete('/journaldelete/:id', (req, res) => {
+  // First get the VchNo
   db.query(
-    `DELETE FROM voucher WHERE VoucherID = ? AND TransactionType = 'Journal'`,
+    `SELECT VchNo FROM voucher WHERE VoucherID = ? AND TransactionType = 'Journal'`,
     [req.params.id],
-    (err, result) => {
+    (err, rows) => {
       if (err) {
-        console.error('Error deleting voucher:', err);
+        console.error('Error fetching voucher:', err);
         return res.status(500).json({ success: false, message: err.message });
       }
       
-      if (result.affectedRows === 0) {
+      if (rows.length === 0) {
         return res.status(404).json({ success: false, message: 'Voucher not found' });
       }
       
-      res.json({ success: true, message: 'Voucher deleted successfully' });
+      const vchNo = rows[0].VchNo;
+      
+      // Delete all entries with same VchNo
+      db.query(
+        `DELETE FROM voucher WHERE VchNo = ? AND TransactionType = 'Journal'`,
+        [vchNo],
+        (err, result) => {
+          if (err) {
+            console.error('Error deleting voucher:', err);
+            return res.status(500).json({ success: false, message: err.message });
+          }
+          
+          res.json({ success: true, message: 'Voucher deleted successfully' });
+        }
+      );
     }
   );
 });

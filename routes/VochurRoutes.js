@@ -4914,7 +4914,7 @@ router.put("/update-account-balance/:id", (req, res) => {
   const party_id = req.params.id;
   const { balance, balance_type } = req.body;
 
-  console.log("Updating:", party_id, balance, balance_type); // ✅ add this to verify
+  console.log("Updating:", party_id, balance, balance_type); 
 
   const query = `UPDATE accounts SET balance = ?, balance_type = ? WHERE id = ?`;
   db.query(query, [balance, balance_type, party_id], (err, result) => {
