@@ -2,6 +2,9 @@ const express = require('express');
 const router = express.Router();
 const db = require('./../db');
 
+
+
+
 // Get all vouchers
 router.get('/jrroutes', (req, res) => {
   db.query(
@@ -16,6 +19,29 @@ router.get('/jrroutes', (req, res) => {
         return res.status(500).json({ success: false, message: err.message });
       }
       res.json({ success: true, data: rows });
+    }
+  );
+});
+router.get('/jrroutes/vchno/:vchNo', (req, res) => {
+  const { vchNo } = req.params;
+
+  db.query(
+    `SELECT * FROM voucher WHERE VchNo = ? AND TransactionType = 'Journal' ORDER BY VoucherID ASC`,
+    [vchNo],
+    (err, rows) => {
+      if (err) {
+        return res.status(500).json({ success: false, message: err.message });
+      }
+      
+      if (rows.length === 0) {
+        return res.status(404).json({ success: false, message: 'Voucher not found' });
+      }
+      
+      res.json({  
+        success: true, 
+        data: rows,
+        voucherNo: vchNo
+      });
     }
   );
 });
@@ -159,81 +185,213 @@ router.post('/journalcreate', (req, res) => {
   });
 });
 
-router.put('/journalupdate/:id', (req, res) => {
-  const { id } = req.params;
-  const {
-    voucherNo,
-    invoiceDate,
-    partyId,
-    partyName,
-    balance_amount,
-    totalAmount,
-    amount_type
-  } = req.body;
+router.put('/journalupdatefull/:vchNo', (req, res) => {
+  const { vchNo } = req.params;
+  const { invoiceDate, items } = req.body;
 
-  // Calculate new balance
-  let newBalance = parseFloat(balance_amount || 0);
-  const amt = parseFloat(totalAmount || 0);
-  
-  if (amount_type === 'Dr') {
-    newBalance += amt;
-  } else {
-    newBalance -= amt;
+  if (!items || items.length === 0) {
+    return res.status(400).json({ 
+      success: false, 
+      message: 'At least one journal entry is required' 
+    });
   }
 
-  // Calculate DC value (first letter of amount_type: 'D' or 'C')
-  const DC = amount_type === 'Dr' ? 'D' : 'C';
-
-  // Update the specific row with amount_type and DC
+  // Get all existing entries for this VchNo (TransactionType remains 'Journal')
   db.query(
-    `UPDATE voucher SET 
-      Date = ?, 
-      PartyID = ?, 
-      PartyName = ?, 
-      balance_amount = ?, 
-      TotalAmount = ?,
-      amount_type = ?,
-      DC = ?,
-      TransactionType = ?,
-      updated_at = NOW()
-     WHERE VoucherID = ? AND TransactionType = 'Journal'`,
-    [
-      invoiceDate, 
-      partyId || null, 
-      partyName, 
-      balance_amount || 0, 
-      totalAmount || 0,
-      amount_type, // Store Dr or Cr
-      DC,          // Store D or C
-      amount_type === 'Dr' ? 'Dr' : 'Cr',
-      id
-    ],
-    (err, result) => {
+    `SELECT VoucherID FROM voucher WHERE VchNo = ? AND TransactionType = 'Journal' ORDER BY VoucherID ASC`,
+    [vchNo],
+    (err, existingRows) => {
       if (err) {
-        console.error(err);
+        console.error('Error fetching existing entries:', err);
         return res.status(500).json({ success: false, message: err.message });
       }
+
+      const existingIds = existingRows.map(row => row.VoucherID);
+      let updated = 0;
+      let errors = [];
+
+      // Update existing entries (up to the number of existing rows)
+      const updatePromises = [];
       
-      if (result.affectedRows === 0) {
-        return res.status(404).json({ success: false, message: 'Voucher not found' });
+      for (let i = 0; i < Math.min(existingRows.length, items.length); i++) {
+        const item = items[i];
+        const existingId = existingRows[i].VoucherID;
+        
+        const {
+          partyId,
+          partyName,
+          balance_amount,
+          amount,
+          amount_type
+        } = item;
+
+        let newBalance = parseFloat(balance_amount || 0);
+        const amt = parseFloat(amount || 0);
+        
+        if (amount_type === 'Dr') {
+          newBalance += amt;
+        } else {
+          newBalance -= amt;
+        }
+
+        const DC = amount_type === 'Dr' ? 'D' : 'C';
+
+        updatePromises.push(new Promise((resolve, reject) => {
+          db.query(
+            `UPDATE voucher SET 
+              Date = ?,
+              PartyID = ?,
+              PartyName = ?,
+              balance_amount = ?,
+              TotalAmount = ?,
+              amount_type = ?,
+              DC = ?,
+              updated_at = NOW()
+            WHERE VoucherID = ? AND VchNo = ? AND TransactionType = 'Journal'`,
+            [
+              invoiceDate,
+              partyId || null,
+              partyName,
+              balance_amount || 0,
+              amt,
+              amount_type,  // This stores 'Dr' or 'Cr'
+              DC,           // This stores 'D' or 'C'
+              existingId,
+              vchNo
+            ],
+            (err, result) => {
+              if (err) {
+                errors.push(`Error updating entry ${i + 1}: ${err.message}`);
+                reject(err);
+              } else {
+                updated++;
+                // Update account balance
+                if (partyId) {
+                  db.query(
+                    'UPDATE accounts SET balance = ?, updated_at = NOW() WHERE id = ?',
+                    [Math.abs(newBalance), partyId],
+                    (accErr) => {
+                      if (accErr) console.error('Account update error:', accErr);
+                    }
+                  );
+                }
+                resolve();
+              }
+            }
+          );
+        }));
       }
-      
-      // Update account balance
-      if (partyId) {
-        db.query(
-          'UPDATE accounts SET balance = ?, updated_at = NOW() WHERE id = ?',
-          [Math.abs(newBalance), partyId],
-          (accErr) => {
-            if (accErr) console.error('Account update error:', accErr);
+
+      // If we have more new items than existing, insert the extras
+      if (items.length > existingRows.length) {
+        for (let i = existingRows.length; i < items.length; i++) {
+          const item = items[i];
+          const {
+            partyId,
+            partyName,
+            balance_amount,
+            amount,
+            amount_type
+          } = item;
+
+          let newBalance = parseFloat(balance_amount || 0);
+          const amt = parseFloat(amount || 0);
+          
+          if (amount_type === 'Dr') {
+            newBalance += amt;
+          } else {
+            newBalance -= amt;
           }
-        );
+
+          const DC = amount_type === 'Dr' ? 'D' : 'C';
+
+          updatePromises.push(new Promise((resolve, reject) => {
+            db.query(
+              `INSERT INTO voucher (
+                TransactionType, VchNo, Date, PartyID, PartyName, 
+                balance_amount, TotalAmount, amount_type, DC, 
+                EntryDate, status, created_at
+              ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, NOW(), 'active', NOW())`,
+              [
+                'Journal',  // Keep TransactionType as 'Journal'
+                vchNo,
+                invoiceDate,
+                partyId || null,
+                partyName,
+                balance_amount || 0,
+                amt,
+                amount_type,  // This stores 'Dr' or 'Cr'
+                DC
+              ],
+              (err, result) => {
+                if (err) {
+                  errors.push(`Error inserting new entry ${i + 1}: ${err.message}`);
+                  reject(err);
+                } else {
+                  updated++;
+                  if (partyId) {
+                    db.query(
+                      'UPDATE accounts SET balance = ?, updated_at = NOW() WHERE id = ?',
+                      [Math.abs(newBalance), partyId],
+                      (accErr) => {
+                        if (accErr) console.error('Account update error:', accErr);
+                      }
+                    );
+                  }
+                  resolve();
+                }
+              }
+            );
+          }));
+        }
       }
-      
-      res.json({ success: true, message: 'Journal voucher updated successfully' });
+
+      // If we have fewer new items than existing, delete the extras
+      if (items.length < existingRows.length) {
+        const idsToDelete = existingIds.slice(items.length);
+        
+        updatePromises.push(new Promise((resolve, reject) => {
+          db.query(
+            `DELETE FROM voucher WHERE VoucherID IN (?) AND VchNo = ? AND TransactionType = 'Journal'`,
+            [idsToDelete, vchNo],
+            (err, result) => {
+              if (err) {
+                errors.push(`Error deleting extra entries: ${err.message}`);
+                reject(err);
+              } else {
+                resolve();
+              }
+            }
+          );
+        }));
+      }
+
+      // Wait for all operations to complete
+      Promise.all(updatePromises)
+        .then(() => {
+          if (errors.length > 0) {
+            return res.status(500).json({ 
+              success: false, 
+              message: 'Some operations failed', 
+              errors: errors 
+            });
+          }
+          res.json({ 
+            success: true, 
+            message: `${items.length} journal entries updated successfully`,
+            note: 'TransactionType remains as Journal'
+          });
+        })
+        .catch((error) => {
+          res.status(500).json({ 
+            success: false, 
+            message: 'Error updating voucher', 
+            error: error.message 
+          });
+        });
     }
   );
 });
-// Delete voucher and all its items
 router.delete('/journaldelete/:id', (req, res) => {
   // First get the VchNo
   db.query(
