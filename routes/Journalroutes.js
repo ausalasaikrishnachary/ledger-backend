@@ -103,11 +103,14 @@ router.post('/journalcreate', (req, res) => {
       newBalance -= amt;
     }
 
+    // Calculate DC value (first letter of amount_type: 'D' or 'C')
+    const DC = amount_type === 'Dr' ? 'D' : 'C';
+
     db.query(
       `INSERT INTO voucher (
         TransactionType, VchNo, Date, PartyID, PartyName, 
-        balance_amount, TotalAmount, amount_type, EntryDate, status, created_at
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, NOW(), 'active', NOW())`,
+        balance_amount, TotalAmount, amount_type, DC, EntryDate, status, created_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, NOW(), 'active', NOW())`,
       [
         transactionType,
         voucherNo,
@@ -117,6 +120,7 @@ router.post('/journalcreate', (req, res) => {
         balance_amount || 0,
         amt,
         amount_type, // Store Dr or Cr
+        DC          // Store D or C
       ],
       (err, result) => {
         if (err) {
@@ -177,7 +181,10 @@ router.put('/journalupdate/:id', (req, res) => {
     newBalance -= amt;
   }
 
-  // Update the specific row with amount_type
+  // Calculate DC value (first letter of amount_type: 'D' or 'C')
+  const DC = amount_type === 'Dr' ? 'D' : 'C';
+
+  // Update the specific row with amount_type and DC
   db.query(
     `UPDATE voucher SET 
       Date = ?, 
@@ -186,6 +193,7 @@ router.put('/journalupdate/:id', (req, res) => {
       balance_amount = ?, 
       TotalAmount = ?,
       amount_type = ?,
+      DC = ?,
       TransactionType = ?,
       updated_at = NOW()
      WHERE VoucherID = ? AND TransactionType = 'Journal'`,
@@ -196,6 +204,7 @@ router.put('/journalupdate/:id', (req, res) => {
       balance_amount || 0, 
       totalAmount || 0,
       amount_type, // Store Dr or Cr
+      DC,          // Store D or C
       amount_type === 'Dr' ? 'Dr' : 'Cr',
       id
     ],
@@ -224,12 +233,11 @@ router.put('/journalupdate/:id', (req, res) => {
     }
   );
 });
-
 // Delete voucher and all its items
 router.delete('/journaldelete/:id', (req, res) => {
   // First get the VchNo
   db.query(
-    `SELECT VchNo FROM voucher WHERE VoucherID = ? AND TransactionType = 'Journal'`,
+    `SELECT VchNo FROM voucher WHERE VoucherID = ?`,
     [req.params.id],
     (err, rows) => {
       if (err) {
@@ -245,7 +253,7 @@ router.delete('/journaldelete/:id', (req, res) => {
       
       // Delete all entries with same VchNo
       db.query(
-        `DELETE FROM voucher WHERE VchNo = ? AND TransactionType = 'Journal'`,
+        `DELETE FROM voucher WHERE VchNo = ?`,
         [vchNo],
         (err, result) => {
           if (err) {
