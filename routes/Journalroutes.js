@@ -392,36 +392,24 @@ router.put('/journalupdatefull/:vchNo', (req, res) => {
     }
   );
 });
-router.delete('/journaldelete/:id', (req, res) => {
-  // First get the VchNo
+router.delete('/journaldelete/:vchNo', (req, res) => {
+  const vchNo = req.params.vchNo;
+  
+  // Delete all entries with this VchNo and TransactionType 'Journal'
   db.query(
-    `SELECT VchNo FROM voucher WHERE VoucherID = ?`,
-    [req.params.id],
-    (err, rows) => {
+    `DELETE FROM voucher WHERE VchNo = ? AND TransactionType = 'Journal'`,
+    [vchNo],
+    (err, result) => {
       if (err) {
-        console.error('Error fetching voucher:', err);
+        console.error('Error deleting voucher:', err);
         return res.status(500).json({ success: false, message: err.message });
       }
       
-      if (rows.length === 0) {
+      if (result.affectedRows === 0) {
         return res.status(404).json({ success: false, message: 'Voucher not found' });
       }
       
-      const vchNo = rows[0].VchNo;
-      
-      // Delete all entries with same VchNo
-      db.query(
-        `DELETE FROM voucher WHERE VchNo = ?`,
-        [vchNo],
-        (err, result) => {
-          if (err) {
-            console.error('Error deleting voucher:', err);
-            return res.status(500).json({ success: false, message: err.message });
-          }
-          
-          res.json({ success: true, message: 'Voucher deleted successfully' });
-        }
-      );
+      res.json({ success: true, message: 'Voucher deleted successfully' });
     }
   );
 });
