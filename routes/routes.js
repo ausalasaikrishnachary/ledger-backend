@@ -182,23 +182,23 @@ router.post('/receipts', upload.single('transaction_proof'), async (req, res) =>
       note,
     } = req.body;
 
-let safeTransactionType = "Receipt";
+    let safeTransactionType = "Receipt";
 
-// ✅ FIRST priority: respect frontend TransactionType
-if (TransactionType === "purchase voucher") {
-  safeTransactionType = "purchase voucher";
-} else if (TransactionType === "Payment") {
-  safeTransactionType = "Payment";
-}
+    // ✅ FIRST priority: respect frontend TransactionType
+    if (TransactionType === "purchase voucher") {
+      safeTransactionType = "purchase voucher";
+    } else if (TransactionType === "Payment") {
+      safeTransactionType = "Payment";
+    }
 
-// ✅ SECOND priority: fallback using prefix
-else if (receipt_number?.startsWith("PAY")) {
-  safeTransactionType = "Payment";
-} else if (receipt_number?.startsWith("PUR")) {
-  safeTransactionType = "purchase voucher";
-} else if (receipt_number?.startsWith("REC")) {
-  safeTransactionType = "Receipt";
-}
+    // ✅ SECOND priority: fallback using prefix
+    else if (receipt_number?.startsWith("PAY")) {
+      safeTransactionType = "Payment";
+    } else if (receipt_number?.startsWith("PUR")) {
+      safeTransactionType = "purchase voucher";
+    } else if (receipt_number?.startsWith("REC")) {
+      safeTransactionType = "Receipt";
+    }
     const safeDataType = data_type || null;
     const receiptAmount = parseFloat(amount || 0);
     const currentDate = new Date();
@@ -287,34 +287,34 @@ else if (receipt_number?.startsWith("PAY")) {
      LIMIT 1`
     );
 
-let prefix = "REC";
+    let prefix = "REC";
 
-if (safeTransactionType === "Payment") {
-  prefix = "PAY";
-} else if (safeTransactionType === "purchase voucher") {
-  prefix = "PUR";
-}
+    if (safeTransactionType === "Payment") {
+      prefix = "PAY";
+    } else if (safeTransactionType === "purchase voucher") {
+      prefix = "PUR";
+    }
 
-const [voucherRows] = await connection.promise().query(
-  `SELECT VchNo 
+    const [voucherRows] = await connection.promise().query(
+      `SELECT VchNo 
    FROM voucher 
    WHERE TransactionType = ?
    ORDER BY VoucherID DESC
    LIMIT 1`,
-  [safeTransactionType]
-);
+      [safeTransactionType]
+    );
 
-let nextReceipt = receipt_number || (prefix + "001");
+    let nextReceipt = receipt_number || (prefix + "001");
 
-if (voucherRows.length > 0) {
-  const match = voucherRows[0].VchNo?.match(/([A-Z]+)(\d+)/);
-  if (match) {
-    const nextNum = parseInt(match[2], 10) + 1;
-    nextReceipt = prefix + nextNum.toString().padStart(3, "0");
-  }
-}
+    if (voucherRows.length > 0) {
+      const match = voucherRows[0].VchNo?.match(/([A-Z]+)(\d+)/);
+      if (match) {
+        const nextNum = parseInt(match[2], 10) + 1;
+        nextReceipt = prefix + nextNum.toString().padStart(3, "0");
+      }
+    }
 
-console.log(`✅ Generated ${safeTransactionType} Number:`, nextReceipt);
+    console.log(`✅ Generated ${safeTransactionType} Number:`, nextReceipt);
 
     console.log("✅ Generated Sequential Receipt No:", nextReceipt);
     console.log("📝 Transaction Type:", safeTransactionType);
@@ -720,6 +720,425 @@ VALUES (?, ?, ?, ?, ?, ?, 'Immediate', 0, 0, 0, ?, 0, ?, NULL, NULL, ?, ?, ?, ?,
   }
 });
 
+// GET /api/receipts/advance/:customerId
+// Fetch advance receipts for a specific customer that are not linked to any invoice
+router.get('/receipts/advance/:customerId', async (req, res) => {
+  try {
+    const { customerId } = req.params;
+    const { data_type = 'Sales' } = req.query;
+
+    // SQL to fetch receipts that can be used as advance payments
+    // For advance receipts, we want receipts that:
+    // 1. Have NO invoice number assigned
+    // 2. Are fully paid (status = 'Paid')
+    // 3. Can be either fully paid or partially paid - the full amount is available for adjustment
+    const sql = `
+      SELECT 
+        r.VoucherID AS id,
+        r.VchNo AS receipt_number,
+        r.Date AS receipt_date,
+        r.TotalAmount AS total_amount,
+        COALESCE(r.paid_amount, 0) AS paid_amount,
+        r.payment_method,
+        r.BankName AS bank_name,
+        r.note,
+        r.TransactionType,
+        r.created_at,
+        r.PartyID AS customer_id,
+        a.business_name,
+        a.name AS customer_name,
+        a.gstin AS customer_gstin,
+        a.mobile_number AS customer_mobile,
+        r.InvoiceNumber AS invoice_number,
+        r.status,
+        r.data_type,
+        r.balance_amount,
+        r.assigned_staff,
+        r.staffid AS staff_id,
+        r.paid_date
+      FROM voucher r
+      LEFT JOIN accounts a ON r.PartyID = a.id
+      WHERE 
+        r.TransactionType = 'Receipt'
+        AND r.PartyID = ?
+        AND r.status = 'Paid'
+        AND (r.InvoiceNumber IS NULL OR r.InvoiceNumber = '')
+        -- Remove the amount comparison condition
+      ORDER BY r.Date ASC
+    `;
+
+    db.execute(sql, [customerId], (err, results) => {
+      if (err) {
+        console.error("Database error fetching advance receipts:", err);
+        return res.status(500).json({
+          error: "Failed to fetch advance receipts",
+          details: err.message
+        });
+      }
+
+      // Process the results
+      const processedResults = results.map(receipt => {
+        const totalAmount = parseFloat(receipt.total_amount) || 0;
+        const paidAmount = parseFloat(receipt.paid_amount) || 0;
+
+        // For advance receipts, the entire amount is available for adjustment
+        // since it's not linked to any invoice yet
+        const availableAmount = totalAmount;
+
+        return {
+          id: receipt.id,
+          receipt_number: receipt.receipt_number,
+          receipt_date: receipt.receipt_date,
+          receipt_date_formatted: receipt.receipt_date
+            ? new Date(receipt.receipt_date).toISOString().split('T')[0]
+            : null,
+          total_amount: totalAmount,
+          paid_amount: paidAmount,
+          available_amount: availableAmount, // Full amount available
+          payment_method: receipt.payment_method,
+          bank_name: receipt.bank_name,
+          note: receipt.note,
+          customer_id: receipt.customer_id,
+          customer_name: receipt.customer_name,
+          business_name: receipt.business_name,
+          invoice_number: receipt.invoice_number || 'Not Assigned',
+          status: receipt.status,
+          assigned_staff: receipt.assigned_staff,
+          staff_id: receipt.staff_id,
+          created_at: receipt.created_at,
+          paid_date: receipt.paid_date
+        };
+      });
+
+      console.log(`Found ${processedResults.length} advance receipts for customer ${customerId}`);
+
+      res.json({
+        success: true,
+        count: processedResults.length,
+        receipts: processedResults,
+        customer_id: customerId,
+        total_available_balance: processedResults.reduce((sum, r) => sum + r.available_amount, 0)
+      });
+    });
+
+  } catch (error) {
+    console.error("Error in /receipts/advance/:customerId route:", error);
+    res.status(500).json({
+      error: "Failed to fetch advance receipts",
+      details: error.message
+    });
+  }
+});
+
+
+// POST /api/receipts/apply-advance
+router.post('/receipts/apply-advance', (req, res) => {
+  db.getConnection((err, connection) => {
+    if (err) {
+      console.error("Database connection error:", err);
+      return res.status(500).json({ error: "Database connection failed" });
+    }
+
+    connection.beginTransaction((transactionErr) => {
+      if (transactionErr) {
+        connection.release();
+        console.error("Transaction begin error:", transactionErr);
+        return res.status(500).json({ error: "Failed to begin transaction" });
+      }
+
+      const {
+        receipt_id,
+        advance_receipt_ids,
+        invoice_number,
+        customer_id,
+        total_advance_adjusted,
+        staff_id,
+        assigned_staff_name,
+        receipt_amount
+      } = req.body;
+
+      console.log("📌 Applying advance receipts for invoice:", invoice_number);
+      console.log("📌 Advance receipt IDs:", advance_receipt_ids);
+      console.log("📌 Total advance amount:", total_advance_adjusted);
+
+      // Validate inputs
+      if (!receipt_id) {
+        connection.rollback(() => {
+          connection.release();
+          return res.status(400).json({ error: "receipt_id is required" });
+        });
+        return;
+      }
+
+      if (!invoice_number) {
+        connection.rollback(() => {
+          connection.release();
+          return res.status(400).json({ error: "invoice_number is required" });
+        });
+        return;
+      }
+
+      // Parse and validate total_advance_adjusted
+      let totalAdjusted = parseFloat(total_advance_adjusted);
+      if (isNaN(totalAdjusted) || totalAdjusted < 0) {
+        totalAdjusted = parseFloat(receipt_amount);
+        if (isNaN(totalAdjusted) || totalAdjusted <= 0) {
+          connection.rollback(() => {
+            connection.release();
+            return res.status(400).json({
+              error: "Valid total_advance_adjusted or receipt_amount is required",
+              received_total: total_advance_adjusted,
+              received_amount: receipt_amount,
+              parsed: totalAdjusted
+            });
+          });
+          return;
+        }
+      }
+
+      if (totalAdjusted <= 0) {
+        connection.rollback(() => {
+          connection.release();
+          return res.status(400).json({
+            error: "Amount must be greater than 0",
+            amount: totalAdjusted
+          });
+        });
+        return;
+      }
+
+      // Parse advance receipt IDs
+      let advanceIds = [];
+      if (typeof advance_receipt_ids === 'string') {
+        advanceIds = advance_receipt_ids.split(',').map(id => parseInt(id)).filter(id => !isNaN(id));
+      } else if (Array.isArray(advance_receipt_ids)) {
+        advanceIds = advance_receipt_ids.filter(id => !isNaN(parseInt(id))).map(id => parseInt(id));
+      }
+
+      if (advanceIds.length === 0) {
+        connection.rollback(() => {
+          connection.release();
+          return res.status(400).json({ error: "No valid advance receipts selected" });
+        });
+        return;
+      }
+
+      console.log('💰 Applying advance receipts:', {
+        receipt_id,
+        advanceIds,
+        invoice_number,
+        totalAdjusted,
+        customer_id
+      });
+
+      // Get the new receipt details
+      connection.query(
+        `SELECT VoucherID, VchNo, TotalAmount, COALESCE(paid_amount, 0) as paid_amount, PartyID 
+         FROM voucher 
+         WHERE VoucherID = ? AND TransactionType = 'Receipt'`,
+        [receipt_id],
+        (err, newReceipt) => {
+          if (err) {
+            connection.rollback(() => {
+              connection.release();
+              console.error("Error fetching receipt:", err);
+              return res.status(500).json({ error: "Failed to fetch receipt" });
+            });
+            return;
+          }
+
+          if (newReceipt.length === 0) {
+            connection.rollback(() => {
+              connection.release();
+              return res.status(404).json({ error: "Receipt not found" });
+            });
+            return;
+          }
+
+          let remainingToAdjust = totalAdjusted;
+          let totalActuallyAdjusted = 0;
+          const adjustedReceipts = [];
+          let completedQueries = 0;
+          let hasError = false;
+
+          // Process each advance receipt
+          advanceIds.forEach((advanceId) => {
+            if (hasError) return;
+
+            connection.query(
+              `SELECT VoucherID, VchNo, TotalAmount, COALESCE(paid_amount, 0) as paid_amount, 
+                      COALESCE(balance_amount, TotalAmount) as balance_amount, InvoiceNumber 
+               FROM voucher 
+               WHERE VoucherID = ? AND TransactionType = 'Receipt'`,
+              [advanceId],
+              (err, advanceReceipt) => {
+                if (err || hasError) {
+                  if (!hasError) {
+                    hasError = true;
+                    connection.rollback(() => {
+                      connection.release();
+                      console.error("Error fetching advance receipt:", err);
+                      return res.status(500).json({ error: "Failed to fetch advance receipt" });
+                    });
+                  }
+                  return;
+                }
+
+                if (advanceReceipt.length === 0 || remainingToAdjust <= 0) {
+                  checkCompletion();
+                  return;
+                }
+
+                const currentPaidAmount = parseFloat(advanceReceipt[0].paid_amount) || 0;
+                const totalAmount = parseFloat(advanceReceipt[0].TotalAmount) || 0;
+                const availableAmount = totalAmount - currentPaidAmount;
+
+                const adjustedAmount = Math.min(remainingToAdjust, availableAmount);
+
+                if (adjustedAmount <= 0) {
+                  checkCompletion();
+                  return;
+                }
+
+                const newPaidAmount = currentPaidAmount + adjustedAmount;
+                const newBalanceAmount = totalAmount - newPaidAmount;
+                remainingToAdjust -= adjustedAmount;
+                totalActuallyAdjusted += adjustedAmount;
+
+                let newStatus = 'Partial';
+                if (newPaidAmount >= totalAmount) {
+                  newStatus = 'Paid';
+                }
+
+                // ALWAYS update the invoice number
+                const finalInvoiceNumber = invoice_number;
+
+                console.log(`✅ Updating advance receipt ${advanceId} with invoice number: ${finalInvoiceNumber}`, {
+                  receipt_number: advanceReceipt[0].VchNo,
+                  old_invoice_number: advanceReceipt[0].InvoiceNumber || 'NULL',
+                  new_invoice_number: finalInvoiceNumber,
+                  adjustedAmount,
+                  newStatus
+                });
+
+                // Update the advance receipt
+                connection.query(
+                  `UPDATE voucher 
+                   SET 
+                     InvoiceNumber = ?,
+                     paid_amount = ?,
+                     balance_amount = ?,
+                     status = ?,
+                     updated_at = NOW()
+                   WHERE VoucherID = ?`,
+                  [finalInvoiceNumber, newPaidAmount, newBalanceAmount, newStatus, advanceId],
+                  (err) => {
+                    if (err) {
+                      if (!hasError) {
+                        hasError = true;
+                        connection.rollback(() => {
+                          connection.release();
+                          console.error("Error updating advance receipt:", err);
+                          return res.status(500).json({ error: "Failed to update advance receipt" });
+                        });
+                      }
+                      return;
+                    }
+
+                    adjustedReceipts.push({
+                      id: advanceId,
+                      receipt_number: advanceReceipt[0].VchNo,
+                      adjusted_amount: adjustedAmount,
+                      invoice_number_assigned: finalInvoiceNumber
+                    });
+
+                    checkCompletion();
+                  }
+                );
+
+                function checkCompletion() {
+                  completedQueries++;
+                  if (completedQueries === advanceIds.length && !hasError) {
+                    console.log('✅ All advance receipts processed. Total adjusted:', totalActuallyAdjusted);
+                    
+                    // Update the new receipt to mark it as having adjusted advance receipts
+                    if (adjustedReceipts.length > 0) {
+                      const adjustmentNote = adjustedReceipts.map(r =>
+                        `${r.receipt_number} (₹${r.adjusted_amount})`
+                      ).join(', ');
+                      
+                      // Check if columns exist before updating
+                      connection.query(
+                        `SHOW COLUMNS FROM voucher LIKE 'advance_receipts_adjusted'`,
+                        (err, columns) => {
+                          if (columns.length > 0) {
+                            connection.query(
+                              `UPDATE voucher 
+                               SET 
+                                 advance_receipts_adjusted = ?,
+                                 total_advance_adjusted = ?,
+                                 note = CONCAT(IFNULL(note, ''), '\n✅ Adjusted advance receipts: ', ?),
+                                 updated_at = NOW()
+                               WHERE VoucherID = ?`,
+                              [
+                                advanceIds.join(','),
+                                totalActuallyAdjusted,
+                                adjustmentNote,
+                                receipt_id
+                              ],
+                              (err) => {
+                                if (err) {
+                                  console.warn('Warning: Could not update advance receipt tracking:', err);
+                                }
+                                commitTransaction();
+                              }
+                            );
+                          } else {
+                            commitTransaction();
+                          }
+                        }
+                      );
+                    } else {
+                      commitTransaction();
+                    }
+
+                    function commitTransaction() {
+                      connection.commit((commitErr) => {
+                        if (commitErr) {
+                          connection.rollback(() => {
+                            connection.release();
+                            console.error("Commit error:", commitErr);
+                            return res.status(500).json({ error: "Failed to commit transaction" });
+                          });
+                          return;
+                        }
+                        connection.release();
+                        
+                        console.log('✅ Transaction committed successfully!');
+                        console.log('📝 Adjusted receipts:', adjustedReceipts);
+                        
+                        // Send success response
+                        return res.json({
+                          success: true,
+                          message: "Advance receipts adjusted successfully",
+                          adjusted_receipts: adjustedReceipts,
+                          total_adjusted: totalActuallyAdjusted,
+                          remaining_to_adjust: remainingToAdjust,
+                          invoice_number: invoice_number
+                        });
+                      });
+                    }
+                  }
+                }
+              }
+            );
+          });
+        }
+      );
+    });
+  });
+});
+
 router.get('/receipts-with-vouchers', async (req, res) => {
   try {
     const query = `
@@ -873,7 +1292,7 @@ router.get('/receipts', async (req, res) => {
         WHERE v.PartyID = r.PartyID 
         AND v.TransactionType = 'stock transfer'
       )`;
-    }else if (data_type === 'stock transfer') {
+    } else if (data_type === 'stock transfer') {
       invoiceTypes = `'stock transfer'`;
       // Add filter for stock transfer-related receipts
       whereClause += ` AND EXISTS (
@@ -2202,6 +2621,62 @@ router.get('/receipts/:id/view-proof', async (req, res) => {
   }
 });
 
+
+
+
+// GET /api/receipts/advance/:customerId
+// router.get('/receipts/advance/:customerId', (req, res) => {
+//   const { customerId } = req.params;
+
+//   const sql = `
+//     SELECT 
+//       r.VoucherID AS id,
+//       r.VchNo AS receipt_number,
+//       DATE(r.Date) AS receipt_date,
+//       r.TotalAmount AS total_amount,
+//       COALESCE(r.paid_amount, 0) AS paid_amount,
+//       r.payment_method,
+//       r.BankName AS bank_name,
+//       r.note,
+//       r.PartyID AS customer_id,
+//       a.business_name,
+//       a.name AS customer_name,
+//       r.InvoiceNumber AS invoice_number,
+//       r.status,
+//       r.assigned_staff,
+//       r.staffid AS staff_id
+//     FROM voucher r
+//     LEFT JOIN accounts a ON r.PartyID = a.id
+//     WHERE 
+//       r.TransactionType = 'Receipt'
+//       AND r.PartyID = ?
+//       AND r.status = 'Paid'
+//       AND (r.InvoiceNumber IS NULL OR r.InvoiceNumber = '')
+//     ORDER BY r.Date ASC
+//   `;
+
+//   db.query(sql, [customerId], (err, results) => {
+//     if (err) {
+//       console.error("Error fetching advance receipts:", err);
+//       return res.status(500).json({
+//         success: false,
+//         error: err.message
+//       });
+//     }
+
+//     const receipts = results.map(r => ({
+//       ...r,
+//       available_amount: parseFloat(r.total_amount) - parseFloat(r.paid_amount)
+//     }));
+
+//     res.json({
+//       success: true,
+//       count: receipts.length,
+//       receipts: receipts,
+//       customer_id: customerId
+//     });
+//   });
+// });
 
 
 module.exports = router;
