@@ -8,7 +8,8 @@ const db = mysql.createPool({
   database: "ledger",
   connectionLimit: 10, // optional
   // port: 4306
-  port: 3306
+  //port: 3306
+    port: 3307
 });
 
 

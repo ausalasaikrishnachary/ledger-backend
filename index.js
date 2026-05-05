@@ -46,6 +46,7 @@ const creditPeriodFixRoutes = require('./routes/CreditPeriod/CreditPeriodRoutes'
 const inventory = require('./routes/Retailer/InventoryRoutesRetailer');
 const OfferFlashSale = require('./routes/OfferFlashSale');
 const Journalroutes = require('./routes/Journalroutes');
+// const companyInfoRoutes = require("./routes/companyInfo");
 
 const { baseurl } = require('./baseUrl');
 const port = 5000;
@@ -99,6 +100,8 @@ app.use("/", OfferFlashSale);
 app.use("/orders", RetailerOrderRoutes);
 app.use("/api/cart", cartRoutes);
 app.use("/api", inventory);
+
+app.use("/api", require("./routes/companyInfo"));
 
 // ============================================
 // CRON JOB FOR AUTOMATIC SCORE CALCULATION
