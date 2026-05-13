@@ -2596,4 +2596,60 @@ router.get('/receipts/:id/view-proof', async (req, res) => {
 // });
 
 
+
+router.post('/direct-deposit/import', (req, res) => {
+  const {
+    amount,
+    bank_name,
+    bank_account_number
+  } = req.body;
+
+  if (!amount || !bank_name || !bank_account_number) {
+    return res.status(400).json({
+      success: false,
+      message: 'Missing required fields'
+    });
+  }
+
+  // Get the next available transaction ID
+  db.query(
+    'SELECT MAX(CAST(transaction_id AS UNSIGNED)) as max_id FROM direct_deposit',
+    (err, result) => {
+      if (err) {
+        return res.status(500).json({
+          success: false,
+          message: 'Database error: ' + err.message
+        });
+      }
+
+      const nextId = (result[0].max_id || 0) + 1;
+
+      // Insert into database with auto-generated transaction_id
+      db.query(
+        `INSERT INTO direct_deposit 
+         (transaction_id, amount, bank_name, bank_account_number) 
+         VALUES (?, ?, ?, ?)`,
+        [nextId, amount, bank_name, bank_account_number],
+        (err, result) => {
+          if (err) {
+            return res.status(500).json({
+              success: false,
+              message: 'Database error: ' + err.message
+            });
+          }
+
+          res.json({
+            success: true,
+            message: 'Record inserted successfully',
+            data: { 
+              id: result.insertId,
+              transaction_id: nextId 
+            }
+          });
+        }
+      );
+    }
+  );
+});
+
 module.exports = router;
