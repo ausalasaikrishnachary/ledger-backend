@@ -2676,9 +2676,9 @@ router.post('/direct-deposit/import', (req, res) => {
 
 
 
-
 router.get('/direct-deposit/statements', (req, res) => {
-  const query = 'SELECT * FROM direct_deposit ORDER BY txn_date DESC, id DESC';
+  // Exclude records with status = 'approved'
+  const query = "SELECT * FROM direct_deposit WHERE status != 'approved' OR status IS NULL ORDER BY txn_date DESC, id DESC";
   
   db.query(query, (err, results) => {
     if (err) {
@@ -2757,16 +2757,16 @@ router.post('/direct-deposit/create-voucher', (req, res) => {
     txn_date,
     value_date,
     description,
-    ref_no,
-    dc   ,
-    branch_code,
+    ref_no,        // From direct_deposit table
+    dc,
+    branch_code,   // From direct_deposit table
     payment_method,
-    BankName,
+    bank_name,
     data_type,
     balance        
   } = req.body;
 
-  console.log('Received request:', req.body); // Debug
+  console.log('Received request:', req.body);
 
   // Validation
   if (!retailer_id || !amount || !transaction_type) {
@@ -2790,7 +2790,7 @@ router.post('/direct-deposit/create-voucher', (req, res) => {
 
     console.log('Using voucher number:', voucherNumber);
 
-    // Insert into voucher table directly (without transaction for simplicity)
+    // Insert into voucher table - store ref_no as ChequeNo and branch_code
     const voucherQuery = `
       INSERT INTO voucher (
         TransactionType, 
@@ -2813,14 +2813,18 @@ router.post('/direct-deposit/create-voucher', (req, res) => {
         description_preview, 
         note,
         DC,
-        balance_amount
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW(), ?, ?,?,?)
+        balance_amount,
+        paid_date,
+        ChequeNo,      
+        branch_code    
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW(), ?, ?, ?, ?, NOW(), ?, ?)
     `;
     
     const voucherValues = [
       voucherType,
       voucherNumber,
-      null    ,  txn_date,
+      null,           
+      txn_date,
       'Net 0',
       retailer_id,
       retailer_name,
@@ -2830,13 +2834,15 @@ router.post('/direct-deposit/create-voucher', (req, res) => {
       amount,
       amount,
       payment_method || 'Direct Deposit',
-      BankName || 'Bank Transfer',
+      bank_name || 'Bank Transfer',
       data_type || 'Sales',
-      'Completed',
+      'Paid',
       description || `Bank ${voucherType} transaction`,
       description || '',
-      dc   ,
-        balance ? parseFloat(balance) : null   // ← ADD THIS
+      dc,
+      balance ? parseFloat(balance) : null,
+      ref_no || null,        // ← ChequeNo (Voucher No. from Excel)
+      branch_code || null    // ← branch_code from Excel
     ];
     
     db.query(voucherQuery, voucherValues, (err, voucherResult) => {
@@ -2869,7 +2875,7 @@ router.post('/direct-deposit/create-voucher', (req, res) => {
         voucherId,
         description || 'Bank Transaction',
         null,
-        null     ,
+        null,
         1,
         amount,
         amount,
@@ -2885,7 +2891,6 @@ router.post('/direct-deposit/create-voucher', (req, res) => {
           });
         }
         
-        // Update bank statement status (if table has status column)
         if (transaction_id) {
           db.query(
             'UPDATE direct_deposit SET status = ?, voucher_id = ? WHERE transaction_id = ?',
@@ -2893,7 +2898,6 @@ router.post('/direct-deposit/create-voucher', (req, res) => {
             (err) => {
               if (err) {
                 console.error('Error updating bank statement:', err);
-                // Don't fail the request, just log the error
               }
             }
           );
