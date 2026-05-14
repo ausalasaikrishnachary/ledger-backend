@@ -162,7 +162,7 @@ router.post('/receipts', upload.single('transaction_proof'), async (req, res) =>
       account_name,
       business_name,
       amount,
-      bank_name,
+      BankName,
       payment_method,
       invoice_number,
       product_id,
@@ -344,7 +344,7 @@ VALUES (?, ?, ?, ?, ?, ?, 'Immediate', 0, 0, 0, ?, 0, ?, NULL, NULL, ?, ?, ?, ?,
         currentDate,
         receiptAmount,
         receiptAmount,
-        bank_name || null,
+        BankName || null,
         payment_method || null,
         retailer_id || null,
         account_name || "",
@@ -733,7 +733,7 @@ router.get('/receipts/advance/:customerId', async (req, res) => {
         r.TotalAmount AS total_amount,
         COALESCE(r.paid_amount, 0) AS paid_amount,
         r.payment_method,
-        r.BankName AS bank_name,
+        r.BankName AS BankName,
         r.note,
         r.TransactionType,
         r.created_at,
@@ -789,7 +789,7 @@ router.get('/receipts/advance/:customerId', async (req, res) => {
           paid_amount: paidAmount,
           available_amount: availableAmount, // Full amount available
           payment_method: receipt.payment_method,
-          bank_name: receipt.bank_name,
+          BankName: receipt.BankName,
           note: receipt.note,
           customer_id: receipt.customer_id,
           customer_name: receipt.customer_name,
@@ -1861,7 +1861,7 @@ router.put('/voucher/:id', upload.single('transaction_proof'), async (req, res) 
       retailer_name: 'PartyName',
       account_name: 'AccountName',
       business_name: 'business_name',
-      bank_name: 'BankName',
+      BankName: 'BankName',
       data_type: 'data_type',
     };
 
@@ -2553,7 +2553,7 @@ router.get('/receipts/:id/view-proof', async (req, res) => {
 //       r.TotalAmount AS total_amount,
 //       COALESCE(r.paid_amount, 0) AS paid_amount,
 //       r.payment_method,
-//       r.BankName AS bank_name,
+//       r.BankName AS BankName,
 //       r.note,
 //       r.PartyID AS customer_id,
 //       a.business_name,
@@ -2599,19 +2599,40 @@ router.get('/receipts/:id/view-proof', async (req, res) => {
 
 router.post('/direct-deposit/import', (req, res) => {
   const {
-    amount,
-    bank_name,
-    bank_account_number
+    txn_date,
+    value_date,
+    description,
+    ref_no,
+    branch_code,
+    debit,
+    credit,
+    balance
   } = req.body;
 
-  if (!amount || !bank_name || !bank_account_number) {
+  // Validate required fields (NO transaction_id validation)
+  if (!txn_date || !description) {
     return res.status(400).json({
       success: false,
-      message: 'Missing required fields'
+      message: 'Missing required fields: txn_date, description'
     });
   }
 
-  // Get the next available transaction ID
+  // Validate debit/credit
+  if ((!debit || debit <= 0) && (!credit || credit <= 0)) {
+    return res.status(400).json({
+      success: false,
+      message: 'Either debit or credit amount must be provided and greater than 0'
+    });
+  }
+
+  if (debit && credit && debit > 0 && credit > 0) {
+    return res.status(400).json({
+      success: false,
+      message: 'Cannot have both debit and credit amounts'
+    });
+  }
+
+  // Get the next available transaction ID (auto-increment)
   db.query(
     'SELECT MAX(CAST(transaction_id AS UNSIGNED)) as max_id FROM direct_deposit',
     (err, result) => {
@@ -2622,14 +2643,15 @@ router.post('/direct-deposit/import', (req, res) => {
         });
       }
 
+      // Generate next ID (start from 1 if no records exist)
       const nextId = (result[0].max_id || 0) + 1;
 
       // Insert into database with auto-generated transaction_id
       db.query(
         `INSERT INTO direct_deposit 
-         (transaction_id, amount, bank_name, bank_account_number) 
-         VALUES (?, ?, ?, ?)`,
-        [nextId, amount, bank_name, bank_account_number],
+         (transaction_id, txn_date, value_date, description, ref_no, branch_code, debit, credit, balance) 
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        [nextId, txn_date, value_date || null, description, ref_no || null, branch_code || null, debit || null, credit || null, balance || null],
         (err, result) => {
           if (err) {
             return res.status(500).json({
@@ -2652,4 +2674,240 @@ router.post('/direct-deposit/import', (req, res) => {
   );
 });
 
+
+
+
+router.get('/direct-deposit/statements', (req, res) => {
+  const query = 'SELECT * FROM direct_deposit ORDER BY txn_date DESC, id DESC';
+  
+  db.query(query, (err, results) => {
+    if (err) {
+      return res.status(500).json({
+        success: false,
+        message: 'Database error: ' + err.message
+      });
+    }
+    
+    res.json({
+      success: true,
+      data: results,
+      count: results.length
+    });
+  });
+});
+
+
+router.get('/direct-deposit/statement/:id', (req, res) => {
+  const { id } = req.params;
+  
+  db.query('SELECT * FROM direct_deposit WHERE id = ?', [id], (err, results) => {
+    if (err) {
+      return res.status(500).json({
+        success: false,
+        message: 'Database error: ' + err.message
+      });
+    }
+    
+    if (results.length === 0) {
+      return res.status(404).json({
+        success: false,
+        message: 'Statement not found'
+      });
+    }
+    
+    res.json({
+      success: true,
+      data: results[0]
+    });
+  });
+});
+
+const getNextVoucherNumber = (transactionType, callback) => {
+  const apiUrl = transactionType === 'receipts'
+    ? 'http://localhost:5000/api/next-receipt-number'
+    : 'http://localhost:5000/api/next-Payment-number';
+
+  const http = require('http');
+
+  http.get(apiUrl, (response) => {
+    let data = '';
+    response.on('data', chunk => data += chunk);
+    response.on('end', () => {
+      try {
+        const parsed = JSON.parse(data);
+        callback(null, parsed.nextReceiptNumber);
+      } catch (e) {
+        callback(null, transactionType === 'receipts' ? 'REC001' : 'PAY001');
+      }
+    });
+  }).on('error', () => {
+    callback(null, transactionType === 'receipts' ? 'REC001' : 'PAY001');
+  });
+};
+
+router.post('/direct-deposit/create-voucher', (req, res) => {
+  const {
+    transaction_id,
+    retailer_id,
+    retailer_name,
+    account_name,
+    business_name,
+    amount,
+    transaction_type,
+    txn_date,
+    value_date,
+    description,
+    ref_no,
+    dc   ,
+    branch_code,
+    payment_method,
+    BankName,
+    data_type,
+    balance        
+  } = req.body;
+
+  console.log('Received request:', req.body); // Debug
+
+  // Validation
+  if (!retailer_id || !amount || !transaction_type) {
+    return res.status(400).json({
+      success: false,
+      message: 'Missing required fields: retailer_id, amount, transaction_type'
+    });
+  }
+
+  const voucherType = transaction_type === 'receipts' ? 'Receipt' : 'Payment';
+  
+  // Get next voucher number using callback
+  getNextVoucherNumber(transaction_type, (err, voucherNumber) => {
+    if (err) {
+      console.error('Error in getNextVoucherNumber:', err);
+      return res.status(500).json({
+        success: false,
+        message: 'Error generating voucher number: ' + err.message
+      });
+    }
+
+    console.log('Using voucher number:', voucherNumber);
+
+    // Insert into voucher table directly (without transaction for simplicity)
+    const voucherQuery = `
+      INSERT INTO voucher (
+        TransactionType, 
+        VchNo, 
+        InvoiceNumber, 
+        Date, 
+        PaymentTerms,
+        PartyID, 
+        PartyName, 
+        business_name, 
+        AccountID, 
+        AccountName,
+        TotalAmount, 
+        paid_amount, 
+        payment_method, 
+        BankName,
+        data_type, 
+        status, 
+        created_at, 
+        description_preview, 
+        note,
+        DC,
+        balance_amount
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW(), ?, ?,?,?)
+    `;
+    
+    const voucherValues = [
+      voucherType,
+      voucherNumber,
+      null    ,  txn_date,
+      'Net 0',
+      retailer_id,
+      retailer_name,
+      business_name || '',
+      retailer_id,
+      account_name || retailer_name,
+      amount,
+      amount,
+      payment_method || 'Direct Deposit',
+      BankName || 'Bank Transfer',
+      data_type || 'Sales',
+      'Completed',
+      description || `Bank ${voucherType} transaction`,
+      description || '',
+      dc   ,
+        balance ? parseFloat(balance) : null   // ← ADD THIS
+    ];
+    
+    db.query(voucherQuery, voucherValues, (err, voucherResult) => {
+      if (err) {
+        console.error('Error inserting into voucher:', err);
+        return res.status(500).json({
+          success: false,
+          message: 'Database error: ' + err.message
+        });
+      }
+      
+      const voucherId = voucherResult.insertId;
+      
+      // Insert into voucherdetails table
+      const voucherDetailQuery = `
+        INSERT INTO voucherdetails (
+          voucher_id, 
+          product, 
+          product_id, 
+          InvoiceNumber,
+          quantity, 
+          price, 
+          total, 
+          transaction_type, 
+          created_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, NOW())
+      `;
+      
+      const detailValues = [
+        voucherId,
+        description || 'Bank Transaction',
+        null,
+        null     ,
+        1,
+        amount,
+        amount,
+        voucherType
+      ];
+      
+      db.query(voucherDetailQuery, detailValues, (err) => {
+        if (err) {
+          console.error('Error inserting into voucherdetails:', err);
+          return res.status(500).json({
+            success: false,
+            message: 'Database error: ' + err.message
+          });
+        }
+        
+        // Update bank statement status (if table has status column)
+        if (transaction_id) {
+          db.query(
+            'UPDATE direct_deposit SET status = ?, voucher_id = ? WHERE transaction_id = ?',
+            ['approved', voucherId, transaction_id],
+            (err) => {
+              if (err) {
+                console.error('Error updating bank statement:', err);
+                // Don't fail the request, just log the error
+              }
+            }
+          );
+        }
+        
+        // Send success response
+        res.json({
+          success: true,
+          message: `${voucherType} created successfully`,
+          voucher_id: voucherId,
+          voucher_number: voucherNumber
+        });
+      });
+    });
+  });
+});
 module.exports = router;
