@@ -141,6 +141,50 @@ router.get('/next-Payment-number', async (req, res) => {
 });
 
 
+router.get('/next-contra-number', async (req, res) => {
+  try {
+    db.execute(
+      `SELECT VchNo 
+       FROM voucher 
+       WHERE TransactionType = 'Contra' 
+         AND VchNo IS NOT NULL 
+         AND VchNo != ''
+         AND VchNo LIKE 'CON%'
+       ORDER BY VoucherID DESC 
+       LIMIT 1`,
+      (error, results) => {
+        if (error) {
+          console.error('Database error fetching next contra number:', error);
+          return res.status(500).json({ error: 'Failed to fetch next contra number' });
+        }
+
+        let nextContraNumber = 'CON001';
+
+        if (results && results.length > 0 && results[0].VchNo) {
+          const lastNumber = results[0].VchNo;
+          const match = lastNumber.match(/CON(\d+)/);
+
+          if (match) {
+            const nextNum = parseInt(match[1], 10) + 1;
+            nextContraNumber = `CON${nextNum.toString().padStart(3, '0')}`;
+            console.log(`Incremented from ${lastNumber} to ${nextContraNumber}`);
+          } else {
+            console.log('VchNo exists but no CON pattern found, using default:', nextContraNumber);
+          }
+        } else {
+          console.log('No previous contra entries found, using default:', nextContraNumber);
+        }
+
+        console.log('Next contra number:', nextContraNumber);
+        res.json({ nextContraNumber });
+      }
+    );
+  } catch (error) {
+    console.error('Error in next contra number route:', error);
+    res.status(500).json({ error: 'Failed to fetch next contra number' });
+  }
+});
+
 router.post('/receipts', upload.single('transaction_proof'), async (req, res) => {
   console.log('📌 Body:', req.body);
   let connection;
@@ -2606,10 +2650,12 @@ router.post('/direct-deposit/import', (req, res) => {
     branch_code,
     debit,
     credit,
-    balance
+    balance,
+    party_id,
+    party_name
   } = req.body;
 
-  // Validate required fields (NO transaction_id validation)
+  // Validate required fields
   if (!txn_date || !description) {
     return res.status(400).json({
       success: false,
@@ -2646,30 +2692,36 @@ router.post('/direct-deposit/import', (req, res) => {
       // Generate next ID (start from 1 if no records exist)
       const nextId = (result[0].max_id || 0) + 1;
 
-      // Insert into database with auto-generated transaction_id
-      db.query(
-        `INSERT INTO direct_deposit 
-         (transaction_id, txn_date, value_date, description, ref_no, branch_code, debit, credit, balance) 
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-        [nextId, txn_date, value_date || null, description, ref_no || null, branch_code || null, debit || null, credit || null, balance || null],
-        (err, result) => {
-          if (err) {
-            return res.status(500).json({
-              success: false,
-              message: 'Database error: ' + err.message
-            });
-          }
+      // Insert into database - party_id and party_name are optional
+      let query = `INSERT INTO direct_deposit 
+                   (transaction_id, txn_date, value_date, description, ref_no, branch_code, debit, credit, balance`;
+      let values = [nextId, txn_date, value_date || null, description, ref_no || null, branch_code || null, debit || null, credit || null, balance || null];
+      
+      if (party_id && party_name) {
+        query += `, party_id, party_name) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`;
+        values.push(party_id, party_name);
+      } else {
+        query += `) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`;
+      }
 
-          res.json({
-            success: true,
-            message: 'Record inserted successfully',
-            data: { 
-              id: result.insertId,
-              transaction_id: nextId 
-            }
+      db.query(query, values, (err, result) => {
+        if (err) {
+          return res.status(500).json({
+            success: false,
+            message: 'Database error: ' + err.message
           });
         }
-      );
+
+        res.json({
+          success: true,
+          message: 'Record inserted successfully',
+          data: { 
+            id: result.insertId,
+            transaction_id: nextId,
+            ...(party_id && { party_id, party_name })
+          }
+        });
+      });
     }
   );
 });
@@ -2678,7 +2730,7 @@ router.post('/direct-deposit/import', (req, res) => {
 
 router.get('/direct-deposit/statements', (req, res) => {
   // Exclude records with status = 'approved'
-  const query = "SELECT * FROM direct_deposit WHERE status != 'approved' OR status IS NULL ORDER BY txn_date DESC, id DESC";
+  const query = "SELECT id, transaction_id, txn_date, value_date, description, ref_no, branch_code, debit, credit, balance, party_id, party_name, status, created_at FROM direct_deposit WHERE status != 'approved' OR status IS NULL ORDER BY txn_date DESC, id DESC";
   
   db.query(query, (err, results) => {
     if (err) {
@@ -2696,11 +2748,10 @@ router.get('/direct-deposit/statements', (req, res) => {
   });
 });
 
-
 router.get('/direct-deposit/statement/:id', (req, res) => {
   const { id } = req.params;
   
-  db.query('SELECT * FROM direct_deposit WHERE id = ?', [id], (err, results) => {
+  db.query('SELECT id, transaction_id, txn_date, value_date, description, ref_no, branch_code, debit, credit, balance, party_id, party_name, status, created_at FROM direct_deposit WHERE id = ?', [id], (err, results) => {
     if (err) {
       return res.status(500).json({
         success: false,
@@ -2722,10 +2773,80 @@ router.get('/direct-deposit/statement/:id', (req, res) => {
   });
 });
 
+
+
+router.delete('/direct-deposit/statements/:id', async (req, res) => {
+  const { id } = req.params;
+  
+  console.log('Attempting to delete statement with ID:', id);
+  
+  // Validate ID
+  if (!id || isNaN(parseInt(id))) {
+    return res.status(400).json({ 
+      success: false, 
+      message: 'Invalid ID provided. ID must be a number.' 
+    });
+  }
+  
+  // First check if the record exists
+  const checkQuery = 'SELECT id FROM direct_deposit WHERE id = ?';
+  
+  db.query(checkQuery, [id], (checkError, checkResult) => {
+    if (checkError) {
+      console.error('Error checking record existence:', checkError);
+      return res.status(500).json({ 
+        success: false, 
+        message: 'Database error while checking record: ' + checkError.message 
+      });
+    }
+    
+    if (checkResult.length === 0) {
+      return res.status(404).json({ 
+        success: false, 
+        message: `Record with ID ${id} not found` 
+      });
+    }
+    
+    // Record exists, proceed with deletion
+    const deleteQuery = 'DELETE FROM direct_deposit WHERE id = ?';
+    
+    db.query(deleteQuery, [id], (deleteError, deleteResult) => {
+      if (deleteError) {
+        console.error('Error deleting record:', deleteError);
+        return res.status(500).json({ 
+          success: false, 
+          message: 'Database error while deleting: ' + deleteError.message 
+        });
+      }
+      
+      if (deleteResult.affectedRows === 0) {
+        return res.status(404).json({ 
+          success: false, 
+          message: 'Record could not be deleted' 
+        });
+      }
+      
+      console.log(`Successfully deleted record with ID: ${id}`);
+      res.json({ 
+        success: true, 
+        message: 'Record deleted successfully',
+        deletedId: parseInt(id)
+      });
+    });
+  });
+});
+
+
 const getNextVoucherNumber = (transactionType, callback) => {
-  const apiUrl = transactionType === 'receipts'
-    ? 'http://localhost:5000/api/next-receipt-number'
-    : 'http://localhost:5000/api/next-Payment-number';
+  let apiUrl = '';
+  
+  if (transactionType === 'receipts') {
+    apiUrl = 'http://localhost:5000/api/next-receipt-number';
+  } else if (transactionType === 'payment') {
+    apiUrl = 'http://localhost:5000/api/next-Payment-number';
+  } else if (transactionType === 'contra') {
+    apiUrl = 'http://localhost:5000/api/next-contra-number';
+  }
 
   const http = require('http');
 
@@ -2735,15 +2856,38 @@ const getNextVoucherNumber = (transactionType, callback) => {
     response.on('end', () => {
       try {
         const parsed = JSON.parse(data);
-        callback(null, parsed.nextReceiptNumber);
+        let nextNumber = '';
+        
+        if (transactionType === 'receipts') {
+          nextNumber = parsed.nextReceiptNumber;
+        } else if (transactionType === 'payment') {
+          // Your API returns nextReceiptNumber, not nextPaymentNumber
+          nextNumber = parsed.nextReceiptNumber;  // ← Use nextReceiptNumber
+        } else if (transactionType === 'contra') {
+          nextNumber = parsed.nextContraNumber;
+        }
+        
+        console.log(`Next ${transactionType} number:`, nextNumber);
+        callback(null, nextNumber);
       } catch (e) {
-        callback(null, transactionType === 'receipts' ? 'REC001' : 'PAY001');
+        console.error('Error parsing response:', e);
+        let defaultValue = 'REC001';
+        if (transactionType === 'payment') defaultValue = 'PAY001';
+        if (transactionType === 'contra') defaultValue = 'CON001';
+        callback(null, defaultValue);
       }
     });
-  }).on('error', () => {
-    callback(null, transactionType === 'receipts' ? 'REC001' : 'PAY001');
+  }).on('error', (error) => {
+    console.error('HTTP error:', error);
+    let defaultValue = 'REC001';
+    if (transactionType === 'payment') defaultValue = 'PAY001';
+    if (transactionType === 'contra') defaultValue = 'CON001';
+    callback(null, defaultValue);
   });
 };
+
+
+
 
 router.post('/direct-deposit/create-voucher', (req, res) => {
   const {
@@ -2757,9 +2901,9 @@ router.post('/direct-deposit/create-voucher', (req, res) => {
     txn_date,
     value_date,
     description,
-    ref_no,        // From direct_deposit table
+    ref_no,
     dc,
-    branch_code,   // From direct_deposit table
+    branch_code,
     payment_method,
     bank_name,
     data_type,
@@ -2776,7 +2920,20 @@ router.post('/direct-deposit/create-voucher', (req, res) => {
     });
   }
 
-  const voucherType = transaction_type === 'receipts' ? 'Receipt' : 'Payment';
+  // Fix: Handle all three transaction types properly
+  let voucherType = '';
+  if (transaction_type === 'receipts') {
+    voucherType = 'Receipt';
+  } else if (transaction_type === 'payment') {
+    voucherType = 'Payment';
+  } else if (transaction_type === 'contra') {
+    voucherType = 'Contra';
+  } else {
+    return res.status(400).json({
+      success: false,
+      message: 'Invalid transaction_type: must be receipts, payment, or contra'
+    });
+  }
   
   // Get next voucher number using callback
   getNextVoucherNumber(transaction_type, (err, voucherNumber) => {
@@ -2789,8 +2946,9 @@ router.post('/direct-deposit/create-voucher', (req, res) => {
     }
 
     console.log('Using voucher number:', voucherNumber);
+    console.log('Voucher Type:', voucherType);
 
-    // Insert into voucher table - store ref_no as ChequeNo and branch_code
+    // Insert into voucher table
     const voucherQuery = `
       INSERT INTO voucher (
         TransactionType, 
@@ -2841,8 +2999,8 @@ router.post('/direct-deposit/create-voucher', (req, res) => {
       description || '',
       dc,
       balance ? parseFloat(balance) : null,
-      ref_no || null,        // ← ChequeNo (Voucher No. from Excel)
-      branch_code || null    // ← branch_code from Excel
+      ref_no || null,
+      branch_code || null
     ];
     
     db.query(voucherQuery, voucherValues, (err, voucherResult) => {
@@ -2914,4 +3072,10 @@ router.post('/direct-deposit/create-voucher', (req, res) => {
     });
   });
 });
+
+
+
+
+
+
 module.exports = router;
