@@ -2729,8 +2729,8 @@ router.post('/direct-deposit/import', (req, res) => {
 
 
 router.get('/direct-deposit/statements', (req, res) => {
-  // Exclude records with status = 'approved'
-  const query = "SELECT id, transaction_id, txn_date, value_date, description, ref_no, branch_code, debit, credit, balance, party_id, party_name, status, created_at FROM direct_deposit WHERE status != 'approved' OR status IS NULL ORDER BY txn_date DESC, id DESC";
+  // Show all records including those with status = 'approved'
+  const query = "SELECT id, transaction_id, txn_date, value_date, description, ref_no, branch_code, debit, credit, balance, party_id, party_name, status, created_at FROM direct_deposit ORDER BY txn_date DESC, id DESC";
   
   db.query(query, (err, results) => {
     if (err) {
@@ -2888,7 +2888,6 @@ const getNextVoucherNumber = (transactionType, callback) => {
 
 
 
-
 router.post('/direct-deposit/create-voucher', (req, res) => {
   const {
     transaction_id,
@@ -2912,11 +2911,22 @@ router.post('/direct-deposit/create-voucher', (req, res) => {
 
   console.log('Received request:', req.body);
 
-  // Validation
-  if (!retailer_id || !amount || !transaction_type) {
+  // Check if this is an import (transaction_type is null) or manual submission
+  const isImport = !transaction_type || transaction_type === null;
+  
+  // For manual submissions, validate required fields
+  if (!isImport && (!retailer_id || !amount || !transaction_type)) {
     return res.status(400).json({
       success: false,
       message: 'Missing required fields: retailer_id, amount, transaction_type'
+    });
+  }
+  
+  // For import, only validate retailer_id and amount
+  if (isImport && (!retailer_id || !amount)) {
+    return res.status(400).json({
+      success: false,
+      message: 'Missing required fields for import: retailer_id, amount'
     });
   }
 
@@ -2928,6 +2938,15 @@ router.post('/direct-deposit/create-voucher', (req, res) => {
     voucherType = 'Payment';
   } else if (transaction_type === 'contra') {
     voucherType = 'Contra';
+  } else if (isImport) {
+    // For import, determine voucher type based on DC value
+    if (dc === 'C') {
+      voucherType = 'Receipt';
+    } else if (dc === 'D') {
+      voucherType = 'Payment';
+    } else {
+      voucherType = 'Pending'; // Or keep as null in database
+    }
   } else {
     return res.status(400).json({
       success: false,
@@ -2936,7 +2955,7 @@ router.post('/direct-deposit/create-voucher', (req, res) => {
   }
   
   // Get next voucher number using callback
-  getNextVoucherNumber(transaction_type, (err, voucherNumber) => {
+  getNextVoucherNumber(transaction_type || (dc === 'C' ? 'receipts' : 'payment'), (err, voucherNumber) => {
     if (err) {
       console.error('Error in getNextVoucherNumber:', err);
       return res.status(500).json({
@@ -2980,7 +2999,7 @@ router.post('/direct-deposit/create-voucher', (req, res) => {
     
     const voucherValues = [
       voucherType,
-      voucherNumber,
+      isImport ? null : voucherNumber, // Set VchNo to null for imports
       null,           
       txn_date,
       'Net 0',
@@ -2994,7 +3013,7 @@ router.post('/direct-deposit/create-voucher', (req, res) => {
       payment_method || 'Direct Deposit',
       bank_name || 'Bank Transfer',
       data_type || 'Sales',
-      'Paid',
+      isImport ? 'Pending' : 'Paid', // Set status to 'Pending' for imports
       description || `Bank ${voucherType} transaction`,
       description || '',
       dc,
@@ -3052,7 +3071,7 @@ router.post('/direct-deposit/create-voucher', (req, res) => {
         if (transaction_id) {
           db.query(
             'UPDATE direct_deposit SET status = ?, voucher_id = ? WHERE transaction_id = ?',
-            ['approved', voucherId, transaction_id],
+            [isImport ? 'pending' : 'approved', voucherId, transaction_id],
             (err) => {
               if (err) {
                 console.error('Error updating bank statement:', err);
@@ -3066,7 +3085,7 @@ router.post('/direct-deposit/create-voucher', (req, res) => {
           success: true,
           message: `${voucherType} created successfully`,
           voucher_id: voucherId,
-          voucher_number: voucherNumber
+          voucher_number: isImport ? null : voucherNumber
         });
       });
     });
