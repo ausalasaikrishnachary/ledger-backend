@@ -3093,7 +3093,263 @@ router.post('/direct-deposit/create-voucher', (req, res) => {
 });
 
 
+// ------------------------------
+// Bill by Bill Balance Report
+// ------------------------------
+router.get('/reports/bill-by-bill', (req, res) => {
+  const { customer_id, start_date, end_date, show_only_pending } = req.query;
 
+  const params = [];
+
+  // Base: get all Sales / stock-transfer vouchers joined to accounts
+  let whereClause = `
+    WHERE v.TransactionType IN ('Sales', 'stock transfer')
+  `;
+
+  // ── Filter by customer ──────────────────────────────────────────────────
+  if (customer_id) {
+    whereClause += ` AND v.PartyID = ?`;
+    params.push(customer_id);
+  }
+
+  // ── Filter by date range ────────────────────────────────────────────────
+  if (start_date) {
+    whereClause += ` AND DATE(v.Date) >= ?`;
+    params.push(start_date);
+  }
+  if (end_date) {
+    whereClause += ` AND DATE(v.Date) <= ?`;
+    params.push(end_date);
+  }
+
+  // ── Only pending bills ──────────────────────────────────────────────────
+  if (show_only_pending === 'true') {
+    whereClause += ` AND COALESCE(v.balance_amount, v.TotalAmount) > 0`;
+  }
+
+  const sql = `
+    SELECT
+      v.VoucherID,
+      v.PartyID,
+
+      /* party info from accounts */
+      COALESCE(a.name, v.PartyName)         AS partyname,
+      COALESCE(a.business_name, '')          AS business_name,
+
+      /* bill fields */
+      v.VchNo                                AS vchno,
+      DATE(v.Date)                           AS invoicedate,
+
+      /*
+        Due-date = invoice date + credit days stored in PaymentTerms.
+        Falls back to 30 days when the field is missing / non-numeric.
+      */
+      DATE(
+        DATE_ADD(
+          v.Date,
+          INTERVAL
+            CASE
+              WHEN v.PaymentTerms REGEXP '^[0-9]+$'
+                THEN CAST(v.PaymentTerms AS UNSIGNED)
+              ELSE 30
+            END
+          DAY
+        )
+      )                                      AS duedate,
+
+      COALESCE(v.TotalAmount,   0)           AS originalamount,
+
+      /*
+        Sum every Receipt row that references this invoice number.
+        Falls back to the paid_amount column already on the Sales row.
+      */
+      COALESCE(
+        (
+          SELECT SUM(r.paid_amount)
+          FROM   voucher r
+          WHERE  r.TransactionType = 'Receipt'
+            AND  r.InvoiceNumber   = v.InvoiceNumber
+            AND  r.InvoiceNumber  IS NOT NULL
+            AND  r.InvoiceNumber  != ''
+        ),
+        COALESCE(v.paid_amount, 0)
+      )                                      AS totalpaid,
+
+      /* pending = total - paid (floor at 0) */
+      GREATEST(
+        0,
+        COALESCE(v.TotalAmount, 0) -
+        COALESCE(
+          (
+            SELECT SUM(r.paid_amount)
+            FROM   voucher r
+            WHERE  r.TransactionType = 'Receipt'
+              AND  r.InvoiceNumber   = v.InvoiceNumber
+              AND  r.InvoiceNumber  IS NOT NULL
+              AND  r.InvoiceNumber  != ''
+          ),
+          COALESCE(v.paid_amount, 0)
+        )
+      )                                      AS pendingamount,
+
+      /* status label */
+      CASE
+        WHEN GREATEST(
+               0,
+               COALESCE(v.TotalAmount, 0) -
+               COALESCE(
+                 (
+                   SELECT SUM(r.paid_amount)
+                   FROM   voucher r
+                   WHERE  r.TransactionType = 'Receipt'
+                     AND  r.InvoiceNumber   = v.InvoiceNumber
+                     AND  r.InvoiceNumber  IS NOT NULL
+                     AND  r.InvoiceNumber  != ''
+                 ),
+                 COALESCE(v.paid_amount, 0)
+               )
+             ) <= 0
+          THEN 'Paid'
+        WHEN COALESCE(v.paid_amount, 0) > 0
+          THEN 'Partially Paid'
+        WHEN DATE_ADD(
+               v.Date,
+               INTERVAL
+                 CASE WHEN v.PaymentTerms REGEXP '^[0-9]+$'
+                      THEN CAST(v.PaymentTerms AS UNSIGNED)
+                      ELSE 30 END
+               DAY
+             ) < CURDATE()
+          THEN 'Overdue'
+        ELSE 'Pending'
+      END                                    AS status,
+
+      /* aging bucket — based on days past due date */
+      CASE
+        WHEN GREATEST(
+               0,
+               COALESCE(v.TotalAmount, 0) -
+               COALESCE(
+                 (
+                   SELECT SUM(r.paid_amount)
+                   FROM   voucher r
+                   WHERE  r.TransactionType = 'Receipt'
+                     AND  r.InvoiceNumber   = v.InvoiceNumber
+                     AND  r.InvoiceNumber  IS NOT NULL
+                     AND  r.InvoiceNumber  != ''
+                 ),
+                 COALESCE(v.paid_amount, 0)
+               )
+             ) <= 0
+          THEN 'Not Due'
+        WHEN DATE_ADD(
+               v.Date,
+               INTERVAL
+                 CASE WHEN v.PaymentTerms REGEXP '^[0-9]+$'
+                      THEN CAST(v.PaymentTerms AS UNSIGNED)
+                      ELSE 30 END
+               DAY
+             ) >= CURDATE()
+          THEN 'Not Due'
+        WHEN DATEDIFF(
+               CURDATE(),
+               DATE_ADD(
+                 v.Date,
+                 INTERVAL
+                   CASE WHEN v.PaymentTerms REGEXP '^[0-9]+$'
+                        THEN CAST(v.PaymentTerms AS UNSIGNED)
+                        ELSE 30 END
+                 DAY
+               )
+             ) BETWEEN 1 AND 30
+          THEN '0-30 Days'
+        WHEN DATEDIFF(
+               CURDATE(),
+               DATE_ADD(
+                 v.Date,
+                 INTERVAL
+                   CASE WHEN v.PaymentTerms REGEXP '^[0-9]+$'
+                        THEN CAST(v.PaymentTerms AS UNSIGNED)
+                        ELSE 30 END
+                 DAY
+               )
+             ) BETWEEN 31 AND 60
+          THEN '31-60 Days'
+        WHEN DATEDIFF(
+               CURDATE(),
+               DATE_ADD(
+                 v.Date,
+                 INTERVAL
+                   CASE WHEN v.PaymentTerms REGEXP '^[0-9]+$'
+                        THEN CAST(v.PaymentTerms AS UNSIGNED)
+                        ELSE 30 END
+                 DAY
+               )
+             ) BETWEEN 61 AND 90
+          THEN '61-90 Days'
+        ELSE '90+ Days'
+      END                                    AS agingbucket,
+
+      /* receipt voucher numbers linked to this invoice */
+      (
+        SELECT GROUP_CONCAT(r.VchNo ORDER BY r.Date SEPARATOR ', ')
+        FROM   voucher r
+        WHERE  r.TransactionType = 'Receipt'
+          AND  r.InvoiceNumber   = v.InvoiceNumber
+          AND  r.InvoiceNumber  IS NOT NULL
+          AND  r.InvoiceNumber  != ''
+      )                                      AS receiptnumbers,
+
+      v.InvoiceNumber,
+      v.created_at
+
+    FROM  voucher   v
+    LEFT JOIN accounts a ON a.id = v.PartyID
+    ${whereClause}
+    ORDER BY v.PartyID ASC, v.Date ASC
+  `;
+
+  db.query(sql, params, (err, rows) => {
+    if (err) {
+      console.error('Bill-by-bill report error:', err);
+      return res.status(500).json({ success: false, error: err.message });
+    }
+
+    // ── Summary ─────────────────────────────────────────────────────────────
+    const uniqueCustomers = new Set(rows.map(r => r.PartyID)).size;
+    const totalBillAmount   = rows.reduce((s, r) => s + parseFloat(r.originalamount || 0), 0);
+    const totalPaidAmount   = rows.reduce((s, r) => s + parseFloat(r.totalpaid     || 0), 0);
+    const totalPendingAmount= rows.reduce((s, r) => s + parseFloat(r.pendingamount || 0), 0);
+
+    // Aging buckets (pending amounts only)
+    const agingSummary = {
+      'Not Due':    0,
+      '0-30 Days':  0,
+      '31-60 Days': 0,
+      '61-90 Days': 0,
+      '90+ Days':   0
+    };
+    rows.forEach(r => {
+      const bucket = r.agingbucket;
+      if (agingSummary[bucket] !== undefined) {
+        agingSummary[bucket] += parseFloat(r.pendingamount || 0);
+      }
+    });
+
+    res.json({
+      success: true,
+      data: rows,
+      summary: {
+        total_customers:      uniqueCustomers,
+        total_invoices:       rows.length,
+        total_bill_amount:    parseFloat(totalBillAmount.toFixed(2)),
+        total_paid_amount:    parseFloat(totalPaidAmount.toFixed(2)),
+        total_pending_amount: parseFloat(totalPendingAmount.toFixed(2)),
+        aging_summary:        agingSummary
+      }
+    });
+  });
+});
 
 
 
