@@ -2729,8 +2729,8 @@ router.post('/direct-deposit/import', (req, res) => {
 
 
 router.get('/direct-deposit/statements', (req, res) => {
-  // Show all records including those with status = 'approved'
-  const query = "SELECT id, transaction_id, txn_date, value_date, description, ref_no, branch_code, debit, credit, balance, party_id, party_name, status, created_at FROM direct_deposit ORDER BY txn_date DESC, id DESC";
+  // Exclude records with status = 'approved'
+  const query = "SELECT id, transaction_id, txn_date, value_date, description, ref_no, branch_code, debit, credit, balance, party_id, party_name, status, created_at FROM direct_deposit WHERE status != 'approved' OR status IS NULL ORDER BY txn_date DESC, id DESC";
   
   db.query(query, (err, results) => {
     if (err) {
@@ -2888,6 +2888,7 @@ const getNextVoucherNumber = (transactionType, callback) => {
 
 
 
+
 router.post('/direct-deposit/create-voucher', (req, res) => {
   const {
     transaction_id,
@@ -2911,22 +2912,11 @@ router.post('/direct-deposit/create-voucher', (req, res) => {
 
   console.log('Received request:', req.body);
 
-  // Check if this is an import (transaction_type is null) or manual submission
-  const isImport = !transaction_type || transaction_type === null;
-  
-  // For manual submissions, validate required fields
-  if (!isImport && (!retailer_id || !amount || !transaction_type)) {
+  // Validation
+  if (!retailer_id || !amount || !transaction_type) {
     return res.status(400).json({
       success: false,
       message: 'Missing required fields: retailer_id, amount, transaction_type'
-    });
-  }
-  
-  // For import, only validate retailer_id and amount
-  if (isImport && (!retailer_id || !amount)) {
-    return res.status(400).json({
-      success: false,
-      message: 'Missing required fields for import: retailer_id, amount'
     });
   }
 
@@ -2938,15 +2928,6 @@ router.post('/direct-deposit/create-voucher', (req, res) => {
     voucherType = 'Payment';
   } else if (transaction_type === 'contra') {
     voucherType = 'Contra';
-  } else if (isImport) {
-    // For import, determine voucher type based on DC value
-    if (dc === 'C') {
-      voucherType = 'Receipt';
-    } else if (dc === 'D') {
-      voucherType = 'Payment';
-    } else {
-      voucherType = 'Pending'; // Or keep as null in database
-    }
   } else {
     return res.status(400).json({
       success: false,
@@ -2955,7 +2936,7 @@ router.post('/direct-deposit/create-voucher', (req, res) => {
   }
   
   // Get next voucher number using callback
-  getNextVoucherNumber(transaction_type || (dc === 'C' ? 'receipts' : 'payment'), (err, voucherNumber) => {
+  getNextVoucherNumber(transaction_type, (err, voucherNumber) => {
     if (err) {
       console.error('Error in getNextVoucherNumber:', err);
       return res.status(500).json({
@@ -2999,7 +2980,7 @@ router.post('/direct-deposit/create-voucher', (req, res) => {
     
     const voucherValues = [
       voucherType,
-      isImport ? null : voucherNumber, // Set VchNo to null for imports
+      voucherNumber,
       null,           
       txn_date,
       'Net 0',
@@ -3013,7 +2994,7 @@ router.post('/direct-deposit/create-voucher', (req, res) => {
       payment_method || 'Direct Deposit',
       bank_name || 'Bank Transfer',
       data_type || 'Sales',
-      isImport ? 'Pending' : 'Paid', // Set status to 'Pending' for imports
+      'Paid',
       description || `Bank ${voucherType} transaction`,
       description || '',
       dc,
@@ -3071,7 +3052,7 @@ router.post('/direct-deposit/create-voucher', (req, res) => {
         if (transaction_id) {
           db.query(
             'UPDATE direct_deposit SET status = ?, voucher_id = ? WHERE transaction_id = ?',
-            [isImport ? 'pending' : 'approved', voucherId, transaction_id],
+            ['approved', voucherId, transaction_id],
             (err) => {
               if (err) {
                 console.error('Error updating bank statement:', err);
@@ -3085,271 +3066,528 @@ router.post('/direct-deposit/create-voucher', (req, res) => {
           success: true,
           message: `${voucherType} created successfully`,
           voucher_id: voucherId,
-          voucher_number: isImport ? null : voucherNumber
+          voucher_number: voucherNumber
         });
       });
     });
   });
 });
 
+// // THEN use router instead of app
+// router.get('/reports/bill-by-bill', (req, res) => {
+//   const { customer_id, start_date, end_date, show_only_pending } = req.query;
+  
+//   let query = `
+//     SELECT 
+//       v.PartyID as partyid,
+//       v.PartyName as partyname,
+//       v.business_name,
+//       v.VchNo as vchno,
+//       DATE_FORMAT(v.Date, '%Y-%m-%d') as invoicedate,
+//       DATE_FORMAT(v.due_date, '%Y-%m-%d') as duedate,
+//       v.TotalAmount as originalamount,
+//       COALESCE(v.paid_amount, 0) as totalpaid,
+//       COALESCE(v.balance_amount, v.TotalAmount) as pendingamount,
+//       CASE 
+//         WHEN COALESCE(v.balance_amount, v.TotalAmount) <= 0 THEN 'Paid'
+//         WHEN COALESCE(v.paid_amount, 0) > 0 AND COALESCE(v.balance_amount, v.TotalAmount) > 0 THEN 'Partially Paid'
+//         WHEN v.due_date IS NOT NULL AND v.due_date < CURDATE() AND COALESCE(v.balance_amount, v.TotalAmount) > 0 THEN 'Overdue'
+//         ELSE 'Pending'
+//       END as status,
+//       CASE
+//         WHEN COALESCE(v.balance_amount, v.TotalAmount) <= 0 THEN 'Paid'
+//         WHEN v.due_date IS NULL OR v.due_date = '0000-00-00' THEN 'Not Due'
+//         WHEN DATEDIFF(CURDATE(), v.due_date) <= 0 THEN 'Not Due'
+//         WHEN DATEDIFF(CURDATE(), v.due_date) BETWEEN 1 AND 30 THEN '0-30 Days'
+//         WHEN DATEDIFF(CURDATE(), v.due_date) BETWEEN 31 AND 60 THEN '31-60 Days'
+//         WHEN DATEDIFF(CURDATE(), v.due_date) BETWEEN 61 AND 90 THEN '61-90 Days'
+//         ELSE '90+ Days'
+//       END as agingbucket,
+//       NULL as receiptnumbers
+//     FROM voucher v
+//     WHERE v.TransactionType IN ('sales', 'Receipt', 'Payment', 'Contra')
+//       AND (v.status NOT IN ('Cancelled', 'canceled') OR v.status IS NULL)
+//   `;
+  
+//   const params = [];
+  
+//   if (customer_id && customer_id !== '') {
+//     query += ` AND v.PartyID = ?`;
+//     params.push(customer_id);
+//   }
+  
+//   if (start_date && start_date !== '') {
+//     query += ` AND v.Date >= ?`;
+//     params.push(start_date);
+//   }
+  
+//   if (end_date && end_date !== '') {
+//     query += ` AND v.Date <= ?`;
+//     params.push(end_date);
+//   }
+  
+//   if (show_only_pending === 'true') {
+//     query += ` AND COALESCE(v.balance_amount, v.TotalAmount) > 0`;
+//   }
+  
+//   query += ` ORDER BY v.PartyName, v.Date DESC`;
+  
+//   db.query(query, params, (err, results) => {
+//     if (err) {
+//       console.error('Error generating bill-by-bill report:', err);
+//       return res.status(500).json({ 
+//         success: false, 
+//         error: err.message 
+//       });
+//     }
+    
+//     const uniqueCustomers = new Set();
+//     let totalBillAmount = 0;
+//     let totalPaidAmount = 0;
+//     let totalPendingAmount = 0;
+//     const agingSummary = {
+//       'Not Due': 0,
+//       '0-30 Days': 0,
+//       '31-60 Days': 0,
+//       '61-90 Days': 0,
+//       '90+ Days': 0
+//     };
+    
+//     results.forEach(row => {
+//       if (row.partyid) uniqueCustomers.add(row.partyid.toString());
+      
+//       const originalAmt = parseFloat(row.originalamount) || 0;
+//       const paidAmt = parseFloat(row.totalpaid) || 0;
+//       const pendingAmt = parseFloat(row.pendingamount) || 0;
+      
+//       totalBillAmount += originalAmt;
+//       totalPaidAmount += paidAmt;
+//       totalPendingAmount += pendingAmt;
+      
+//       if (pendingAmt > 0 && row.agingbucket && agingSummary[row.agingbucket] !== undefined) {
+//         agingSummary[row.agingbucket] += pendingAmt;
+//       }
+//     });
+    
+//     const summary = {
+//       total_customers: uniqueCustomers.size,
+//       total_invoices: results.length,
+//       total_bill_amount: parseFloat(totalBillAmount.toFixed(2)),
+//       total_paid_amount: parseFloat(totalPaidAmount.toFixed(2)),
+//       total_pending_amount: parseFloat(totalPendingAmount.toFixed(2)),
+//       aging_summary: agingSummary
+//     };
+    
+//     res.json({
+//       success: true,
+//       data: results,
+//       summary: summary
+//     });
+//   });
+// });
 
-// ------------------------------
-// Bill by Bill Balance Report
-// ------------------------------
+// --------------------- ADVANCED BILL-BY-BILL REPORT ---------------------
+// Get bill by bill report with detailed payment transactions
 router.get('/reports/bill-by-bill', (req, res) => {
   const { customer_id, start_date, end_date, show_only_pending } = req.query;
-
-  const params = [];
-
-  // Base: get all Sales / stock-transfer vouchers joined to accounts
-  let whereClause = `
-    WHERE v.TransactionType IN ('Sales', 'stock transfer')
+  
+  let query = `
+    SELECT 
+      v.VoucherID,
+      v.PartyID as partyid,
+      v.PartyName as partyname,
+      v.business_name,
+      v.VchNo as vchno,
+      v.InvoiceNumber,
+      DATE_FORMAT(v.Date, '%Y-%m-%d') as invoicedate,
+      DATE_FORMAT(v.due_date, '%Y-%m-%d') as duedate,
+      v.TotalAmount as originalamount,
+      COALESCE(v.paid_amount, 0) as totalpaid,
+      COALESCE(v.balance_amount, v.TotalAmount) as pendingamount,
+      v.status,
+      v.PaymentTerms,
+      v.order_number,
+      v.payment_method,
+      v.note as description,
+      CASE 
+        WHEN COALESCE(v.balance_amount, v.TotalAmount) <= 0 THEN 'Paid'
+        WHEN COALESCE(v.paid_amount, 0) > 0 AND COALESCE(v.balance_amount, v.TotalAmount) > 0 THEN 'Partially Paid'
+        WHEN v.due_date IS NOT NULL AND v.due_date < CURDATE() AND COALESCE(v.balance_amount, v.TotalAmount) > 0 THEN 'Overdue'
+        ELSE 'Pending'
+      END as status_text,
+      CASE
+        WHEN COALESCE(v.balance_amount, v.TotalAmount) <= 0 THEN 'Paid'
+        WHEN v.due_date IS NULL OR v.due_date = '0000-00-00' THEN 'Not Due'
+        WHEN DATEDIFF(CURDATE(), v.due_date) <= 0 THEN 'Not Due'
+        WHEN DATEDIFF(CURDATE(), v.due_date) BETWEEN 1 AND 30 THEN '0-30 Days'
+        WHEN DATEDIFF(CURDATE(), v.due_date) BETWEEN 31 AND 60 THEN '31-60 Days'
+        WHEN DATEDIFF(CURDATE(), v.due_date) BETWEEN 61 AND 90 THEN '61-90 Days'
+        ELSE '90+ Days'
+      END as agingbucket
+    FROM voucher v
+    WHERE v.TransactionType IN ('sales', 'invoice')
+      AND (v.status NOT IN ('Cancelled', 'canceled') OR v.status IS NULL)
   `;
-
-  // ── Filter by customer ──────────────────────────────────────────────────
-  if (customer_id) {
-    whereClause += ` AND v.PartyID = ?`;
+  
+  const params = [];
+  
+  if (customer_id && customer_id !== '') {
+    query += ` AND v.PartyID = ?`;
     params.push(customer_id);
   }
-
-  // ── Filter by date range ────────────────────────────────────────────────
-  if (start_date) {
-    whereClause += ` AND DATE(v.Date) >= ?`;
+  
+  if (start_date && start_date !== '') {
+    query += ` AND v.Date >= ?`;
     params.push(start_date);
   }
-  if (end_date) {
-    whereClause += ` AND DATE(v.Date) <= ?`;
+  
+  if (end_date && end_date !== '') {
+    query += ` AND v.Date <= ?`;
     params.push(end_date);
   }
-
-  // ── Only pending bills ──────────────────────────────────────────────────
+  
   if (show_only_pending === 'true') {
-    whereClause += ` AND COALESCE(v.balance_amount, v.TotalAmount) > 0`;
+    query += ` AND COALESCE(v.balance_amount, v.TotalAmount) > 0`;
   }
-
-  const sql = `
-    SELECT
-      v.VoucherID,
-      v.PartyID,
-
-      /* party info from accounts */
-      COALESCE(a.name, v.PartyName)         AS partyname,
-      COALESCE(a.business_name, '')          AS business_name,
-
-      /* bill fields */
-      v.VchNo                                AS vchno,
-      DATE(v.Date)                           AS invoicedate,
-
-      /*
-        Due-date = invoice date + credit days stored in PaymentTerms.
-        Falls back to 30 days when the field is missing / non-numeric.
-      */
-      DATE(
-        DATE_ADD(
-          v.Date,
-          INTERVAL
-            CASE
-              WHEN v.PaymentTerms REGEXP '^[0-9]+$'
-                THEN CAST(v.PaymentTerms AS UNSIGNED)
-              ELSE 30
-            END
-          DAY
-        )
-      )                                      AS duedate,
-
-      COALESCE(v.TotalAmount,   0)           AS originalamount,
-
-      /*
-        Sum every Receipt row that references this invoice number.
-        Falls back to the paid_amount column already on the Sales row.
-      */
-      COALESCE(
-        (
-          SELECT SUM(r.paid_amount)
-          FROM   voucher r
-          WHERE  r.TransactionType = 'Receipt'
-            AND  r.InvoiceNumber   = v.InvoiceNumber
-            AND  r.InvoiceNumber  IS NOT NULL
-            AND  r.InvoiceNumber  != ''
-        ),
-        COALESCE(v.paid_amount, 0)
-      )                                      AS totalpaid,
-
-      /* pending = total - paid (floor at 0) */
-      GREATEST(
-        0,
-        COALESCE(v.TotalAmount, 0) -
-        COALESCE(
-          (
-            SELECT SUM(r.paid_amount)
-            FROM   voucher r
-            WHERE  r.TransactionType = 'Receipt'
-              AND  r.InvoiceNumber   = v.InvoiceNumber
-              AND  r.InvoiceNumber  IS NOT NULL
-              AND  r.InvoiceNumber  != ''
-          ),
-          COALESCE(v.paid_amount, 0)
-        )
-      )                                      AS pendingamount,
-
-      /* status label */
-      CASE
-        WHEN GREATEST(
-               0,
-               COALESCE(v.TotalAmount, 0) -
-               COALESCE(
-                 (
-                   SELECT SUM(r.paid_amount)
-                   FROM   voucher r
-                   WHERE  r.TransactionType = 'Receipt'
-                     AND  r.InvoiceNumber   = v.InvoiceNumber
-                     AND  r.InvoiceNumber  IS NOT NULL
-                     AND  r.InvoiceNumber  != ''
-                 ),
-                 COALESCE(v.paid_amount, 0)
-               )
-             ) <= 0
-          THEN 'Paid'
-        WHEN COALESCE(v.paid_amount, 0) > 0
-          THEN 'Partially Paid'
-        WHEN DATE_ADD(
-               v.Date,
-               INTERVAL
-                 CASE WHEN v.PaymentTerms REGEXP '^[0-9]+$'
-                      THEN CAST(v.PaymentTerms AS UNSIGNED)
-                      ELSE 30 END
-               DAY
-             ) < CURDATE()
-          THEN 'Overdue'
-        ELSE 'Pending'
-      END                                    AS status,
-
-      /* aging bucket — based on days past due date */
-      CASE
-        WHEN GREATEST(
-               0,
-               COALESCE(v.TotalAmount, 0) -
-               COALESCE(
-                 (
-                   SELECT SUM(r.paid_amount)
-                   FROM   voucher r
-                   WHERE  r.TransactionType = 'Receipt'
-                     AND  r.InvoiceNumber   = v.InvoiceNumber
-                     AND  r.InvoiceNumber  IS NOT NULL
-                     AND  r.InvoiceNumber  != ''
-                 ),
-                 COALESCE(v.paid_amount, 0)
-               )
-             ) <= 0
-          THEN 'Not Due'
-        WHEN DATE_ADD(
-               v.Date,
-               INTERVAL
-                 CASE WHEN v.PaymentTerms REGEXP '^[0-9]+$'
-                      THEN CAST(v.PaymentTerms AS UNSIGNED)
-                      ELSE 30 END
-               DAY
-             ) >= CURDATE()
-          THEN 'Not Due'
-        WHEN DATEDIFF(
-               CURDATE(),
-               DATE_ADD(
-                 v.Date,
-                 INTERVAL
-                   CASE WHEN v.PaymentTerms REGEXP '^[0-9]+$'
-                        THEN CAST(v.PaymentTerms AS UNSIGNED)
-                        ELSE 30 END
-                 DAY
-               )
-             ) BETWEEN 1 AND 30
-          THEN '0-30 Days'
-        WHEN DATEDIFF(
-               CURDATE(),
-               DATE_ADD(
-                 v.Date,
-                 INTERVAL
-                   CASE WHEN v.PaymentTerms REGEXP '^[0-9]+$'
-                        THEN CAST(v.PaymentTerms AS UNSIGNED)
-                        ELSE 30 END
-                 DAY
-               )
-             ) BETWEEN 31 AND 60
-          THEN '31-60 Days'
-        WHEN DATEDIFF(
-               CURDATE(),
-               DATE_ADD(
-                 v.Date,
-                 INTERVAL
-                   CASE WHEN v.PaymentTerms REGEXP '^[0-9]+$'
-                        THEN CAST(v.PaymentTerms AS UNSIGNED)
-                        ELSE 30 END
-                 DAY
-               )
-             ) BETWEEN 61 AND 90
-          THEN '61-90 Days'
-        ELSE '90+ Days'
-      END                                    AS agingbucket,
-
-      /* receipt voucher numbers linked to this invoice */
-      (
-        SELECT GROUP_CONCAT(r.VchNo ORDER BY r.Date SEPARATOR ', ')
-        FROM   voucher r
-        WHERE  r.TransactionType = 'Receipt'
-          AND  r.InvoiceNumber   = v.InvoiceNumber
-          AND  r.InvoiceNumber  IS NOT NULL
-          AND  r.InvoiceNumber  != ''
-      )                                      AS receiptnumbers,
-
-      v.InvoiceNumber,
-      v.created_at
-
-    FROM  voucher   v
-    LEFT JOIN accounts a ON a.id = v.PartyID
-    ${whereClause}
-    ORDER BY v.PartyID ASC, v.Date ASC
-  `;
-
-  db.query(sql, params, (err, rows) => {
+  
+  query += ` ORDER BY v.PartyName, v.Date DESC`;
+  
+  db.query(query, params, async (err, results) => {
     if (err) {
-      console.error('Bill-by-bill report error:', err);
-      return res.status(500).json({ success: false, error: err.message });
+      console.error('Error generating bill-by-bill report:', err);
+      return res.status(500).json({ 
+        success: false, 
+        error: err.message 
+      });
     }
-
-    // ── Summary ─────────────────────────────────────────────────────────────
-    const uniqueCustomers = new Set(rows.map(r => r.PartyID)).size;
-    const totalBillAmount   = rows.reduce((s, r) => s + parseFloat(r.originalamount || 0), 0);
-    const totalPaidAmount   = rows.reduce((s, r) => s + parseFloat(r.totalpaid     || 0), 0);
-    const totalPendingAmount= rows.reduce((s, r) => s + parseFloat(r.pendingamount || 0), 0);
-
-    // Aging buckets (pending amounts only)
+    
+    // Get payment details for each bill
+    const enrichedResults = [];
+    for (const row of results) {
+      // Fetch payments for this invoice
+      const paymentsQuery = `
+        SELECT 
+          r.VoucherID,
+          r.VchNo,
+          DATE_FORMAT(r.Date, '%Y-%m-%d') as payment_date,
+          r.TotalAmount as payment_amount,
+          r.payment_method,
+          r.ChequeNo,
+          r.BankName,
+          r.note as payment_note
+        FROM voucher r
+        WHERE r.InvoiceNumber = ? AND r.PartyID = ?
+        ORDER BY r.Date DESC
+      `;
+      
+      const payments = await new Promise((resolve) => {
+        db.query(paymentsQuery, [row.vchno, row.partyid], (err, payResults) => {
+          if (err) {
+            console.error('Error fetching payments:', err);
+            resolve([]);
+          } else {
+            resolve(payResults);
+          }
+        });
+      });
+      
+      enrichedResults.push({
+        ...row,
+        payments: payments,
+        total_payments_received: payments.reduce((sum, p) => sum + parseFloat(p.payment_amount || 0), 0)
+      });
+    }
+    
+    // Calculate summary
+    const uniqueCustomers = new Set();
+    let totalBillAmount = 0;
+    let totalPaidAmount = 0;
+    let totalPendingAmount = 0;
     const agingSummary = {
-      'Not Due':    0,
-      '0-30 Days':  0,
+      'Not Due': 0,
+      '0-30 Days': 0,
       '31-60 Days': 0,
       '61-90 Days': 0,
-      '90+ Days':   0
+      '90+ Days': 0
     };
-    rows.forEach(r => {
-      const bucket = r.agingbucket;
-      if (agingSummary[bucket] !== undefined) {
-        agingSummary[bucket] += parseFloat(r.pendingamount || 0);
+    
+    enrichedResults.forEach(row => {
+      if (row.partyid) uniqueCustomers.add(row.partyid.toString());
+      
+      const originalAmt = parseFloat(row.originalamount) || 0;
+      const paidAmt = parseFloat(row.totalpaid) || 0;
+      const pendingAmt = parseFloat(row.pendingamount) || 0;
+      
+      totalBillAmount += originalAmt;
+      totalPaidAmount += paidAmt;
+      totalPendingAmount += pendingAmt;
+      
+      if (pendingAmt > 0 && row.agingbucket && agingSummary[row.agingbucket] !== undefined) {
+        agingSummary[row.agingbucket] += pendingAmt;
       }
     });
-
+    
+    const summary = {
+      total_customers: uniqueCustomers.size,
+      total_invoices: enrichedResults.length,
+      total_bill_amount: parseFloat(totalBillAmount.toFixed(2)),
+      total_paid_amount: parseFloat(totalPaidAmount.toFixed(2)),
+      total_pending_amount: parseFloat(totalPendingAmount.toFixed(2)),
+      aging_summary: agingSummary
+    };
+    
     res.json({
       success: true,
-      data: rows,
-      summary: {
-        total_customers:      uniqueCustomers,
-        total_invoices:       rows.length,
-        total_bill_amount:    parseFloat(totalBillAmount.toFixed(2)),
-        total_paid_amount:    parseFloat(totalPaidAmount.toFixed(2)),
-        total_pending_amount: parseFloat(totalPendingAmount.toFixed(2)),
-        aging_summary:        agingSummary
-      }
+      data: enrichedResults,
+      summary: summary
     });
   });
 });
+
+// Get detailed bill information with all transactions for a specific bill
+router.get('/reports/bill-details/:voucherId', (req, res) => {
+  const { voucherId } = req.params;
+  
+  const billQuery = `
+    SELECT 
+      v.VoucherID,
+      v.PartyID,
+      v.PartyName,
+      v.business_name,
+      v.VchNo as invoice_number,
+      v.InvoiceNumber,
+      DATE_FORMAT(v.Date, '%Y-%m-%d') as invoice_date,
+      DATE_FORMAT(v.due_date, '%Y-%m-%d') as due_date,
+      v.TotalAmount as total_amount,
+      COALESCE(v.paid_amount, 0) as paid_amount,
+      COALESCE(v.balance_amount, v.TotalAmount) as balance_amount,
+      v.status,
+      v.PaymentTerms,
+      v.note as description,
+      v.payment_method,
+      v.order_number,
+      v.transport_name,
+      v.vehicle_number
+    FROM voucher v
+    WHERE v.VoucherID = ?
+      AND v.TransactionType = 'sales'
+  `;
+  
+  db.query(billQuery, [voucherId], (err, billResults) => {
+    if (err) {
+      console.error('Error fetching bill:', err);
+      return res.status(500).json({ success: false, error: err.message });
+    }
+    
+    if (billResults.length === 0) {
+      return res.status(404).json({ success: false, error: 'Bill not found' });
+    }
+    
+    const bill = billResults[0];
+    
+    // Get all payment transactions for this specific bill
+    // Only fetch receipts/payments that are linked to this invoice
+    const transactionsQuery = `
+      SELECT 
+        'Receipt' as transaction_type,
+        r.VoucherID as id,
+        r.VchNo as reference_no,
+        DATE_FORMAT(r.Date, '%Y-%m-%d') as transaction_date,
+        r.TotalAmount as amount,
+        r.payment_method,
+        r.ChequeNo,
+        r.BankName,
+        r.note as description,
+        'debit' as transaction_type_effect
+      FROM voucher r
+      WHERE r.InvoiceNumber = ? 
+        AND r.PartyID = ?
+        AND r.TransactionType = 'Receipt'
+        AND r.status = 'Paid'
+      
+      UNION ALL
+      
+      SELECT 
+        'CreditNote' as transaction_type,
+        cn.VoucherID as id,
+        cn.VchNo as reference_no,
+        DATE_FORMAT(cn.Date, '%Y-%m-%d') as transaction_date,
+        cn.TotalAmount as amount,
+         payment_method,
+        NULL as ChequeNo,
+        NULL as BankName,
+        cn.note as description,
+        'debit' as transaction_type_effect
+      FROM voucher cn
+      WHERE cn.InvoiceNumber = ? 
+        AND cn.PartyID = ?
+        AND cn.TransactionType = 'CreditNote'
+      
+      ORDER BY transaction_date ASC
+    `;
+    
+    db.query(transactionsQuery, [bill.invoice_number, bill.PartyID, bill.invoice_number, bill.PartyID], (err, transactions) => {
+      if (err) {
+        console.error('Error fetching transactions:', err);
+        return res.status(500).json({ success: false, error: err.message });
+      }
+      
+      // Build transaction history with running balance
+      const transactionHistory = [];
+      
+      // Start with the original invoice
+      transactionHistory.push({
+        date: bill.invoice_date,
+        reference_no: bill.invoice_number,
+        transaction_type: 'Invoice',
+        amount: parseFloat(bill.total_amount),
+        payment_method: bill.payment_method,
+        running_balance: parseFloat(bill.total_amount),
+        is_invoice: true
+      });
+      
+      // Add all payment transactions
+      let runningBalance = parseFloat(bill.total_amount);
+      
+      transactions.forEach(transaction => {
+        const amount = parseFloat(transaction.amount);
+        runningBalance -= amount;
+        
+        transactionHistory.push({
+          date: transaction.transaction_date,
+          reference_no: transaction.reference_no,
+          transaction_type: transaction.transaction_type,
+          amount: -amount, // Negative amount for payments
+          payment_method: transaction.payment_method,
+          running_balance: runningBalance,
+          is_invoice: false
+        });
+      });
+      
+      // Calculate final balance (should match bill.balance_amount)
+      const finalBalance = runningBalance;
+      
+      res.json({
+        success: true,
+        bill: bill,
+        transactions: transactionHistory,
+        summary: {
+          total_amount: parseFloat(bill.total_amount),
+          total_paid: parseFloat(bill.paid_amount),
+          balance: parseFloat(bill.balance_amount),
+          payment_count: transactions.filter(t => t.transaction_type === 'Payment').length,
+          credit_note_count: transactions.filter(t => t.transaction_type === 'Credit Note').length
+        }
+      });
+    });
+  });
+});
+
+// Get detailed bill information with all transactions for a specific bill
+// router.get('/reports/bill-details/:voucherId', (req, res) => {
+//   const { voucherId } = req.params;
+  
+//   const billQuery = `
+//     SELECT 
+//       v.VoucherID,
+//       v.PartyID,
+//       v.PartyName,
+//       v.business_name,
+//       v.VchNo as invoice_number,
+//       v.InvoiceNumber,
+//       DATE_FORMAT(v.Date, '%Y-%m-%d') as invoice_date,
+//       DATE_FORMAT(v.due_date, '%Y-%m-%d') as due_date,
+//       v.TotalAmount as total_amount,
+//       COALESCE(v.paid_amount, 0) as paid_amount,
+//       COALESCE(v.balance_amount, v.TotalAmount) as balance_amount,
+//       v.status,
+//       v.PaymentTerms,
+//       v.note as description,
+//       v.payment_method,
+//       v.order_number,
+//       v.transport_name,
+//       v.vehicle_number
+//     FROM voucher v
+//     WHERE v.VoucherID = ?
+//   `;
+  
+//   db.query(billQuery, [voucherId], (err, billResults) => {
+//     if (err) {
+//       return res.status(500).json({ success: false, error: err.message });
+//     }
+    
+//     if (billResults.length === 0) {
+//       return res.status(404).json({ success: false, error: 'Bill not found' });
+//     }
+    
+//     const bill = billResults[0];
+    
+//     // Get all transactions (payments) for this bill
+//     const transactionsQuery = `
+//       SELECT 
+//         'Payment' as transaction_type,
+//         r.VoucherID as id,
+//         r.VchNo as reference_no,
+//         DATE_FORMAT(r.Date, '%Y-%m-%d') as transaction_date,
+//         r.TotalAmount as amount,
+//         r.payment_method,
+//         r.ChequeNo,
+//         r.BankName,
+//         r.note as description,
+//         'Credit' as transaction_type_effect
+//       FROM voucher r
+//       WHERE r.InvoiceNumber = ? AND r.PartyID = ?
+      
+//       UNION ALL
+      
+//       SELECT 
+//         'Credit Note' as transaction_type,
+//         cr.VoucherID as id,
+//         cr.VchNo as reference_no,
+//         DATE_FORMAT(cr.Date, '%Y-%m-%d') as transaction_date,
+//         cr.TotalAmount as amount,
+//         'Credit Note' as payment_method,
+//         NULL as ChequeNo,
+//         NULL as BankName,
+//         cr.note as description,
+//         'Credit' as transaction_type_effect
+//       FROM voucher cr
+//       WHERE cr.InvoiceNumber = ? AND cr.PartyID = ?
+      
+//       ORDER BY transaction_date DESC
+//     `;
+    
+//     db.query(transactionsQuery, [bill.invoice_number, bill.PartyID, bill.invoice_number, bill.PartyID], (err, transactions) => {
+//       if (err) {
+//         console.error('Error fetching transactions:', err);
+//         return res.status(500).json({ success: false, error: err.message });
+//       }
+      
+//       // Calculate running balance
+//       let runningBalance = parseFloat(bill.total_amount);
+//       const transactionsWithBalance = transactions.map(transaction => {
+//         runningBalance -= parseFloat(transaction.amount);
+//         return {
+//           ...transaction,
+//           running_balance: runningBalance
+//         };
+//       });
+      
+//       res.json({
+//         success: true,
+//         bill: bill,
+//         transactions: transactionsWithBalance,
+//         summary: {
+//           total_amount: parseFloat(bill.total_amount),
+//           total_paid: parseFloat(bill.paid_amount),
+//           balance: parseFloat(bill.balance_amount),
+//           payment_count: transactions.filter(t => t.transaction_type === 'Payment').length,
+//           credit_note_count: transactions.filter(t => t.transaction_type === 'Credit Note').length
+//         }
+//       });
+//     });
+//   });
+// });
 
 
 
