@@ -1274,8 +1274,7 @@ router.get('/sales-catalog-check/:purchaseProductId', async (req, res) => {
     });
   }
 });
-
-// Get product batches
+// Get product batches (UPDATED - includes weight from batches table)
 router.get('/products/:id/batches', async (req, res) => {
   try {
     const [results] = await db.promise().query(
@@ -1289,7 +1288,39 @@ router.get('/products/:id/batches', async (req, res) => {
   }
 });
 
-// Get products by group type
+// Get single product by ID (ADD THIS NEW ENDPOINT for product weight)
+router.get('/products/:id', async (req, res) => {
+  try {
+    const [results] = await db.promise().query(
+      'SELECT id, goods_name, price, mrp, weight, hsn_code, unit, gst_rate, inclusive_gst, product_type FROM products WHERE id = ?',
+      [req.params.id]
+    );
+    
+    if (results.length === 0) {
+      return res.status(404).json({ message: 'Product not found' });
+    }
+    
+    // Also get batch weight if available
+    const [batchResults] = await db.promise().query(
+      'SELECT weight, batch_number, selling_price FROM batches WHERE product_id = ? AND quantity > 0 ORDER BY created_at DESC LIMIT 1',
+      [req.params.id]
+    );
+    
+    const product = results[0];
+    
+    // Use batch weight if available, otherwise use product weight
+    if (batchResults.length > 0 && batchResults[0].weight) {
+      product.weight = batchResults[0].weight;
+    }
+    
+    res.json(product);
+  } catch (err) {
+    console.error('Error fetching product:', err);
+    res.status(500).json({ message: 'Failed to fetch product' });
+  }
+});
+
+// Get products by group type (UPDATED with weight)
 router.get('/products/group/:group_type', async (req, res) => {
   const groupType = req.params.group_type;
   try {
@@ -1304,7 +1335,7 @@ router.get('/products/group/:group_type', async (req, res) => {
   }
 });
 
-// Search products
+// Search products (UPDATED with weight)
 router.get('/products/search/:query', async (req, res) => {
   const query = req.params.query;
   try {
@@ -1319,7 +1350,7 @@ router.get('/products/search/:query', async (req, res) => {
   }
 });
 
-
+// Get product with batches (UPDATED with weight from both tables)
 router.get('/products/:id/with-batches', async (req, res) => {
   try {
     const query = `
@@ -1345,6 +1376,7 @@ router.get('/products/:id/with-batches', async (req, res) => {
         p.description,
         p.maintain_batch,
         p.can_be_sold,
+        p.weight AS product_weight,
         p.created_at,
         p.updated_at,
         b.id AS batch_id,
@@ -1364,6 +1396,7 @@ router.get('/products/:id/with-batches', async (req, res) => {
         b.batch_price,
         b.product_type,
         b.barcode,
+        b.weight AS batch_weight,
         b.created_at AS batch_created_at,
         b.updated_at AS batch_updated_at
       FROM products p
@@ -1401,6 +1434,7 @@ router.get('/products/:id/with-batches', async (req, res) => {
             mrp: row.mrp,
             batch_price: row.batch_price,
             barcode: row.barcode,
+            weight: row.batch_weight,
             created_at: row.batch_created_at,
             updated_at: row.batch_updated_at
           });
@@ -1414,7 +1448,7 @@ router.get('/products/:id/with-batches', async (req, res) => {
       goods_name: results[0].goods_name,
       category_id: results[0].category_id,
       company_id: results[0].company_id,
-       product_type: results[0].product_type,  
+      product_type: results[0].product_type,  
       price: results[0].price,
       inclusive_gst: results[0].inclusive_gst,
       gst_rate: results[0].gst_rate,
@@ -1430,6 +1464,7 @@ router.get('/products/:id/with-batches', async (req, res) => {
       description: results[0].description,
       maintain_batch: results[0].maintain_batch,
       can_be_sold: results[0].can_be_sold,
+      weight: results[0].product_weight,
       created_at: results[0].created_at,
       updated_at: results[0].updated_at,
       batches
@@ -1442,8 +1477,7 @@ router.get('/products/:id/with-batches', async (req, res) => {
   }
 });
 
-
-// Get vouchers by product_id
+// Get vouchers by product_id (UPDATED to include weight from voucherdetails)
 router.get("/vouchers/by-product/:product_id", (req, res) => {
   const productId = req.params.product_id;
 
@@ -1457,7 +1491,7 @@ router.get("/vouchers/by-product/:product_id", (req, res) => {
       return res.status(500).send({ error: "Database connection failed" });
     }
 
-    // Query joins voucher and voucherdetails
+    // Query joins voucher and voucherdetails - ADDED weight column
     const query = `
       SELECT 
         v.*,
@@ -1465,7 +1499,8 @@ router.get("/vouchers/by-product/:product_id", (req, res) => {
         vd.quantity AS detail_quantity,
         vd.total AS detail_total,
         vd.batch AS detail_batch,
-        vd.product_id AS detail_product_id
+        vd.product_id AS detail_product_id,
+        vd.weight AS detail_weight
       FROM voucher v
       INNER JOIN voucherdetails vd ON v.VoucherID = vd.voucher_id
       WHERE vd.product_id = ?
@@ -1493,13 +1528,14 @@ router.get("/vouchers/by-product/:product_id", (req, res) => {
           };
         }
 
-        // Push voucherdetails record
+        // Push voucherdetails record with weight
         grouped[row.VoucherID].batchDetails.push({
           id: row.detail_id,
           product_id: row.detail_product_id,
           batch: row.detail_batch,
           quantity: row.detail_quantity,
-          total: row.detail_total
+          total: row.detail_total,
+          weight: row.detail_weight
         });
 
         // Add totals
@@ -1519,6 +1555,7 @@ router.get("/vouchers/by-product/:product_id", (req, res) => {
   });
 });
 
+// Get sales products (UPDATED with weight from product and batch)
 router.get('/get-sales-products', async (req, res) => {
   try {
     const [rows] = await db.promise().query(`
@@ -1535,13 +1572,14 @@ router.get('/get-sales-products', async (req, res) => {
         p.images,
         p.can_be_sold,
         p.net_price,
-        p.weight,
+        p.weight AS product_weight,
 
         c.category_name,
 
         MAX(b.product_type) AS product_type,
         MAX(b.exp_date) AS exp_date,
-        SUM(b.quantity) AS total_quantity  
+        SUM(b.quantity) AS total_quantity,
+        MAX(b.weight) AS batch_weight
 
       FROM products p
 
@@ -1567,23 +1605,17 @@ router.get('/get-sales-products', async (req, res) => {
       price: item.price,
       mrp: item.mrp,
       unit: item.unit,
-      weight: item.weight,
-
+      weight: item.batch_weight || item.product_weight || 0,
       category_id: item.category_id,
       category: item.category_name,
-
       gst_rate: item.gst_rate,
       inclusive_gst: item.inclusive_gst,
-
       images: item.images,
       group_by: item.group_by,
       can_be_sold: item.can_be_sold,
-
       net_price: item.net_price,
-
       product_type: item.product_type || "",
       exp_date: item.exp_date,
-
       quantity: item.total_quantity || 0   
     }));
 
@@ -1595,39 +1627,54 @@ router.get('/get-sales-products', async (req, res) => {
   }
 });
 
-
-
-
-// In your backend (Node.js/Express)
-router.get('/products/find-variant', async (req, res) => {
+// Get product weight by ID (SPECIFIC ENDPOINT for weight)
+router.get('/products/:id/weight', async (req, res) => {
   try {
-    const { goods_name, product_type } = req.query;
+    const productId = req.params.id;
     
-    if (!goods_name || !product_type) {
-      return res.status(400).json({ 
-        error: 'goods_name and product_type are required' 
-      });
-    }
-    
-    const [results] = await db.promise().query(
-      'SELECT * FROM products WHERE goods_name = ? AND product_type = ? LIMIT 1',
-      [goods_name, product_type.toUpperCase()]
+    // First try to get weight from batches table (active batch)
+    const [batchResult] = await db.promise().query(
+      'SELECT weight, batch_number, quantity FROM batches WHERE product_id = ? AND quantity > 0 ORDER BY created_at DESC LIMIT 1',
+      [productId]
     );
     
-    if (results.length === 0) {
-      return res.status(404).json({ 
-        error: 'Product variant not found' 
+    if (batchResult.length > 0 && batchResult[0].weight) {
+      return res.json({
+        success: true,
+        product_id: productId,
+        weight: parseFloat(batchResult[0].weight),
+        source: 'batch'
       });
     }
     
-    res.json(results[0]);
+    // If no batch weight, get from products table
+    const [productResult] = await db.promise().query(
+      'SELECT id, goods_name, weight FROM products WHERE id = ?',
+      [productId]
+    );
+    
+    if (productResult.length === 0) {
+      return res.status(404).json({ 
+        success: false, 
+        message: 'Product not found' 
+      });
+    }
+    
+    res.json({
+      success: true,
+      product_id: productId,
+      product_name: productResult[0].goods_name,
+      weight: parseFloat(productResult[0].weight || 0),
+      source: 'product'
+    });
   } catch (err) {
-    console.error('Error finding product variant:', err);
-    res.status(500).json({ error: 'Failed to find product variant' });
+    console.error('Error fetching product weight:', err);
+    res.status(500).json({ 
+      success: false, 
+      message: 'Failed to fetch product weight',
+      error: err.message 
+    });
   }
 });
-
-
-
 
 module.exports = router;

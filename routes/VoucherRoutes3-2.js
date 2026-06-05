@@ -5047,21 +5047,30 @@ router.get("/transactions/:id", (req, res) => {
 
     const transaction = results[0];
 
-    // Fetch batch details
+    // Fetch batch details WITH WEIGHT
     const detailsQuery = `
       SELECT 
+        id,
+        voucher_id,
         product, 
         product_id, 
         batch, 
+        batch_id,
         quantity, 
+        weight,              // ← ADDED WEIGHT COLUMN
         price, 
+        original_price,
         discount, 
         gst, 
         cgst, 
         sgst, 
         igst, 
         cess, 
-        total
+        total,
+        hsn_code,
+        unit_id,
+        inclusive_gst,
+        document_type
       FROM voucherdetails
       WHERE voucher_id = ?
     `;
@@ -5080,7 +5089,7 @@ router.get("/transactions/:id", (req, res) => {
       const responseData = {
         ...transaction,
         batch_details: detailsResults || [],
-        items: detailsResults || [] // Add items for compatibility
+        items: detailsResults || []
       };
 
       res.json({

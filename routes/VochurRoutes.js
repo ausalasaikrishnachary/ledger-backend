@@ -1506,19 +1506,21 @@ router.get("/transactions/:id", (req, res) => {
 
     const transaction = results[0];
 
-    // Fetch batch details
+    // ✅ UPDATED: Fetch batch details with weight and total_weight
     const detailsQuery = `
       SELECT 
         product, 
         product_id, 
         batch, 
         quantity, 
+        weight,
+        total_weight,
         price, 
         unit_id,
-          original_price, 
-          inclusive_gst,
+        original_price, 
+        inclusive_gst,
         discount, 
-         hsn_code,
+        hsn_code,
         gst, 
         cgst, 
         sgst, 
@@ -1543,7 +1545,7 @@ router.get("/transactions/:id", (req, res) => {
       const responseData = {
         ...transaction,
         batch_details: detailsResults || [],
-        items: detailsResults || [] // Add items for compatibility
+        items: detailsResults || []
       };
 
       res.json({
@@ -1556,8 +1558,6 @@ router.get("/transactions/:id", (req, res) => {
 
 
 router.get("/transactions", (req, res) => {
-
-  // Fetch vouchers + customer details - FILTERED to show only rows with empty/null order_number
   const voucherQuery = `
     SELECT 
       v.*,
@@ -1590,7 +1590,7 @@ router.get("/transactions", (req, res) => {
       return res.status(500).send(err);
     }
 
-    // Fetch all voucherdetails (line items)
+    // ✅ UPDATED: Fetch voucher details with weight
     const detailsQuery = `
       SELECT 
         vd.*,
@@ -1606,7 +1606,6 @@ router.get("/transactions", (req, res) => {
         return res.status(500).send(err);
       }
 
-      // Group details by voucher_id
       const detailsByVoucher = {};
       details.forEach(row => {
         if (!detailsByVoucher[row.voucher_id]) {
@@ -1615,7 +1614,6 @@ router.get("/transactions", (req, res) => {
         detailsByVoucher[row.voucher_id].push(row);
       });
 
-      // Attach details to each voucher
       const finalResult = vouchers.map(v => {
         const vDetails = detailsByVoucher[v.VoucherID] || [];
 
@@ -2485,12 +2483,14 @@ const processTransaction = async (transactionData, transactionType, connection, 
     totalDiscount += discountAmount;  
     totalCreditCharge += creditCharge;
 const itemDocumentType = i.document_type || null;
+   const itemWeight = parseFloat(i.weight) || 0;
     if (isKacha) {
       return {
         product: i.product || "",
         product_id: parseInt(i.product_id || i.productId) || null,
         batch: i.batch || i.batch_number || "DEFAULT",
         quantity: billingQuantity,
+         weight: itemWeight, 
         stock_deduction_quantity: stockDeductionQuantity,
         price: parseFloat(i.price) || 0,
              original_price: parseFloat(i.original_price) || 0,  
@@ -2526,6 +2526,7 @@ const itemDocumentType = i.document_type || null;
         product_id: parseInt(i.product_id || i.productId) || null,
         batch: i.batch || i.batch_number || "DEFAULT",
         quantity: billingQuantity,
+         weight: itemWeight,
         stock_deduction_quantity: stockDeductionQuantity,
         price: parseFloat(i.price) || 0,
          original_price: parseFloat(i.original_price) || 0,  
@@ -3118,46 +3119,54 @@ assigned_staff: transactionData.supplierInfo?.assigned_staff || transactionData.
     [voucherData]
   );
 
-  const insertDetailQuery = `
+const insertDetailQuery = `
   INSERT INTO voucherdetails (
     voucher_id, product, product_id, transaction_type, InvoiceNumber,
-    batch, quantity, get_quantity, unit_id, price, original_price, discount,
-    gst, cgst, sgst, igst, cess, total, inclusive_gst, hsn_code,document_type, created_at
-  ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?,?, ?, ?, ?, ?, ?, ?, ?, ?,?,?, NOW())
+    batch, quantity, weight, total_weight, get_quantity, unit_id, 
+    price, original_price, discount, gst, cgst, sgst, igst, cess, 
+    total, inclusive_gst, hsn_code, document_type, created_at
+  ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW())
 `;
 
 
-  for (const i of items) {
-    const itemGST = isKacha ? 0 : i.gst;
-    const itemCGST = isKacha ? 0 : i.cgst;
-    const itemSGST = isKacha ? 0 : i.sgst;
-    const itemIGST = isKacha ? 0 : i.igst;
-    const itemCess = isKacha ? 0 : i.cess;
-    
-    await queryPromise(connection, insertDetailQuery, [
-      nextVoucherId,          
-      i.product,             
-      i.product_id,          
-      transactionType,       
-      invoiceNumber,        
-      i.batch,               
-      i.quantity,         
-      i.get_quantity || 0,
-      i.unit_id || null,   
-      i.price,    
-      i.original_price || 0,        
-      i.discount,         
-      itemGST,              
-      itemCGST,             
-      itemSGST,           
-      itemIGST,           
-      itemCess,             
-      i.total,    
-        i.inclusive_gst || null, 
-         i.hsn_code || null,   
-           i.document_type || null    
-    ]);
-  }
+for (const i of items) {
+  const itemGST = isKacha ? 0 : i.gst;
+  const itemCGST = isKacha ? 0 : i.cgst;
+  const itemSGST = isKacha ? 0 : i.sgst;
+  const itemIGST = isKacha ? 0 : i.igst;
+  const itemCess = isKacha ? 0 : i.cess;
+  
+  // Calculate weight and total_weight
+  const itemWeight = parseFloat(i.weight) || 0;
+  const itemQuantity = parseFloat(i.quantity) || 0;
+  const itemTotalWeight = itemWeight * itemQuantity;
+  
+  await queryPromise(connection, insertDetailQuery, [
+    nextVoucherId,          
+    i.product,             
+    i.product_id,          
+    transactionType,       
+    invoiceNumber,        
+    i.batch,               
+    i.quantity,            // quantity
+    itemWeight,            // weight (per unit)
+    itemTotalWeight,       // total_weight (quantity × weight)
+    i.get_quantity || 0,   // get_quantity
+    i.unit_id || null,     // unit_id
+    i.price,               // price
+    i.original_price || 0, // original_price
+    i.discount,            // discount
+    itemGST,               // gst
+    itemCGST,              // cgst
+    itemSGST,              // sgst
+    itemIGST,              // igst
+    itemCess,              // cess
+    i.total,               // total
+    i.inclusive_gst || null,  // inclusive_gst
+    i.hsn_code || null,    // hsn_code
+    i.document_type || null   // document_type
+  ]);
+}
 
   for (const i of items) {
     if (transactionType === "Sales" || transactionType === "DebitNote" || transactionType === "stock transfer") {
@@ -3387,6 +3396,23 @@ assigned_staff: transactionData.supplierInfo?.assigned_staff || transactionData.
       }
     }
   }
+
+  // Calculate total invoice weight from all items
+let totalInvoiceWeight = 0;
+for (const i of items) {
+  const itemWeight = parseFloat(i.weight) || 0;
+  const itemQuantity = parseFloat(i.quantity) || 0;
+  totalInvoiceWeight += itemWeight * itemQuantity;
+}
+
+// Update voucher table with total_invoice_weight
+await queryPromise(
+  connection,
+  "UPDATE voucher SET total_invoice_weight = ? WHERE VoucherID = ?",
+  [totalInvoiceWeight, nextVoucherId]
+);
+
+console.log(`✅ Total invoice weight updated: ${totalInvoiceWeight}`);
 
   if (transactionType === "CreditNote" && originalInvoiceId) {
     console.log(`🔄 Updating original invoice balance_amount after CreditNote`);
