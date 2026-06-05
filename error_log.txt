@@ -101,3 +101,20 @@ Error: Unknown error
 Error: Unknown error
 Error: Unknown error
 Error: Unknown error
+Error: Unknown error
+Error: Unknown error
+Error: Unknown error
+Error: Unknown error
+Error: Unknown error
+Error: Unknown error
+Error: Unknown error
+Error: Invalid GSP API specified! Please check URL, Action and headers. For more details check GSP UI portal!.
+Error: Invalid GSP API specified! Please check URL, Action and headers. For more details check GSP UI portal!.
+Error: 'user_name' header is mandatory and cannot be empty, 'requestid' header is mandatory and cannot be empty, 'gstin' header is mandatory and cannot be empty
+Exception: adqgsphpusr1 is not defined
+Error: 1015 : Invalid GSTIN for this user
+Error: 1015 : Invalid GSTIN for this user
+Exception: adqgsphpusr1 is not defined
+Error: Access token is expired or empty, please provide password
+EXCEPTION : Unable to generate access token
+"Request failed with status code 403"
