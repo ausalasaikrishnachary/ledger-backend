@@ -43,7 +43,7 @@ const inventory = require('./routes/Retailer/InventoryRoutesRetailer');
 const OfferFlashSale = require('./routes/OfferFlashSale');
 const Journalroutes = require('./routes/Journalroutes');
 const gspRoutes = require('./routes/gspRoutes');
-// const irnRoutes = require('./routes/irnRoutes');
+const irnRoutes = require('./routes/irnRoutes');
 
 const { baseurl } = require('./baseUrl');
 const port = 5000;
@@ -58,14 +58,28 @@ app.use('/uploads', express.static('uploads'));
 app.use(express.json({ limit: '50mb' }));
 app.use(express.urlencoded({ limit: '50mb', extended: true }));
 
-// Serve static files from invoices directory
-// app.use('/invoices', express.static(path.join(__dirname, 'invoices')));
+console.log(
+  "Invoice Path:",
+  path.join(__dirname, './invoice')
+);
 
+// Serve static files from invoices directory
+// app.use(
+//   '/invoice',
+//   express.static(path.join(__dirname, '../invoice'))
+// );
+
+app.use(
+  '/invoice',
+  express.static(
+    path.resolve(process.cwd(), 'invoice')
+  )
+);
 // Middleware to parse JSON
 app.use(express.json());
 
 // Routes - Order matters! Put specific routes before general ones
-// app.use('/api', irnRoutes);
+app.use('/api', irnRoutes);
 app.use('/api', retailerScoreRoutes);
 app.use('/api', salespersonScoreRoutes);
 app.use('/', AuthRoutes);

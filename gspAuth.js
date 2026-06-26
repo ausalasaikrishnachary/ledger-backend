@@ -110,11 +110,12 @@ const db = require('./db');
 
 // Sandbox env 
 const gspappid = "79536E39F216449883720CCD53643D8F";
-const gspappsecret = "EE5EFAACG8434G43E8GA90EG9660E98C3I"; // Note: Fixed from your original (was missing 'I' at the end)
+const gspappsecret = "EE5EFAACG8434G43E8GA90EG9660E98C3D71";
 
 // Correct authentication endpoint (based on typical Adaequare patterns)
 // Try these in order of probability:
 const AUTH_URLS = [
+  'https://gsp.adaequare.com/gsp/authenticate?grant_type=token',
   'https://gsp.adaequare.com/gsp/authenticate',
   'https://gsp.adaequare.com/test/gsp/authenticate',
   'https://gsp.adaequare.com/auth/token',
