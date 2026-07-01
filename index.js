@@ -45,6 +45,7 @@ const OfferFlashSale = require('./routes/OfferFlashSale');
 const Journalroutes = require('./routes/Journalroutes');
 const gspRoutes = require('./routes/gspRoutes');
 const irnRoutes = require('./routes/irnRoutes');
+const saleType = require('./routes/saleType');
 
 const { baseurl } = require('./baseUrl');
 const port = 5000;
@@ -116,6 +117,7 @@ app.use("/api/cart", cartRoutes);
 app.use("/api", inventory);
 app.use("/api", require("./routes/companyInfo"));
 app.use('/api', gspRoutes);
+app.use('/api', saleType);
 
 // Root endpoint
 // app.get('/', (req, res) => {

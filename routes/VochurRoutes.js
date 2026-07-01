@@ -3,87 +3,243 @@ const router = express.Router();
 const db = require('../db');
 const axios = require('axios'); // ADD THIS LINE
 
+// router.get("/next-invoice-number", async (req, res) => {
+//   try {
+//     const { transactionType } = req.query; // Get transaction type from request
+    
+//     // Validate transaction type
+//     const validTypes = ['Sales', 'Purchase', 'stock transfer', 'stock inward'];
+//     if (!transactionType || !validTypes.includes(transactionType)) {
+//       return res.status(400).send({ 
+//         error: 'Valid transactionType is required (Sales, Purchase, stock transfer, or stock inward)' 
+//       });
+//     }
+    
+//     const getFinancialYear = () => {
+//       const now = new Date();
+//       const year = now.getFullYear();
+//       const month = now.getMonth(); 
+      
+//       if (month >= 3) { // April to March
+//         return `${year.toString().slice(-2)}-${(year + 1).toString().slice(-2)}`;
+//       } else { // January to March
+//         return `${(year - 1).toString().slice(-2)}-${year.toString().slice(-2)}`;
+//       }
+//     };
+    
+//     const currentFY = getFinancialYear();
+    
+//     // Set prefix based on transaction type
+//     let prefix = '';
+//     switch(transactionType) {
+//       case 'Sales':
+//         prefix = `SSA/`;
+//         break;
+//       case 'Purchase':
+//         prefix = `SSA/`;
+//         break;
+//       case 'stock transfer':
+//         prefix = `CS/`;
+//         break;
+//       case 'stock inward':
+//         prefix = `SSk/`;
+//         break;
+//       default:
+//         prefix = `SSA/`;
+//     }
+    
+//     const suffix = `/${currentFY}`;
+//     const likePattern = `${prefix}%${suffix}`;
+    
+//     // Fixed query - only one LIKE condition with the pattern
+//     const query = `
+//       SELECT MAX(CAST(SUBSTRING_INDEX(SUBSTRING_INDEX(InvoiceNumber, '/', 2), '/', -1) AS UNSIGNED)) as maxNumber 
+//       FROM voucher 
+//       WHERE TransactionType = ? 
+//       AND InvoiceNumber LIKE ?
+//     `;
+    
+//     db.query(query, [transactionType, likePattern], (err, results) => {
+//       if (err) {
+//         console.error('Error fetching next invoice number:', err);
+//         return res.status(500).send({ error: 'Failed to get next invoice number' });
+//       }
+
+//       let nextNumber = 1;
+//       if (results[0].maxNumber !== null && !isNaN(results[0].maxNumber)) {
+//         nextNumber = parseInt(results[0].maxNumber) + 1;
+//       }
+
+//       const nextInvoiceNumber = `${prefix}${nextNumber.toString().padStart(6, '0')}${suffix}`;
+      
+//       res.send({ 
+//         nextInvoiceNumber,
+//         transactionType,
+//         financialYear: currentFY,
+//         prefix: prefix
+//       });
+//     });
+//   } catch (error) {
+//     console.error('Error in next-invoice-number:', error);
+//     res.status(500).send({ error: 'Internal server error' });
+//   }
+// });
+
+
 router.get("/next-invoice-number", async (req, res) => {
   try {
-    const { transactionType } = req.query; // Get transaction type from request
-    
-    // Validate transaction type
-    const validTypes = ['Sales', 'Purchase', 'stock transfer', 'stock inward'];
+    const { transactionType, saleType } = req.query;
+
+    const validTypes = [
+      "Sales",
+      "Purchase",
+      "stock transfer",
+      "stock inward",
+    ];
+
     if (!transactionType || !validTypes.includes(transactionType)) {
-      return res.status(400).send({ 
-        error: 'Valid transactionType is required (Sales, Purchase, stock transfer, or stock inward)' 
+      return res.status(400).send({
+        error:
+          "Valid transactionType is required (Sales, Purchase, stock transfer, or stock inward)",
       });
     }
-    
+
     const getFinancialYear = () => {
       const now = new Date();
       const year = now.getFullYear();
-      const month = now.getMonth(); 
-      
-      if (month >= 3) { // April to March
-        return `${year.toString().slice(-2)}-${(year + 1).toString().slice(-2)}`;
-      } else { // January to March
-        return `${(year - 1).toString().slice(-2)}-${year.toString().slice(-2)}`;
+      const month = now.getMonth();
+
+      if (month >= 3) {
+        return `${year.toString().slice(-2)}-${(year + 1)
+          .toString()
+          .slice(-2)}`;
+      } else {
+        return `${(year - 1).toString().slice(-2)}-${year
+          .toString()
+          .slice(-2)}`;
       }
     };
-    
+
     const currentFY = getFinancialYear();
-    
-    // Set prefix based on transaction type
-    let prefix = '';
-    switch(transactionType) {
-      case 'Sales':
-        prefix = `SSA/`;
-        break;
-      case 'Purchase':
-        prefix = `SSA/`;
-        break;
-      case 'stock transfer':
-        prefix = `CS/`;
-        break;
-      case 'stock inward':
-        prefix = `SSk/`;
-        break;
-      default:
-        prefix = `SSA/`;
-    }
-    
-    const suffix = `/${currentFY}`;
-    const likePattern = `${prefix}%${suffix}`;
-    
-    // Fixed query - only one LIKE condition with the pattern
-    const query = `
-      SELECT MAX(CAST(SUBSTRING_INDEX(SUBSTRING_INDEX(InvoiceNumber, '/', 2), '/', -1) AS UNSIGNED)) as maxNumber 
-      FROM voucher 
-      WHERE TransactionType = ? 
-      AND InvoiceNumber LIKE ?
-    `;
-    
-    db.query(query, [transactionType, likePattern], (err, results) => {
-      if (err) {
-        console.error('Error fetching next invoice number:', err);
-        return res.status(500).send({ error: 'Failed to get next invoice number' });
+
+    // Function to continue invoice generation
+    const generateInvoice = (prefix) => {
+      const suffix = `/${currentFY}`;
+      const likePattern = `${prefix}%${suffix}`;
+
+      const query = `
+        SELECT MAX(
+          CAST(
+            SUBSTRING_INDEX(
+              SUBSTRING_INDEX(InvoiceNumber, '/', 2),
+              '/',
+              -1
+            ) AS UNSIGNED
+          )
+        ) AS maxNumber
+        FROM voucher
+        WHERE TransactionType = ?
+        AND InvoiceNumber LIKE ?
+      `;
+
+      db.query(
+        query,
+        [transactionType, likePattern],
+        (err, results) => {
+          if (err) {
+            console.error("Error fetching invoice number:", err);
+            return res
+              .status(500)
+              .send({ error: "Failed to get next invoice number" });
+          }
+
+          let nextNumber = 1;
+
+          if (
+            results[0].maxNumber !== null &&
+            !isNaN(results[0].maxNumber)
+          ) {
+            nextNumber = parseInt(results[0].maxNumber) + 1;
+          }
+
+          const nextInvoiceNumber =
+            `${prefix}${nextNumber
+              .toString()
+              .padStart(6, "0")}/${currentFY}`;
+
+          res.send({
+            nextInvoiceNumber,
+            transactionType,
+            financialYear: currentFY,
+            prefix,
+          });
+        }
+      );
+    };
+
+    // SALES => Fetch prefix from saletypes table
+    if (transactionType === "Sales") {
+      if (!saleType) {
+        return res.status(400).send({
+          error: "saleType is required for Sales transactions",
+        });
       }
 
-      let nextNumber = 1;
-      if (results[0].maxNumber !== null && !isNaN(results[0].maxNumber)) {
-        nextNumber = parseInt(results[0].maxNumber) + 1;
-      }
+      const saleTypeQuery = `
+        SELECT series
+        FROM saletypes
+        WHERE sale_type = ?
+      `;
 
-      const nextInvoiceNumber = `${prefix}${nextNumber.toString().padStart(6, '0')}${suffix}`;
-      
-      res.send({ 
-        nextInvoiceNumber,
-        transactionType,
-        financialYear: currentFY,
-        prefix: prefix
+      db.query(saleTypeQuery, [saleType], (err, results) => {
+        if (err) {
+          console.error("Error fetching sale type:", err);
+          return res
+            .status(500)
+            .send({ error: "Failed to fetch sale type series" });
+        }
+
+        if (results.length === 0) {
+          return res.status(404).send({
+            error: "Sale Type not found",
+          });
+        }
+
+        // Example: series = 'SSA'
+        const prefix = `${results[0].series}/`;
+
+        generateInvoice(prefix);
       });
-    });
+    } else {
+      // Existing logic for other transaction types
+
+      let prefix = "";
+
+      switch (transactionType) {
+        case "Purchase":
+          prefix = "SSA/";
+          break;
+
+        case "stock transfer":
+          prefix = "CS/";
+          break;
+
+        case "stock inward":
+          prefix = "SSk/";
+          break;
+
+        default:
+          prefix = "SSA/";
+      }
+
+      generateInvoice(prefix);
+    }
   } catch (error) {
-    console.error('Error in next-invoice-number:', error);
-    res.status(500).send({ error: 'Internal server error' });
+    console.error("Error in next-invoice-number:", error);
+    res.status(500).send({ error: "Internal server error" });
   }
 });
+
 // Store PDF data for invoice
 router.post("/transactions/:id/pdf", async (req, res) => {
   const voucherId = req.params.id;
