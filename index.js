@@ -32,7 +32,7 @@ const salesReportRoutes = require("./routes/salesReportRoutes");
 const pdfRoutes = require('./routes/pdfRoutes');
 const creditnoteRoutes = require('./routes/creditnote');
 const debitnoteRoutes = require('./routes/debitnote');
-const voucher = require('./routes/voucher');
+const voucher = require('./routes/vouchercopy');
 const orderRoutes = require('./routes/orders');
 const categoriesRoutes = require('./routes/categories');
 const offersRoutes = require('./routes/Inventory/OffersRoutes');
@@ -46,6 +46,8 @@ const Journalroutes = require('./routes/Journalroutes');
 const gspRoutes = require('./routes/gspRoutes');
 const irnRoutes = require('./routes/irnRoutes');
 const saleType = require('./routes/saleType');
+const gspAuth = require('./gspAuth');
+const tokenManager = require('./tokenManager');
 
 const { baseurl } = require('./baseUrl');
 const port = 5000;
@@ -119,23 +121,32 @@ app.use("/api", require("./routes/companyInfo"));
 app.use('/api', gspRoutes);
 app.use('/api', saleType);
 
-// Root endpoint
-// app.get('/', (req, res) => {
-//     res.json({ 
-//         message: 'IRN Generation API is running',
-//         endpoints: {
-//             'POST /api/generate-irn': 'Generate IRN for invoice',
-//             'GET /api/invoice/:id': 'Get invoice details',
-//             'GET /api/branches': 'Get all branches',
-//             'GET /api/customers': 'Get all customers'
-//         }
-//     });
-// });
+
 
 // Error handling middleware
 app.use((err, req, res, next) => {
     console.error(err.stack);
     res.status(500).json({ error: 'Something went wrong!' });
+});
+
+
+// Setup cron jobs when your application starts
+gspAuth.setupCronJobs();
+
+// Optional: Test authentication
+gspAuth.testAuthentication().then(result => {
+  if (result.success) {
+    console.log('✅ GSP Authentication configured successfully');
+    
+    // Fetch and set the token in .env
+    tokenManager.fetchAndSetToken().then(token => {
+      if (token) {
+        console.log('✅ Token available in .env and memory');
+      }
+    });
+  } else {
+    console.log('⚠️ GSP Authentication test failed. Check your credentials.');
+  }
 });
 
 // ============================================
@@ -215,28 +226,7 @@ cron.schedule('18 19 * * *', async () => {
   }
 });
 
-// ============================================
-// CRON JOB FOR GSP TOKEN REFRESH
-// ============================================
-cron.schedule('0 2 * * *', async () => {
-  console.log(`🔄 [${new Date().toISOString()}] Running GSP token refresh...`);
-  
-  try {
-    const { authenticateAndGetToken } = require('./gspAuth');
-    const result = await authenticateAndGetToken();
-    
-    if (result.success) {
-      console.log('✅ GSP token refreshed successfully');
-      console.log(`   Expires at: ${result.expires_at}`);
-    } else {
-      console.log('❌ GSP token refresh failed:', result.error);
-    }
-  } catch (err) {
-    console.error('❌ GSP token refresh cron job failed:', err.message);
-  }
-});
 
-console.log('⏰ Cron jobs scheduled:');
 console.log('   - Retailer scores: Daily at 18:47 (6:47 PM)');
 console.log('   - Salesperson scores: Daily at 19:00 (7:00 PM)');
 console.log('   - GSP token refresh: Daily at 2:00 AM');

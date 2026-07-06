@@ -240,6 +240,8 @@ router.get("/next-invoice-number", async (req, res) => {
   }
 });
 
+
+
 // Store PDF data for invoice
 router.post("/transactions/:id/pdf", async (req, res) => {
   const voucherId = req.params.id;
@@ -2483,7 +2485,7 @@ router.post("/transaction", (req, res) => {
           connection,
           dataType
         );
-
+ const saleType = transactionData.saleType || null;
         const { voucherId, invoiceNumber, vchNo, batchDetails, grandTotal } = result;
 
         connection.commit(async (commitErr) => {
@@ -3184,6 +3186,7 @@ const voucherData = {
   TransactionType: transactionType,
   data_type: dataType,
   VchNo: vchNo,
+  saleType : transactionData.saleType,
   InvoiceNumber: invoiceNumber,
   order_number: orderNumber, 
   order_mode: orderMode,

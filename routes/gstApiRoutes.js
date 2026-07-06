@@ -30,7 +30,7 @@
 
 //       const requestid = crypto.randomBytes(16).toString('hex');
 
-//     const url = 'https://gsp.adaequare.com/test/enriched/ei/api/master/gstin';
+//     const url = `${GSP_URL}/enriched/ei/api/master/gstin`;
 
 //     const response = await axios.get(url, {
 //       headers: {
@@ -95,6 +95,7 @@ require('dotenv').config();
 const USER_NAME = process.env.GSP_USERNAME;
 const PASSWORD = process.env.GSP_PASSWORD;
 const ACCESS_TOKEN = process.env.ACCESS_TOKEN;
+const GSP_URL = process.env.GSP_URL;
 
 router.post('/gstin-details', async (req, res) => {
   const gstin = req.body?.gstin;
@@ -117,7 +118,7 @@ router.post('/gstin-details', async (req, res) => {
 
     const response = await axios({
       method: 'GET',
-      url: 'https://gsp.adaequare.com/test/enriched/ei/api/master/gstin',
+      url: `${GSP_URL}/enriched/ei/api/master/gstin`,
       headers: {
         Authorization: `Bearer ${ACCESS_TOKEN}`,
         Accept: 'application/json',
