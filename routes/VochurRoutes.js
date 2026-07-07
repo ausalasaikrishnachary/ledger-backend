@@ -2,6 +2,8 @@ const express = require('express');
 const router = express.Router();
 const db = require('../db');
 const axios = require('axios'); // ADD THIS LINE
+const PDFDocument = require("pdfkit");
+const excelJS = require("exceljs");
 
 // router.get("/next-invoice-number", async (req, res) => {
 //   try {
@@ -247,8 +249,6 @@ router.post("/transactions/:id/pdf", async (req, res) => {
   const voucherId = req.params.id;
   const { pdfData, fileName } = req.body;
 
-  console.log('Storing PDF for voucher:', voucherId);
-
   if (!pdfData || !fileName) {
     return res.status(400).json({
       success: false,
@@ -280,7 +280,6 @@ router.post("/transactions/:id/pdf", async (req, res) => {
         });
       }
 
-      console.log('PDF stored successfully for voucher:', voucherId);
       res.json({
         success: true,
         message: 'PDF stored successfully',
@@ -340,8 +339,6 @@ router.get("/transactions/:id/pdf", (req, res) => {
 router.get("/transactions/:id/download-pdf", (req, res) => {
   const voucherId = req.params.id;
 
-  console.log('Downloading PDF for voucher:', voucherId);
-
   const query = `
     SELECT pdf_data, pdf_file_name 
     FROM voucher 
@@ -358,7 +355,6 @@ router.get("/transactions/:id/download-pdf", (req, res) => {
     }
 
     if (results.length === 0) {
-      console.log('PDF not found for voucher:', voucherId);
       return res.status(404).json({
         success: false,
         message: 'PDF not found for this invoice'
@@ -366,7 +362,6 @@ router.get("/transactions/:id/download-pdf", (req, res) => {
     }
 
     const pdfInfo = results[0];
-    console.log('PDF found:', pdfInfo.pdf_file_name);
 try {
   let base64Data = pdfInfo.pdf_data;
 
@@ -393,8 +388,6 @@ try {
   res.setHeader("Content-Length", pdfBuffer.length);
   res.setHeader("Cache-Control", "no-cache");
 
-  console.log("Sending PDF buffer, size:", pdfBuffer.length);
-
   res.send(pdfBuffer);
 
 } catch (err) {
@@ -415,8 +408,6 @@ router.get("/transactions/download-pdf", (req, res) => {
       message: 'Order number is required'
     });
   }
-
-  console.log('Downloading PDF(s) for order:', order_number);
 
   const query = `
     SELECT pdf_data, pdf_file_name , status
@@ -482,8 +473,6 @@ function queryPromise(connection, sql, params = []) {
 router.put("/creditnoteupdate/:id", async (req, res) => {
   const voucherId = req.params.id;
   const updateData = req.body;
-
-  console.log("UPDATE RECEIVED => ", voucherId, updateData);
 
   db.getConnection((err, connection) => {
     if (err)
@@ -601,11 +590,6 @@ router.put("/creditnoteupdate/:id", async (req, res) => {
 let newCreditNoteTotal = parseFloat(updateData.TotalAmount) || 
                         parseFloat(updateData.totalAmount) || 
                         newBatchDetails.reduce((sum, item) => sum + (item.total || 0), 0);
-        console.log("💰 Credit Note Amounts:", {
-          
-          oldCreditNoteTotal: actualOldCreditNoteTotal,
-          newCreditNoteTotal: newCreditNoteTotal
-        });
 
         if (invoiceNumber) {
           const salesVoucherRows = await queryPromise(
@@ -676,22 +660,11 @@ let newCreditNoteTotal = parseFloat(updateData.TotalAmount) ||
           }
         }
 
-        console.log("🔥 RAW DATE:", rawDate);
-        console.log("🔥 MYSQL DATE:", voucherDate);
-
         // ========== CORRECTED BALANCE CALCULATION ==========
         let creditNoteBalanceAmount = newCreditNoteTotal;
         let newSalesBalance = originalSalesBalance;
 
         if (originalSalesId) {
-          console.log("📊 Balance Calculations - Input Values:", {
-            originalSalesBalance: originalSalesBalance,
-            originalSalesTotal: originalSalesTotal,
-            actualOldCreditNoteTotal: actualOldCreditNoteTotal,
-            newCreditNoteTotal: newCreditNoteTotal,
-            invoiceNumber: invoiceNumber
-          });
-
           // Validate that new credit note total doesn't exceed original sales total
           if (newCreditNoteTotal > originalSalesTotal) {
             throw new Error(`Credit Note amount (${newCreditNoteTotal}) cannot exceed original Sales amount (${originalSalesTotal})`);
@@ -707,11 +680,6 @@ let newCreditNoteTotal = parseFloat(updateData.TotalAmount) ||
           // Credit Note's balance_amount should be the SAME as the updated Sales balance
           // Both represent the remaining amount after this credit note
           creditNoteBalanceAmount = newSalesBalance;
-          
-          console.log("📊 Balance Calculations - Results:", {
-            newSalesBalance: newSalesBalance,
-            creditNoteBalanceAmount: creditNoteBalanceAmount
-          });
         }
         // ========== END OF CORRECTED CALCULATION ==========
 
@@ -846,18 +814,11 @@ let newCreditNoteTotal = parseFloat(updateData.TotalAmount) ||
              WHERE VoucherID = ?`,
             [newSalesBalance, newStatus, originalSalesId]
           );
-          
-          console.log(`✅ Original Sales Invoice updated:`, {
-            voucherId: originalSalesId,
-            newBalance: newSalesBalance,
-            newStatus: newStatus
-          });
         }
 
         // 8️⃣ COMMIT
         connection.commit((err) => {
           if (err) {
-            console.log("COMMIT ERROR:", err);
             connection.rollback(() => {
               connection.release();
               return res.status(500).json({ success: false, message: "Commit failed" });
@@ -873,7 +834,6 @@ let newCreditNoteTotal = parseFloat(updateData.TotalAmount) ||
           });
         });
       } catch (err) {
-        console.log("UPDATE ERROR:", err);
         connection.rollback(() => {
           connection.release();
           res.status(500).json({ success: false, message: err.message });
@@ -885,8 +845,6 @@ let newCreditNoteTotal = parseFloat(updateData.TotalAmount) ||
 router.put("/debitnoteupdate/:id", async (req, res) => {
   const voucherId = req.params.id;
   const updateData = req.body;
-
-  console.log("UPDATE RECEIVED => ", voucherId, updateData);
 
   db.getConnection((err, connection) => {
     if (err)
@@ -1004,12 +962,6 @@ router.put("/debitnoteupdate/:id", async (req, res) => {
         let newDebitNoteTotal = parseFloat(updateData.TotalAmount) || 
                                 parseFloat(updateData.totalAmount) || 
                                 newBatchDetails.reduce((sum, item) => sum + (item.total || 0), 0);
-
-        console.log("💰 Debit Note Amounts:", {
-          oldDebitNoteTotal: actualOldDebitNoteTotal,
-          newDebitNoteTotal: newDebitNoteTotal,
-          updateDataTotalAmount: updateData.TotalAmount
-        });
         
         if (invoiceNumber) {
           const purchaseVoucherRows = await queryPromise(
@@ -1131,14 +1083,6 @@ router.put("/debitnoteupdate/:id", async (req, res) => {
         let newPurchaseBalance = originalPurchaseBalance;
 
         if (originalPurchaseId) {
-          console.log("📊 Balance Calculations - Input Values:", {
-            originalPurchaseBalance: originalPurchaseBalance,
-            originalPurchaseTotal: originalPurchaseTotal,
-            actualOldDebitNoteTotal: actualOldDebitNoteTotal,
-            newDebitNoteTotal: newDebitNoteTotal,
-            invoiceNumber: invoiceNumber
-          });
-
           // Validate that new debit note total doesn't exceed original purchase total
           if (newDebitNoteTotal > originalPurchaseTotal) {
             throw new Error(`Debit Note amount (${newDebitNoteTotal}) cannot exceed original Purchase amount (${originalPurchaseTotal})`);
@@ -1150,11 +1094,6 @@ router.put("/debitnoteupdate/:id", async (req, res) => {
           newPurchaseBalance = Math.max(0, newPurchaseBalance);
           
           debitNoteBalanceAmount = newPurchaseBalance;
-          
-          console.log("📊 Balance Calculations - Results:", {
-            newPurchaseBalance: newPurchaseBalance,
-            debitNoteBalanceAmount: debitNoteBalanceAmount
-          });
         }
         
         await queryPromise(
@@ -1278,18 +1217,11 @@ router.put("/debitnoteupdate/:id", async (req, res) => {
              WHERE VoucherID = ?`,
             [newPurchaseBalance, newStatus, originalPurchaseId]
           );
-          
-          console.log(`✅ Original Purchase Invoice updated:`, {
-            voucherId: originalPurchaseId,
-            newBalance: newPurchaseBalance,
-            newStatus: newStatus
-          });
         }
 
         // 8️⃣ COMMIT
         connection.commit((err) => {
           if (err) {
-            console.log("COMMIT ERROR:", err);
             connection.rollback(() => {
               connection.release();
               return res.status(500).json({ success: false, message: "Commit failed" });
@@ -1305,7 +1237,6 @@ router.put("/debitnoteupdate/:id", async (req, res) => {
           });
         });
       } catch (err) {
-        console.log("UPDATE ERROR:", err);
         connection.rollback(() => {
           connection.release();
           res.status(500).json({ success: false, message: err.message });
@@ -1319,8 +1250,6 @@ router.put("/debitnoteupdate/:id", async (req, res) => {
 
 router.delete("/transactions/:id", async (req, res) => {
   const voucherId = req.params.id;
-
-  console.log("Deleting transaction with VoucherID:", voucherId);
 
   db.getConnection((err, connection) => {
     if (err) {
@@ -1366,8 +1295,6 @@ router.delete("/transactions/:id", async (req, res) => {
         // 4️⃣ Reverse stock based on transaction type
         // -----------------------------------------------------------------------
         if (batchDetails.length > 0) {
-          console.log(`Reversing STOCK for ${transactionType}`);
-
           const stockInTransactions = ["Purchase", "CreditNote", "stock inward"];
           const stockOutTransactions = ["Sales", "DebitNote", "stock transfer"];
           
@@ -1375,7 +1302,7 @@ router.delete("/transactions/:id", async (req, res) => {
           const isStockOut = stockOutTransactions.includes(transactionType);
 
           if (!isStockIn && !isStockOut) {
-            console.log(`⚠️ Unknown transaction type: ${transactionType}, skipping stock reversal`);
+            // Unknown transaction type, skipping stock reversal
           } else {
             for (const item of batchDetails) {
               if (!item.product_id || !item.batch) continue;
@@ -1402,14 +1329,10 @@ router.delete("/transactions/:id", async (req, res) => {
                   // Reverse stock IN transaction: decrease stock_in and quantity
                   newStockIn = Math.max(0, currentStockIn - qty);
                   newQuantity = currentQuantity - qty;
-                  
-                  console.log(`Reversing ${transactionType}: Subtracting ${qty} from stock_in for batch ${item.batch}`);
                 } else if (isStockOut) {
                   // Reverse stock OUT transaction: decrease stock_out and increase quantity
                   newStockOut = Math.max(0, currentStockOut - qty);
                   newQuantity = currentQuantity + qty;
-                  
-                  console.log(`Reversing ${transactionType}: Subtracting ${qty} from stock_out for batch ${item.batch}`);
                 }
 
                 // Ensure quantities don't go negative
@@ -1422,11 +1345,6 @@ router.delete("/transactions/:id", async (req, res) => {
                   "UPDATE batches SET quantity = ?, stock_in = ?, stock_out = ?, updated_at = NOW() WHERE id = ?",
                   [newQuantity, newStockIn, newStockOut, batch.id]
                 );
-
-                console.log(
-                  `✔ ${transactionType} reversed batch ${item.batch}: ` +
-                  `qty=${newQuantity}, stock_in=${newStockIn}, stock_out=${newStockOut}`
-                );
               }
             }
           }
@@ -1436,8 +1354,6 @@ router.delete("/transactions/:id", async (req, res) => {
         // 5️⃣ Handle order status reversal ONLY for Sales/stock transfer
         // -----------------------------------------------------------------------
         if ((transactionType === "Sales" || transactionType === "stock transfer") && voucherData.order_number) {
-          console.log(`🔄 This was an invoice from order ${voucherData.order_number}. Reversing order status...`);
-          
           try {
             await queryPromise(
               connection,
@@ -1465,10 +1381,8 @@ router.delete("/transactions/:id", async (req, res) => {
               `,
               [voucherData.order_number]
             );
-            
-            console.log(`✅ Order ${voucherData.order_number} status reverted to 'Pending'`);
           } catch (error) {
-            console.error(`⚠️ Error reverting order status:`, error.message);
+            // Error reverting order status
           }
         }
 
@@ -1476,8 +1390,6 @@ router.delete("/transactions/:id", async (req, res) => {
         // 6️⃣ Handle unpaid amount reversal ONLY for Sales/stock transfer/stock inward
         // -----------------------------------------------------------------------
         if ((transactionType === "Sales" || transactionType === "stock transfer" || transactionType === "stock inward") && voucherData.PartyID) {
-          console.log(`💰 Reversing unpaid amount for PartyID: ${voucherData.PartyID}`);
-          
           try {
             const tableCheck = await queryPromise(
               connection,
@@ -1528,19 +1440,16 @@ router.delete("/transactions/:id", async (req, res) => {
                     [newUnpaid, voucherData.PartyID]
                   );
                 }
-                
-                console.log(`✅ Unpaid amount reversed: ${totalAmount}, New unpaid: ${newUnpaid}`);
               }
             }
           } catch (error) {
-            console.error(`⚠️ Error reversing unpaid amount:`, error.message);
+            // Error reversing unpaid amount
           }
         }
 
         // -----------------------------------------------------------------------
         // 7️⃣ Delete ONLY this voucher's details, NOT all with same InvoiceNumber
         // -----------------------------------------------------------------------
-        console.log(`Deleting voucherdetails for VoucherID: ${voucherId}`);
         await queryPromise(
           connection,
           "DELETE FROM voucherdetails WHERE voucher_id = ?",
@@ -1550,7 +1459,6 @@ router.delete("/transactions/:id", async (req, res) => {
         // -----------------------------------------------------------------------
         // 8️⃣ Delete ONLY this voucher, NOT all with same InvoiceNumber
         // -----------------------------------------------------------------------
-        console.log(`Deleting voucher with VoucherID: ${voucherId}`);
         await queryPromise(
           connection,
           "DELETE FROM voucher WHERE VoucherID = ?",
@@ -1562,7 +1470,6 @@ router.delete("/transactions/:id", async (req, res) => {
         // -----------------------------------------------------------------------
         connection.commit((commitErr) => {
           if (commitErr) {
-            console.error("Commit error:", commitErr);
             return connection.rollback(() => {
               connection.release();
               res.status(500).send({
@@ -1573,8 +1480,6 @@ router.delete("/transactions/:id", async (req, res) => {
           }
 
           connection.release();
-
-          console.log(`✔ Transaction ${voucherId} (${transactionType}) deleted successfully`);
 
           let message = "";
           if (isCreditNote) {
@@ -1807,8 +1712,6 @@ router.get('/invoices/:invoiceNumber', async (req, res) => {
     let { invoiceNumber } = req.params;
     invoiceNumber = decodeURIComponent(invoiceNumber);
 
-    console.log('Searching for invoice:', invoiceNumber);
-
     const query = `
       SELECT 
         v.VoucherID,
@@ -1967,19 +1870,6 @@ router.put("/transactions/:id", async (req, res) => {
   const voucherId = req.params.id;
   const updateData = req.body;
 
-console.log("📋 Voucher document_type:", updateData.document_type);
-console.log("📋 Items document_type:", updateData.batchDetails?.map(item => ({ 
-  product: item.product, 
-  document_type: item.document_type 
-})));
-
-// After updating voucher table
-console.log("✅ Voucher document_type saved:", updateData.document_type);
-
-// After inserting voucherdetails
-console.log("✅ Items document_type saved:", updateData.batchDetails?.map(item => item.document_type));
-
-
   db.getConnection((err, connection) => {
     if (err) return res.status(500).send({ error: "Database connection failed" });
 
@@ -2000,8 +1890,6 @@ console.log("✅ Items document_type saved:", updateData.batchDetails?.map(item 
 
         const originalTransactionType =
           originalVoucher[0].TransactionType || "Sales";
-
-        console.log("🔎 Original transaction:", originalTransactionType);
 
         // Fetch batch details from voucherdetails table
         let originalBatchDetails = [];
@@ -2040,8 +1928,6 @@ console.log("✅ Items document_type saved:", updateData.batchDetails?.map(item 
         for (const item of originalBatchDetails) {
           if (!item.batch || !item.product_id) continue;
 
-          console.log("♻️ Reversing:", originalTransactionType, item);
-
           const batchCheck = await queryPromise(
             connection,
             "SELECT quantity, stock_out, stock_in FROM batches WHERE product_id = ? AND batch_number = ?",
@@ -2049,7 +1935,6 @@ console.log("✅ Items document_type saved:", updateData.batchDetails?.map(item 
           );
 
           if (batchCheck.length === 0) {
-            console.warn(`⚠️ Batch ${item.batch} not found during reversal - creating it`);
             
             await queryPromise(
               connection,
@@ -2058,7 +1943,6 @@ console.log("✅ Items document_type saved:", updateData.batchDetails?.map(item 
                VALUES (?, ?, 0, 0, 0, NOW(), NOW())`,
               [item.product_id, item.batch]
             );
-            console.log(`✔ Created missing batch: ${item.batch}`);
           }
 
           const updatedBatchCheck = await queryPromise(
@@ -2078,7 +1962,6 @@ console.log("✅ Items document_type saved:", updateData.batchDetails?.map(item 
           
           if (isStockInTransaction) {
             if (currentQuantity < itemQuantity) {
-              console.warn(`⚠️ Insufficient stock for reversal in batch ${item.batch}. Available: ${currentQuantity}, Required: ${item.quantity}. Adjusting...`);
               
               const finalQuantity = Math.max(0, currentQuantity - itemQuantity);
               const finalStockIn = Math.max(0, currentStockIn - itemQuantity);
@@ -2095,10 +1978,8 @@ console.log("✅ Items document_type saved:", updateData.batchDetails?.map(item 
                 [itemQuantity, itemQuantity, item.product_id, item.batch]
               );
             }
-            console.log(`✔ Reversed ${originalTransactionType} for batch ${item.batch}`);
           } else {
             if (currentStockOut < itemQuantity) {
-              console.warn(`⚠️ stock_out less than reversal quantity in batch ${item.batch}. Current: ${currentStockOut}, Required: ${item.quantity}. Adjusting...`);
               
               const finalStockOut = Math.max(0, currentStockOut - itemQuantity);
               
@@ -2114,7 +1995,6 @@ console.log("✅ Items document_type saved:", updateData.batchDetails?.map(item 
                 [itemQuantity, itemQuantity, item.product_id, item.batch]
               );
             }
-            console.log(`✔ Reversed ${originalTransactionType} for batch ${item.batch}`);
           }
         }
 
@@ -2166,19 +2046,6 @@ console.log("✅ Items document_type saved:", updateData.batchDetails?.map(item 
         const stationName = updateData.transportDetails?.station || 
                            updateData.station_name || 
                            originalVoucher[0].station_name || null;
-
-        console.log("📝 Updating with staff values:", {
-          staffIdToUpdate,
-          assignedStaffToUpdate,
-          mobileNumber
-        });
-
-        console.log("🚛 Updating with transportation values:", {
-          transportName,
-          grRrNumber,
-          vehicleNumber,
-          stationName
-        });
 
         // ✅ UPDATED UPDATE query with transportation fields
         await queryPromise(
@@ -2245,19 +2112,6 @@ voucherId
           ]
         );
 
-        console.log("✅ Staff data updated in voucher:", {
-          staffid: staffIdToUpdate,
-          assigned_staff: assignedStaffToUpdate,
-          retailer_mobile: mobileNumber
-        });
-
-        console.log("✅ Transportation data updated in voucher:", {
-          transport_name: transportName,
-          gr_rr_number: grRrNumber,
-          vehicle_number: vehicleNumber,
-          station_name: stationName
-        });
-
         // -------------------------------------------------------------------
         // INSERT NEW voucherDetails
         // -------------------------------------------------------------------
@@ -2307,7 +2161,6 @@ voucherId
           );
 
           if (batchExists.length === 0) {
-            console.log(`➕ Creating new batch: ${item.batch} for product ${item.product_id}`);
             await queryPromise(
               connection,
               `INSERT INTO batches 
@@ -2334,15 +2187,12 @@ voucherId
               "UPDATE batches SET quantity = quantity + ?, stock_in = stock_in + ?, updated_at = NOW() WHERE product_id = ? AND batch_number = ?",
               [itemQuantity, itemQuantity, item.product_id, item.batch]
             );
-            console.log(`✔ ${originalTransactionType} applied - added stock to batch ${item.batch}`);
           } else {
-            console.log(`⚠️ Allowing negative stock for batch ${item.batch}. Current: ${currentQuantity}, Deducting: ${itemQuantity}, New: ${currentQuantity - itemQuantity}`);
             await queryPromise(
               connection,
               "UPDATE batches SET quantity = quantity - ?, stock_out = stock_out + ?, updated_at = NOW() WHERE product_id = ? AND batch_number = ?",
               [itemQuantity, itemQuantity, item.product_id, item.batch]
             );
-            console.log(`✔ ${originalTransactionType} applied - reduced stock from batch ${item.batch}`);
           }
         }
 
@@ -2417,8 +2267,6 @@ router.get("/ledger", (req, res) => {
       return res.status(500).json({ message: "Database error", error: err });
     }
 
-    console.log("Transaction types found:", [...new Set(results.map(r => r.trantype))]);
-    
     const dataWithRecalculatedBalances = recalculateRunningBalances(results);
 
     res.status(200).json(dataWithRecalculatedBalances);
@@ -2442,7 +2290,6 @@ function recalculateRunningBalances(transactions) {
 }
 router.post("/transaction", (req, res) => {
   const transactionData = req.body;
-  console.log('📦 ALL RECEIVED DATA:', transactionData);
 
   // Determine transaction type
   let transactionType = transactionData.TransactionType || "";
@@ -2452,18 +2299,12 @@ router.post("/transaction", (req, res) => {
   const orderNumber = transactionData.orderNumber || transactionData.order_number || null;
   
   if ((normalizedType === "stock transfer" || normalizedType === "stocktransfer") && orderNumber) {
-    console.log("🔄 Stock Transfer detected with order number");
     transactionType = "stock transfer";
   } else if ((normalizedType === "stock transfer") && !orderNumber) {
-    console.log("⚠️ Stock Transfer specified but no order number - Reverting to Sales");
     transactionType = "stock transfer";
   } else if (normalizedType === "stock inward") {
-    console.log("📥 Stock Inward transaction detected");
     transactionType = "stock inward";
   }
-
-  console.log("Processing as:", transactionType);
-  console.log("Order Number:", orderNumber);
 
   db.getConnection((err, connection) => {
     if (err) {
@@ -2517,14 +2358,12 @@ router.post("/transaction", (req, res) => {
                 transactionData.fullAccountDetails?.mobile_number || null;
 
               if (!mobile) {
-                console.log(`No mobile number for order ${orderNumber}`);
                 return;
               }
 
               const cleanMobile = mobile.toString().replace(/\D/g, "");
 
               if (!/^[6-9]\d{9}$/.test(cleanMobile)) {
-                console.log(`Invalid mobile number: ${cleanMobile}`);
                 return;
               }
 
@@ -2547,12 +2386,9 @@ Total Amount: ${grandTotal} - SHREE SHASHWATRAJ AGRO PRIVATE LIMITED`;
                   }
                 }
               );
-
-              console.log(`✅ SMS SENT to ${cleanMobile}`);
-              console.log("SMSJust response:", smsResponse.data);
             }
           } catch (err) {
-            console.error("❌ SMS failed (non-blocking):", err.message);
+            // SMS failed (non-blocking)
           }
 
           let message =
@@ -2602,14 +2438,10 @@ const processTransaction = async (transactionData, transactionType, connection, 
 
   const orderMode = (transactionData.order_mode || transactionData.orderMode || "").toUpperCase();
   const isKacha = orderMode === "KACHA";
-  
-  console.log(`📊 Order Mode from request: ${orderMode}, Is Kacha: ${isKacha}`);
 
   const staffIncentive = parseFloat(transactionData.staff_incentive) || 
                         parseFloat(transactionData.originalOrder?.staff_incentive) || 
                         0;
-  
-  console.log(`💰 Staff Incentive from request: ${staffIncentive}`);
 
   let items = [];
 
@@ -2711,12 +2543,9 @@ const itemDocumentType = i.document_type || null;
   });
 
   const orderNumber = transactionData.orderNumber || transactionData.order_number || null;
-  console.log("🛒 Order Number from request:", orderNumber);
 
   const selectedItemIds = transactionData.selectedItemIds || transactionData.selected_item_ids || [];
   const hasItemSelection = selectedItemIds && selectedItemIds.length > 0;
-  
-  console.log("📋 Has item selection:", hasItemSelection ? `Yes (${selectedItemIds.length} items)` : "No");
 
   // For CreditNote, find the original invoice to calculate balance
   let originalInvoiceBalance = null;
@@ -2724,8 +2553,6 @@ const itemDocumentType = i.document_type || null;
   let originalInvoiceId = null;
   
   if (transactionType === "CreditNote" && transactionData.InvoiceNumber) {
-    console.log(`🔍 Finding original invoice for CreditNote: ${transactionData.InvoiceNumber}`);
-    
     const [originalInvoice] = await queryPromise(
       connection,
       `SELECT VoucherID, TotalAmount, balance_amount, status
@@ -2741,19 +2568,11 @@ const itemDocumentType = i.document_type || null;
       originalInvoiceId = originalInvoice.VoucherID;
       originalInvoiceTotal = parseFloat(originalInvoice.TotalAmount) || 0;
       originalInvoiceBalance = parseFloat(originalInvoice.balance_amount) || originalInvoiceTotal;
-      
-      console.log(`✅ Found original invoice:`, {
-        voucherId: originalInvoiceId,
-        totalAmount: originalInvoiceTotal,
-        currentBalance: originalInvoiceBalance
-      });
     }
   }
 
   // ADD THIS: For DebitNote, find the original purchase invoice
 if (transactionType === "DebitNote" && transactionData.InvoiceNumber) {
-  console.log(`🔍 Finding original purchase invoice for DebitNote: ${transactionData.InvoiceNumber}`);
-  
   const [originalPurchase] = await queryPromise(
     connection,
     `SELECT VoucherID, TotalAmount, balance_amount, status
@@ -2769,26 +2588,14 @@ if (transactionType === "DebitNote" && transactionData.InvoiceNumber) {
     originalPurchaseId = originalPurchase.VoucherID;
     originalPurchaseTotal = parseFloat(originalPurchase.TotalAmount) || 0;
     originalPurchaseBalance = parseFloat(originalPurchase.balance_amount) || originalPurchaseTotal;
-    
-    console.log(`✅ Found original purchase invoice:`, {
-      voucherId: originalPurchaseId,
-      totalAmount: originalPurchaseTotal,
-      currentBalance: originalPurchaseBalance
-    });
   }
 }
 
   if (orderNumber && (transactionType === "Sales" || transactionType === "stock transfer")) {
-    console.log("✅ This is an order conversion. Updating order items and order status...");
-    
     const invoiceNumber = transactionData.InvoiceNumber || transactionData.invoiceNumber || `INV${Date.now()}`;
     const invoiceDate = transactionData.Date || new Date().toISOString().split('T')[0];
     
     try {
-      // First, let's debug what we're receiving
-      console.log("🔍 DEBUG - Received items for order update:", items);
-      console.log("🔍 DEBUG - Selected Item IDs:", selectedItemIds);
-      
       if (hasItemSelection && selectedItemIds.length > 0) {
         // Update invoice details for selected items
         const placeholders = selectedItemIds.map(() => '?').join(',');
@@ -2808,25 +2615,14 @@ if (transactionType === "DebitNote" && transactionData.InvoiceNumber) {
           updateParams
         );
         
-        console.log(`✅ Updated invoice details for ${selectedItemIds.length} items in order ${orderNumber}`);
-        
         // Update product_id for all items (regardless of selection)
         for (const item of items) {
-          console.log("🔍 Processing item for product_id update:", {
-            product: item.product,
-            product_id: item.product_id,
-            hasProductId: !!item.product_id,
-            originalItemId: item.originalItemId,
-            hasOriginalItemId: !!item.originalItemId
-          });
-          
           if (item.product_id) {
             try {
               let updateResult;
               
               if (item.originalItemId) {
                 // Method 1: Use originalItemId if available
-                console.log(`📝 Using originalItemId: ${item.originalItemId} for ${item.product}`);
                 updateResult = await queryPromise(
                   connection,
                   `
@@ -2840,8 +2636,6 @@ if (transactionType === "DebitNote" && transactionData.InvoiceNumber) {
                 );
               } else {
                 // Method 2: Match by product name when originalItemId is not available
-                console.log(`🔍 No originalItemId, matching by product name: ${item.product}`);
-                
                 // First, check if we need to update - find existing product_id
                 const existingItem = await queryPromise(
                   connection,
@@ -2871,41 +2665,17 @@ if (transactionType === "DebitNote" && transactionData.InvoiceNumber) {
                       `,
                       [item.product_id, existingItem[0].id, orderNumber]
                     );
-                    
-                    console.log(`✅ Updated product_id for "${item.product}" from ${existingProductId} to ${item.product_id}`);
-                  } else {
-                    console.log(`ℹ️ Product_id already set to ${item.product_id} for "${item.product}"`);
-                    continue;
                   }
-                } else {
-                  console.log(`⚠️ No matching item found in order for "${item.product}"`);
-                  continue;
                 }
               }
-              
-              if (updateResult) {
-                console.log(`✅ Update result for ${item.product}: ${updateResult.affectedRows} rows affected`);
-                
-                if (updateResult.affectedRows === 0) {
-                  console.log(`ℹ️ No rows updated for ${item.product}. May already have correct product_id.`);
-                }
-              }
-              
             } catch (error) {
-              console.error(`❌ Error updating product_id for ${item.product}:`, error.message);
-              // Don't throw, continue with other items
+              // Continue with other items
             }
-          } else {
-            console.log(`⚠️ Skipping ${item.product} - no product_id provided`);
           }
         }
       } 
       
       // Update orders table WITH order_mode
-      console.log(`🔄 Updating order status in orders table for: ${orderNumber}`);
-      console.log(`   Order Mode being set: ${orderMode}`);
-      
-      // First check what columns exist in the orders table
       let updateOrdersQuery;
       let updateParams;
       
@@ -2927,11 +2697,7 @@ if (transactionType === "DebitNote" && transactionData.InvoiceNumber) {
         
       } catch (error) {
         if (error.code === 'ER_BAD_FIELD_ERROR') {
-          console.log(`ℹ️ Column error detected: ${error.message}`);
-          
           if (error.message.includes('order_mode')) {
-            console.log("ℹ️ 'order_mode' column not found in orders table, updating without it...");
-            
             // Try without order_mode but with updated_at
             try {
               updateOrdersQuery = `
@@ -2949,8 +2715,6 @@ if (transactionType === "DebitNote" && transactionData.InvoiceNumber) {
               
             } catch (innerError) {
               if (innerError.code === 'ER_BAD_FIELD_ERROR' && innerError.message.includes('updated_at')) {
-                console.log("ℹ️ 'updated_at' column not found either, updating basic columns only...");
-                
                 updateOrdersQuery = `
                 UPDATE orders SET 
                   order_status = 'Invoice',
@@ -2968,8 +2732,6 @@ if (transactionType === "DebitNote" && transactionData.InvoiceNumber) {
             }
             
           } else if (error.message.includes('updated_at')) {
-            console.log("ℹ️ 'updated_at' column not found, updating without it...");
-            
             updateOrdersQuery = `
             UPDATE orders SET 
               order_status = 'Invoice',
@@ -2984,8 +2746,6 @@ if (transactionType === "DebitNote" && transactionData.InvoiceNumber) {
             await queryPromise(connection, updateOrdersQuery, updateParams);
             
           } else if (error.message.includes('invoice_status')) {
-            console.log("ℹ️ 'invoice_status' column not found in orders table, updating without it...");
-            
             updateOrdersQuery = `
             UPDATE orders SET 
               order_status = 'Invoice',
@@ -3005,10 +2765,6 @@ if (transactionType === "DebitNote" && transactionData.InvoiceNumber) {
           throw error;
         }
       }
-      
-      console.log(`✅ Order ${orderNumber} status updated to 'Invoiced' in orders table with invoice ${invoiceNumber}`);
-      console.log(`✅ Order mode set to: ${orderMode}`);
-      
     } catch (error) {
       console.error(`❌ Error updating order ${orderNumber}:`, error.message);
       throw error;
@@ -3019,7 +2775,6 @@ if (transactionType === "DebitNote" && transactionData.InvoiceNumber) {
   
   if (items.length > 0 && items[0].batch) {
     voucherBatchNumber = items[0].batch;
-    console.log(`✅ Using batch number for voucher table: ${voucherBatchNumber}`);
   }
 
   let invoiceNumber =
@@ -3070,8 +2825,6 @@ if (transactionType === "DebitNote" && transactionData.InvoiceNumber) {
   let taxableAmount, totalGST, grandTotal;
   
   if (isKacha) {
-    console.log("🔴 KACHA Order Mode Detected - Calculating totals without GST");
-    
     taxableAmount = parseFloat(transactionData.BasicAmount) ||
                    parseFloat(transactionData.taxableAmount) ||
                    parseFloat(transactionData.Subtotal) ||
@@ -3099,9 +2852,6 @@ if (transactionType === "DebitNote" && transactionData.InvoiceNumber) {
                  parseFloat(transactionData.grandTotal) ||
                  taxableAmount + totalGST + totalCreditCharge;
   }
-
-  console.log(`💰 Totals - Taxable: ${taxableAmount}, GST: ${totalGST}, Grand Total: ${grandTotal}`);
-  console.log(`💰 Staff Incentive: ${staffIncentive}`);
 
   // ACCOUNT / PARTY DETAILS
   const supplier = transactionData.supplierInfo || {};
@@ -3145,18 +2895,11 @@ if (transactionType === "DebitNote" && transactionData.InvoiceNumber) {
 if (transactionType === "Sales" || transactionType === "Purchase" || 
     transactionType === "stock transfer" || transactionType === "stock inward") {
   balanceAmount = grandTotal;
-  console.log(`💰 New ${transactionType} - Setting balance_amount to TotalAmount: ${balanceAmount}`);
 } 
 else if (transactionType === "CreditNote") {
   if (originalInvoiceBalance !== null) {
     const newBalance = originalInvoiceBalance - grandTotal;
     balanceAmount = Math.max(0, newBalance);
-    
-    console.log(`💰 CreditNote - Calculating balance_amount:`, {
-      originalInvoiceBalance: originalInvoiceBalance,
-      creditNoteAmount: grandTotal,
-      balanceAmount: balanceAmount
-    });
   } else {
     balanceAmount = grandTotal;
   }
@@ -3166,12 +2909,6 @@ else if (transactionType === "DebitNote") {
   if (originalPurchaseBalance !== null) {
     const newBalance = originalPurchaseBalance - grandTotal;
     balanceAmount = Math.max(0, newBalance);
-    
-    console.log(`💰 DebitNote - Calculating balance_amount:`, {
-      originalPurchaseBalance: originalPurchaseBalance,
-      debitNoteAmount: grandTotal,
-      balanceAmount: balanceAmount
-    });
   } else {
     balanceAmount = grandTotal;
   }
@@ -3215,7 +2952,6 @@ const voucherData = {
   additional_charges_amount: parseFloat(transactionData.additional_charges_amount) || 0,
  retailer_mobile: transactionData.customerInfo?.phone || 
                  transactionData.fullAccountDetails?.mobile_number || 
-                            
                  transactionData.supplierInfo?.mobile_number ||       
                  transactionData.supplierInfo?.phone_number ||   0,
   PartyName: partyName,
@@ -3268,8 +3004,6 @@ assigned_staff: transactionData.supplierInfo?.assigned_staff || transactionData.
   L_I: transactionData.L_I || '',  
   gstin: transactionData.gstin || null
 };
-
-  console.log(`🔍 FINAL Voucher Data - TransactionType: ${transactionType}, balance_amount: ${voucherData.balance_amount}`);
 
   // INSERT VOUCHER
   await queryPromise(
@@ -3334,20 +3068,11 @@ for (const i of items) {
       let remainingQuantity = i.stock_deduction_quantity || i.quantity;
       const flashOffer = i.flash_offer || 0;
       
-      console.log(`🔄 Stock Deduction - Flash Offer: ${flashOffer === 1 ? 'Yes' : 'No'}`);
-      console.log(`   Product: ${i.product} (ID: ${i.product_id})`);
-      console.log(`   Billing Qty: ${i.quantity}, Stock Deduction Qty: ${remainingQuantity}`);
-      if (flashOffer === 1) {
-        console.log(`   Buy: ${i.buy_quantity}, Get: ${i.get_quantity}, Total: ${remainingQuantity}`);
-      }
-      
       const specificBatch = i.batch || i.batch_number || i.batchNumber;
       const shouldUseSpecificBatch = specificBatch && specificBatch !== "DEFAULT";
       const isFromOrder = orderNumber;
       
     if (shouldUseSpecificBatch) {
-  console.log(`🔍 Deducting from specific batch: ${specificBatch} for product ${i.product_id}`);
-  
   try {
     // First check if batch exists (don't check quantity)
     const batchExists = await queryPromise(
@@ -3363,7 +3088,6 @@ for (const i of items) {
     
     if (batchExists.length === 0) {
       // Batch doesn't exist - create it with negative quantity
-      console.log(`⚠️ Batch ${specificBatch} not found. Creating with negative quantity...`);
       
       await queryPromise(
         connection,
@@ -3373,13 +3097,9 @@ for (const i of items) {
         `,
         [i.product_id, specificBatch, -remainingQuantity, remainingQuantity]
       );
-      
-      console.log(`✅ Created new batch ${specificBatch} with quantity -${remainingQuantity}`);
     } else {
       // Batch exists - update quantity (allow negative)
       const currentQty = batchExists[0].quantity;
-      console.log(`📊 Current quantity for batch ${specificBatch}: ${currentQty}`);
-      console.log(`➖ Deducting ${remainingQuantity} (will become ${currentQty - remainingQuantity})`);
       
       await queryPromise(
         connection,
@@ -3394,17 +3114,13 @@ for (const i of items) {
         [remainingQuantity, remainingQuantity, i.product_id, specificBatch]
       );
     }
-    
-    console.log(`✅ Successfully deducted ${remainingQuantity} from batch ${specificBatch} (negative stock allowed)`);
     remainingQuantity = 0;
-    
   } catch (error) {
     console.error(`❌ Error with specific batch ${specificBatch}:`, error.message);
     throw error;
   }
 } else if (isFromOrder) {
         // Order-based sale - use FIFO with mfg_date
-        console.log(`📦 Order-based sale - Using FIFO with MFG date for product ${i.product_id}`);
         
         const batches = await queryPromise(
           connection,
@@ -3417,8 +3133,6 @@ for (const i of items) {
           `,
           [i.product_id]
         );
-        
-        console.log(`📊 Found ${batches.length} batches for product ${i.product_id}`);
         
         if (batches.length === 0) {
           throw new Error(`No stock available for product ID ${i.product_id}`);
@@ -3433,7 +3147,6 @@ for (const i of items) {
           const deductQty = Math.min(remainingQuantity, batchQtyAvailable);
           
           if (deductQty > 0) {
-            console.log(`➖ Deducting ${deductQty} from batch ${batchNumber} (MFG: ${batch.mfg_date})`);
             
             await queryPromise(
               connection,
@@ -3454,7 +3167,6 @@ for (const i of items) {
         }
         
     } else {
-  console.log(`🛍️ Regular sale for product ${i.product_id} - allowing negative stock`);
   
   const defaultBatch = "DEFAULT";
   
@@ -3471,7 +3183,6 @@ for (const i of items) {
   
   if (batchExists.length === 0) {
     // Create DEFAULT batch with negative quantity
-    console.log(`⚠️ DEFAULT batch not found. Creating with negative quantity...`);
     
     await queryPromise(
       connection,
@@ -3481,13 +3192,9 @@ for (const i of items) {
       `,
       [i.product_id, defaultBatch, -remainingQuantity, remainingQuantity]
     );
-    
-    console.log(`✅ Created DEFAULT batch with quantity -${remainingQuantity}`);
   } else {
     // Update DEFAULT batch (allow negative)
     const currentQty = batchExists[0].quantity;
-    console.log(`📊 Current DEFAULT batch quantity: ${currentQty}`);
-    console.log(`➖ Deducting ${remainingQuantity} (will become ${currentQty - remainingQuantity})`);
     
     await queryPromise(
       connection,
@@ -3503,7 +3210,6 @@ for (const i of items) {
     );
   }
   
-  console.log(`✅ Successfully deducted ${remainingQuantity} using DEFAULT batch (negative stock allowed)`);
   remainingQuantity = 0;
 }
       
@@ -3513,7 +3219,6 @@ for (const i of items) {
       
     } else if (transactionType === "Purchase" || transactionType === "CreditNote" || transactionType === "stock inward") {
       const purchaseQuantity = i.quantity;
-      console.log(`➕ Adding ${purchaseQuantity} to product ${i.product_id}, batch: ${i.batch || i.batch_number} (Transaction: ${transactionType})`);
       
       const batchToUse = i.batch || i.batch_number || i.batchNumber || "DEFAULT";
       
@@ -3540,7 +3245,6 @@ for (const i of items) {
           `,
           [purchaseQuantity, purchaseQuantity, i.product_id, batchToUse]
         );
-        console.log(`📝 Updated existing batch ${batchToUse}`);
       } else {
         // Insert new batch
         await queryPromise(
@@ -3551,7 +3255,6 @@ for (const i of items) {
         `,
           [i.product_id, batchToUse, purchaseQuantity, purchaseQuantity, i.mfg_date]
         );
-        console.log(`📝 Created new batch ${batchToUse}`);
       }
     }
   }
@@ -3571,11 +3274,7 @@ await queryPromise(
   [totalInvoiceWeight, nextVoucherId]
 );
 
-console.log(`✅ Total invoice weight updated: ${totalInvoiceWeight}`);
-
   if (transactionType === "CreditNote" && originalInvoiceId) {
-    console.log(`🔄 Updating original invoice balance_amount after CreditNote`);
-    
     const newOriginalBalance = Math.max(0, originalInvoiceBalance - grandTotal);
     
     let newStatus = "active";
@@ -3594,14 +3293,6 @@ console.log(`✅ Total invoice weight updated: ${totalInvoiceWeight}`);
        WHERE VoucherID = ?`,
       [newOriginalBalance, newStatus, originalInvoiceId]
     );
-    
-    console.log(`✅ Original invoice updated:`, {
-      voucherId: originalInvoiceId,
-      oldBalance: originalInvoiceBalance,
-      creditNoteAmount: grandTotal,
-      newBalance: newOriginalBalance,
-      newStatus: newStatus
-    });
   }
 
 
@@ -3624,14 +3315,9 @@ console.log(`✅ Total invoice weight updated: ${totalInvoiceWeight}`);
      WHERE VoucherID = ?`,
     [newOriginalBalance, newStatus, originalPurchaseId]
   );
-  
-  console.log(`✅ Original purchase invoice updated after DebitNote`);
 }
 
   if ((transactionType === "Sales" || transactionType === "stock transfer" || transactionType === "stock inward") && partyID && orderNumber) {
-    console.log(`💰 UNPAID AMOUNT UPDATE - ${transactionType} with order number detected`);
-    console.log(`   PartyID: ${partyID}, TotalAmount: ${grandTotal}, Order Number: ${orderNumber}`);
-    
     try {
       // Check if accounts table has unpaid_amount column
       const tableCheck = await queryPromise(
@@ -3640,7 +3326,7 @@ console.log(`✅ Total invoice weight updated: ${totalInvoiceWeight}`);
       );
       
       if (tableCheck.length === 0) {
-        console.warn("⚠️ 'unpaid_amount' column not found in accounts table.");
+        // 'unpaid_amount' column not found
       } else {
         // First check if credit_limit column exists
         const creditLimitCheck = await queryPromise(
@@ -3665,7 +3351,7 @@ console.log(`✅ Total invoice weight updated: ${totalInvoiceWeight}`);
         }
         
         if (currentAccount.length === 0) {
-          console.warn(`⚠️ Account with id ${partyID} not found in accounts table.`);
+          // Account not found
         } else {
           const currentUnpaid = parseFloat(currentAccount[0].unpaid_amount) || 0;
           const newUnpaid = currentUnpaid + grandTotal;
@@ -3691,12 +3377,8 @@ console.log(`✅ Total invoice weight updated: ${totalInvoiceWeight}`);
             WHERE id = ?
             `;
             updateParams = [newUnpaid, newBalanceAmount, partyID];
-            
-            const oldBalanceAmount = creditLimit - currentUnpaid;
-            console.log(`✅ BALANCE AMOUNT CALCULATED - Old: ${oldBalanceAmount}, New: ${newBalanceAmount}, Difference: -${grandTotal}`);
           } else if (balanceCheck.length > 0 && creditLimitCheck.length === 0) {
             // balance_amount exists but credit_limit doesn't - can't calculate balance
-            console.warn("⚠️ 'balance_amount' column exists but 'credit_limit' column not found. Cannot calculate balance.");
             updateQuery = `
             UPDATE accounts 
             SET unpaid_amount = ?,
@@ -3713,21 +3395,14 @@ console.log(`✅ Total invoice weight updated: ${totalInvoiceWeight}`);
             WHERE id = ?
             `;
             updateParams = [newUnpaid, partyID];
-            console.log("ℹ️ 'balance_amount' column not found. Only updating unpaid_amount.");
           }
           
           // Update the accounts table
           await queryPromise(connection, updateQuery, updateParams);
-          
-          console.log(`✅ UNPAID AMOUNT UPDATED IN ACCOUNTS TABLE`);
-          console.log(`   PartyID: ${partyID}`);
-          console.log(`   Previous Unpaid: ${currentUnpaid}`);
-          console.log(`   Added Amount: ${grandTotal}`);
-          console.log(`   New Unpaid: ${newUnpaid}`);
         }
       }
     } catch (error) {
-      console.error(`❌ ERROR updating unpaid amount:`, error.message);
+      // Error updating unpaid amount
     }
   }
 
@@ -5099,13 +4774,236 @@ router.put("/update-account-balance/:id", (req, res) => {
   const party_id = req.params.id;
   const { balance, balance_type } = req.body;
 
-  console.log("Updating:", party_id, balance, balance_type); 
-
   const query = `UPDATE accounts SET balance = ?, balance_type = ? WHERE id = ?`;
   db.query(query, [balance, balance_type, party_id], (err, result) => {
     if (err) return res.status(500).json({ message: "Database error" });
     res.json({ message: "Balance updated successfully" });
   });
 });
-module.exports = router;
 
+
+// ─── POST /gstreport/download ────────────────────────────────────────────────
+// Generates the GSTR-1 (GST Register) report as a downloadable PDF or Excel
+// file, honoring the same filters used on the GstReport.js screen.
+// Body: { format: "pdf" | "excel", fromDate, toDate, search }
+router.post("/gstreport/download", (req, res) => {
+  const { format, fromDate, toDate, search } = req.body;
+
+  const conditions = ["v.TransactionType = 'Sales'"];
+  const params = [];
+
+  if (fromDate) {
+    conditions.push("DATE(v.Date) >= ?");
+    params.push(fromDate);
+  }
+  if (toDate) {
+    conditions.push("DATE(v.Date) <= ?");
+    params.push(toDate);
+  }
+  if (search && search.trim()) {
+    const like = `%${search.trim()}%`;
+    conditions.push(
+      "(v.VchNo LIKE ? OR v.PartyName LIKE ? OR v.gstin LIKE ? OR v.bb_bc LIKE ?)"
+    );
+    params.push(like, like, like, like);
+  }
+
+  const whereClause = "WHERE " + conditions.join(" AND ");
+
+  const voucherQuery = `
+    SELECT 
+      v.VoucherID,
+      v.VchNo,
+      v.Date,
+      v.PartyName,
+      v.gstin,
+      v.bb_bc,
+      v.Subtotal,
+      v.SGSTAmount,
+      v.CGSTAmount,
+      v.IGSTAmount,
+      v.TotalAmount
+    FROM voucher v
+    ${whereClause}
+    ORDER BY v.VoucherID DESC
+  `;
+
+  db.query(voucherQuery, params, (err, vouchers) => {
+    if (err) {
+      console.error("Error fetching vouchers for download:", err);
+      return res.status(500).json({ error: err.message });
+    }
+
+    const voucherIds = vouchers.map((v) => v.VoucherID);
+    const detailsQuery = voucherIds.length
+      ? `
+        SELECT vd.voucher_id, vd.hsn_code, vd.gst
+        FROM voucherdetails vd
+        WHERE vd.voucher_id IN (${voucherIds.map(() => "?").join(",")})
+      `
+      : null;
+
+    const buildAndSend = (details) => {
+      const detailsByVoucher = {};
+      (details || []).forEach((row) => {
+        if (!detailsByVoucher[row.voucher_id]) detailsByVoucher[row.voucher_id] = [];
+        detailsByVoucher[row.voucher_id].push(row);
+      });
+
+      const results = vouchers.map((v) => {
+        const items = detailsByVoucher[v.VoucherID] || [];
+        const hsnCodes = [...new Set(items.map((i) => i.hsn_code).filter(Boolean))];
+        const gstRates = [...new Set(items.map((i) => i.gst).filter((g) => g !== null && g !== undefined))];
+
+        return {
+          billNo: v.VchNo || "—",
+          date: v.Date ? new Date(v.Date).toLocaleDateString("en-IN") : "—",
+          party: v.PartyName || "—",
+          gstNo: v.gstin || "N/A",
+          bbbc: v.bb_bc || "N/A",
+          hsnCode: hsnCodes.length ? hsnCodes.join(", ") : "N/A",
+          gstPercentage: gstRates.length ? gstRates.map((r) => `${r}%`).join(", ") : "N/A",
+          billAmt: parseFloat(v.TotalAmount) || 0,
+          taxableAmt: parseFloat(v.Subtotal) || 0,
+          sgstAmt: parseFloat(v.SGSTAmount) || 0,
+          cgstAmt: parseFloat(v.CGSTAmount) || 0,
+          igstAmt: parseFloat(v.IGSTAmount) || 0,
+        };
+      });
+
+      const displayFrom = fromDate || "ALL";
+      const displayTo = toDate || "ALL";
+
+      if (format === "pdf") {
+        const doc = new PDFDocument({ margin: 30, layout: "landscape" });
+        res.setHeader("Content-Type", "application/pdf");
+        res.setHeader(
+          "Content-Disposition",
+          `attachment; filename=GST_Register_${new Date().toISOString().split("T")[0]}.pdf`
+        );
+        doc.pipe(res);
+
+        doc.fontSize(18).text("GST Register Report", { align: "center" });
+        doc.moveDown(1);
+        doc.fontSize(10).text(`Period: ${displayFrom} to ${displayTo}`, { align: "center" });
+        doc.text(`Generated on: ${new Date().toLocaleDateString("en-IN")}`, { align: "center" });
+        doc.text(`Total Records: ${results.length}`, { align: "center" });
+        doc.moveDown(2);
+
+        const headers = ["Bill No", "Date", "Party", "GST No", "BB/BC", "Bill Amt", "Taxable Amt", "SGST", "CGST", "IGST"];
+        const widths = [80, 60, 130, 90, 45, 65, 70, 60, 60, 60];
+        let x = 30;
+        let y = 150;
+
+        headers.forEach((h, i) => {
+          doc.rect(x, y, widths[i], 25).fillAndStroke("#343a40", "black");
+          doc.fillColor("white").font("Helvetica-Bold").fontSize(9)
+            .text(h, x + 4, y + 8, { width: widths[i] - 8, align: "center" });
+          doc.fillColor("black");
+          x += widths[i];
+        });
+        y += 25;
+
+        results.forEach((r) => {
+          const row = [
+            r.billNo, r.date, r.party, r.gstNo, r.bbbc.toUpperCase(),
+            `₹${r.billAmt.toFixed(2)}`, `₹${r.taxableAmt.toFixed(2)}`,
+            `₹${r.sgstAmt.toFixed(2)}`, `₹${r.cgstAmt.toFixed(2)}`, `₹${r.igstAmt.toFixed(2)}`,
+          ];
+          x = 30;
+          row.forEach((val, j) => {
+            doc.rect(x, y, widths[j], 22).stroke();
+            doc.font("Helvetica").fontSize(8)
+              .text(String(val), x + 3, y + 7, { width: widths[j] - 6, align: "center" });
+            x += widths[j];
+          });
+          y += 22;
+          if (y > doc.page.height - 50) {
+            doc.addPage({ layout: "landscape" });
+            y = 60;
+          }
+        });
+
+        const totalBillAmt = results.reduce((s, r) => s + r.billAmt, 0);
+        const totalTaxable = results.reduce((s, r) => s + r.taxableAmt, 0);
+        const totalGst = results.reduce((s, r) => s + r.sgstAmt + r.cgstAmt + r.igstAmt, 0);
+
+        doc.moveDown(2);
+        doc.fontSize(12).font("Helvetica-Bold").text("Summary", { align: "center" });
+        doc.moveDown(0.5);
+        doc.fontSize(10).font("Helvetica")
+          .text(`Total Bill Amount: ₹${totalBillAmt.toFixed(2)}`, { align: "center" });
+        doc.text(`Total Taxable Amount: ₹${totalTaxable.toFixed(2)}`, { align: "center" });
+        doc.text(`Total GST Collected: ₹${totalGst.toFixed(2)}`, { align: "center" });
+        doc.text(`Total Records: ${results.length}`, { align: "center" });
+        doc.end();
+        return;
+      }
+
+      if (format === "excel") {
+        const workbook = new excelJS.Workbook();
+        const ws = workbook.addWorksheet("GST Register");
+
+        ws.columns = [
+          { header: "Bill No", key: "billNo", width: 18 },
+          { header: "Date", key: "date", width: 12 },
+          { header: "Party", key: "party", width: 28 },
+          { header: "GST No", key: "gstNo", width: 20 },
+          { header: "BB/BC", key: "bbbc", width: 8 },
+          { header: "HSN Code", key: "hsnCode", width: 14 },
+          { header: "Bill Amt", key: "billAmt", width: 14 },
+          { header: "Taxable Amt", key: "taxableAmt", width: 14 },
+          { header: "GST %", key: "gstPercentage", width: 12 },
+          { header: "SGST Amt", key: "sgstAmt", width: 12 },
+          { header: "CGST Amt", key: "cgstAmt", width: 12 },
+          { header: "IGST Amt", key: "igstAmt", width: 12 },
+        ];
+
+        results.forEach((r) => ws.addRow(r));
+
+        ws.addRow({});
+        ws.addRow({
+          party: "TOTAL",
+          billAmt: results.reduce((s, r) => s + r.billAmt, 0),
+          taxableAmt: results.reduce((s, r) => s + r.taxableAmt, 0),
+          sgstAmt: results.reduce((s, r) => s + r.sgstAmt, 0),
+          cgstAmt: results.reduce((s, r) => s + r.cgstAmt, 0),
+          igstAmt: results.reduce((s, r) => s + r.igstAmt, 0),
+        });
+
+        const headerRow = ws.getRow(1);
+        headerRow.font = { bold: true, color: { argb: "FFFFFFFF" } };
+        headerRow.fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FF343A40" } };
+        headerRow.alignment = { horizontal: "center", vertical: "middle" };
+
+        res.setHeader(
+          "Content-Type",
+          "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+        );
+        res.setHeader(
+          "Content-Disposition",
+          `attachment; filename=GST_Register_${new Date().toISOString().split("T")[0]}.xlsx`
+        );
+
+        workbook.xlsx.write(res).then(() => res.end());
+        return;
+      }
+
+      res.status(400).json({ error: "Invalid format (pdf / excel)" });
+    };
+
+    if (detailsQuery) {
+      db.query(detailsQuery, voucherIds, (err2, details) => {
+        if (err2) {
+          console.error("Error fetching details for download:", err2);
+          return res.status(500).json({ error: err2.message });
+        }
+        buildAndSend(details);
+      });
+    } else {
+      buildAndSend([]);
+    }
+  });
+});
+
+module.exports = router;
