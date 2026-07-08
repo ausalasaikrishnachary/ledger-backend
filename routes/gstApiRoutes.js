@@ -90,16 +90,17 @@ const router = express.Router();
 const axios = require('axios');
 const crypto = require('crypto');
 const fs = require('fs');
+const { getValidToken } = require('../gspAuth');
 require('dotenv').config();
 
 const USER_NAME = process.env.GSP_USERNAME;
 const PASSWORD = process.env.GSP_PASSWORD;
-const ACCESS_TOKEN = process.env.ACCESS_TOKEN;
 const GSP_URL = process.env.GSP_URL;
+const GSTIN = process.env.GSTIN;
 
 router.post('/gstin-details', async (req, res) => {
   const gstin = req.body?.gstin;
-
+const tokenData = await getValidToken();
   if (!gstin) {
     return res.status(400).json({
       success: false,
@@ -114,17 +115,17 @@ router.post('/gstin-details', async (req, res) => {
     console.log('GSTIN:', gstin);
     console.log('Username:', USER_NAME);
     console.log('Request ID:', requestid);
-    console.log('Token Present:', !!ACCESS_TOKEN);
+    console.log('Token Present:', !!tokenData.access_token);
 
     const response = await axios({
       method: 'GET',
       url: `${GSP_URL}/enriched/ei/api/master/gstin`,
       headers: {
-        Authorization: `Bearer ${ACCESS_TOKEN}`,
+        Authorization: `Bearer ${tokenData.access_token}`,
         Accept: 'application/json',
         user_name: USER_NAME,
         requestid: requestid,
-        GSTIN: "02AMBPG7773M002"
+        GSTIN: GSTIN
       },
       params: {
         gstin: gstin

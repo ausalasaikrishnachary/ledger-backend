@@ -3,7 +3,6 @@ const axios = require('axios');
 const crypto = require('crypto');
 const path = require('path'); // ✅ Add this
 const router = express.Router();
-// const fs = require('fs').promises;
 const fs = require('fs');
 const db = require('../db');
 const { getValidToken } = require('../gspAuth');

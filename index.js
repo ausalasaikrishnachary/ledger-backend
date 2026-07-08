@@ -47,7 +47,6 @@ const gspRoutes = require('./routes/gspRoutes');
 const irnRoutes = require('./routes/irnRoutes');
 const saleType = require('./routes/saleType');
 const gspAuth = require('./gspAuth');
-const tokenManager = require('./tokenManager');
 
 const { baseurl } = require('./baseUrl');
 const port = 5000;
@@ -137,13 +136,6 @@ gspAuth.setupCronJobs();
 gspAuth.testAuthentication().then(result => {
   if (result.success) {
     console.log('✅ GSP Authentication configured successfully');
-    
-    // Fetch and set the token in .env
-    tokenManager.fetchAndSetToken().then(token => {
-      if (token) {
-        console.log('✅ Token available in .env and memory');
-      }
-    });
   } else {
     console.log('⚠️ GSP Authentication test failed. Check your credentials.');
   }
