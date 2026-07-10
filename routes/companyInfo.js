@@ -149,6 +149,10 @@ router.post("/company-info", (req, res) => {
     state_code,
     location,
     address,
+    bank_name,
+    account_name,
+    account_number,
+    ifsc_code,
   } = req.body;
 
   db.query(
@@ -165,6 +169,10 @@ router.post("/company-info", (req, res) => {
       state_code,
       location,
       address,
+       bank_name,
+      account_name,
+      account_number,
+      ifsc_code,
     ],
     (err, result) => {
       if (err) {
@@ -193,6 +201,10 @@ router.put("/company-info/:id", (req, res) => {
     state_code,
     location,
     address,
+    bank_name,
+    account_name,
+    account_number,
+    ifsc_code,
   } = req.body;
 
   db.query(
@@ -209,6 +221,10 @@ router.put("/company-info/:id", (req, res) => {
       state_code,
       location,
       address,
+      bank_name,
+      account_name,
+      account_number,
+      ifsc_code,
       id,
     ],
     (err) => {
