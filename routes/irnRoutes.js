@@ -42,7 +42,7 @@ const accessToken = await getAccessToken();
           "Content-Type": "application/json",
           "user_name": USER_NAME,
           "password": PASSWORD,
-          "gstin": payload?.SellerDtls?.Gstin || "02AMBPG7773M002",
+          "gstin": payload?.SellerDtls?.Gstin,
           "requestid": `req_${Date.now()}`,
           "Authorization": `Bearer ${accessToken}`
         }
@@ -390,7 +390,7 @@ const accessToken = await getAccessToken();
           "Content-Type": "application/json",
           "user_name": USER_NAME,
           "password": PASSWORD,
-          "gstin": req.body.gstin || "02AMBPG7773M002",
+          "gstin": req.body.gstin ,
           "requestid": `req_${Date.now()}`,
           "Authorization": `Bearer ${accessToken}`
         }
@@ -524,7 +524,7 @@ const accessToken = await getAccessToken();
       'Content-Type': 'application/json',
       'user_name': USER_NAME,
       'password': PASSWORD,
-      'gstin': req.body.gstin || "02AMBPG7773M002",
+      'gstin': req.body.gstin ,
       'requestid': crypto.randomUUID(),
       'Authorization': `Bearer ${accessToken}`
     };
@@ -636,7 +636,7 @@ router.post('/cancel-ewaybill', async (req, res) => {
     //   // 'user_name': USER_NAME, // use for production
     //   'username': USER_NAME, // use for test environment
     //   'password': PASSWORD,
-    //   'gstin': req.body.gstin || "02AMBPG7773M002",
+    //   'gstin': req.body.gstin,
     //   'requestid': crypto.randomUUID(),
     //   'Authorization': `Bearer ${accessToken}`,
     //   'ctype': 'IRN' // use ctype only in test environment, remove in production
@@ -658,7 +658,7 @@ const headers = {
     : { user_name: USER_NAME }),   // Live Environment
 
   'password': PASSWORD,
-  'gstin': req.body.gstin || "02AMBPG7773M002",
+  'gstin': req.body.gstin,
   'requestid': crypto.randomUUID(),
   'Authorization': `Bearer ${accessToken}`,
 

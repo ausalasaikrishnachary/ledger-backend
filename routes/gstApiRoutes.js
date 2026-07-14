@@ -91,16 +91,40 @@ const axios = require('axios');
 const crypto = require('crypto');
 const fs = require('fs');
 const { getValidToken } = require('../gspAuth');
-require('dotenv').config();
+// require('dotenv').config();
 
-const USER_NAME = process.env.GSP_USERNAME;
-const PASSWORD = process.env.GSP_PASSWORD;
-const GSP_URL = process.env.GSP_URL;
-const GSTIN = process.env.GSTIN;
+const USER_NAME = process.env.GSP_USERNAME?.trim();
+const PASSWORD = process.env.GSP_PASSWORD?.trim();
+const GSTIN = process.env.GSTIN?.trim();
+const GSP_URL = process.env.GSP_URL?.trim();
+const APP_ID = process.env.GSP_APP_ID?.trim();
+const APP_SECRET = process.env.GSP_APP_SECRET?.trim();
+
+// console.log({
+//   USER_NAME,
+//   PASSWORD,
+//   GSP_URL,
+//   GSTIN
+// });
+
+async function getAccessToken() {
+  try {
+    const tokenData = await getValidToken();
+
+    if (!tokenData || !tokenData.access_token) {
+      throw new Error('No valid GSP token found');
+    }
+
+    return tokenData.access_token;
+  } catch (error) {
+    console.error('Error getting GSP token:', error.message);
+    throw error;
+  }
+}
 
 router.post('/gstin-details', async (req, res) => {
   const gstin = req.body?.gstin;
-const tokenData = await getValidToken();
+const accessToken = await getAccessToken();
   if (!gstin) {
     return res.status(400).json({
       success: false,
@@ -115,24 +139,36 @@ const tokenData = await getValidToken();
     console.log('GSTIN:', gstin);
     console.log('Username:', USER_NAME);
     console.log('Request ID:', requestid);
-    console.log('Token Present:', !!tokenData.access_token);
+    console.log('Token Present:', accessToken);
 
-    const response = await axios({
-      method: 'GET',
-      url: `${GSP_URL}/enriched/ei/api/master/gstin`,
-      headers: {
-        Authorization: `Bearer ${tokenData.access_token}`,
-        Accept: 'application/json',
-        user_name: USER_NAME,
-        requestid: requestid,
-        GSTIN: GSTIN
-      },
-      params: {
-        gstin: gstin
-      },
-      validateStatus: () => true
-    });
+    const response = await axios.get(
+  `${GSP_URL}/enriched/ei/api/master/gstin`,
+  {
+    params: {
+      gstin
+    },
+    headers: {
+      "Content-Type": "application/json",
+      "user_name": USER_NAME,
+      "password": PASSWORD,
+      "gstin": GSTIN,
+      "requestid": requestid,
+      "Authorization": `Bearer ${accessToken}`
+    },
+//      headers: {
+//   Authorization: `Bearer ${accessToken}`,
+//   Accept: 'application/json',
+//   'Content-Type': 'application/json',
+//   user_name: 'SHASHWATRAJ#MSA',
+//   password: 'Croma@0786',
+//   gstin: '10AAOCS1541B1ZZ',
+//   requestid: requestid
+// },
+    validateStatus: () => true
+  }
+);
 
+    console.log("headers:", response.config.headers);
     console.log('========== RESPONSE ==========');
     console.log('Status:', response.status);
     console.log(

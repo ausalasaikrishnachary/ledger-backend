@@ -142,7 +142,6 @@ async function authenticateAndGetToken() {
       }
       console.log('✓ GSP Token generated successfully');
       console.log('Token expires at:', formattedExpiresAt);
-      console.log('✓ .env file updated with new token');
 
       return {
         success: true,
@@ -270,8 +269,7 @@ function setupCronJobs() {
   console.log('🚀 Fetching initial token on startup...');
   setTimeout(async () => {
     await getValidToken();
-    console.log('✅ Token fetched and .env updated on startup');
-  }, 3000);
+  }, 3000); 
 
   console.log('✅ Cron jobs scheduled successfully');
   console.log('📅 Token check: Every 30 minutes');
