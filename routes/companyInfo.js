@@ -155,10 +155,11 @@ router.post("/company-info", (req, res) => {
     ifsc_code,
   } = req.body;
 
+  // FIX: Add bank fields to the INSERT query
   db.query(
     `INSERT INTO company_info 
-    (company_name, branch, email, phone, gstin, state, state_code, location, address)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    (company_name, branch, email, phone, gstin, state, state_code, location, address, bank_name, account_name, account_number, ifsc_code)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     [
       company_name,
       branch,
@@ -169,7 +170,7 @@ router.post("/company-info", (req, res) => {
       state_code,
       location,
       address,
-       bank_name,
+      bank_name,
       account_name,
       account_number,
       ifsc_code,
@@ -207,9 +208,10 @@ router.put("/company-info/:id", (req, res) => {
     ifsc_code,
   } = req.body;
 
+  // FIX: Add bank fields to the UPDATE query
   db.query(
     `UPDATE company_info 
-     SET company_name=?, branch=?, email=?, phone=?, gstin=?, state=?, state_code=?, location=?, address=?
+     SET company_name=?, branch=?, email=?, phone=?, gstin=?, state=?, state_code=?, location=?, address=?, bank_name=?, account_name=?, account_number=?, ifsc_code=?
      WHERE id=?`,
     [
       company_name,
