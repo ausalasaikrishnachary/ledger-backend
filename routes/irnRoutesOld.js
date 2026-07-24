@@ -3,30 +3,48 @@ const axios = require('axios');
 const crypto = require('crypto');
 const path = require('path'); // ✅ Add this
 const router = express.Router();
-const fs = require('fs').promises;
+const fs = require('fs');
 const db = require('../db');
+const { getValidToken } = require('../gspAuth');
 require('dotenv').config();
 
 const USER_NAME = process.env.GSP_USERNAME;
 const PASSWORD = process.env.GSP_PASSWORD;
-const ACCESS_TOKEN = process.env.ACCESS_TOKEN;
+// const ACCESS_TOKEN = process.env.ACCESS_TOKEN;
+const GSP_URL = process.env.GSP_URL;
+
+async function getAccessToken() {
+  try {
+    const tokenData = await getValidToken();
+
+    if (!tokenData || !tokenData.access_token) {
+      throw new Error('No valid GSP token found');
+    }
+
+    return tokenData.access_token;
+  } catch (error) {
+    console.error('Error getting GSP token:', error.message);
+    throw error;
+  }
+}
 
 
 router.post("/generate-irn", async (req, res) => {
   try {
     const { payload } = req.body;
+const accessToken = await getAccessToken();
 
     const response = await axios.post(
-      "https://gsp.adaequare.com/test/enriched/ei/api/invoice",
+      `${GSP_URL}/enriched/ei/api/invoice`,
       payload,
       {
         headers: {
           "Content-Type": "application/json",
           "user_name": USER_NAME,
           "password": PASSWORD,
-          "gstin": payload?.SellerDtls?.Gstin || "02AMBPG7773M002",
+          "gstin": payload?.SellerDtls?.Gstin,
           "requestid": `req_${Date.now()}`,
-          "Authorization": `Bearer ${ACCESS_TOKEN}`
+          "Authorization": `Bearer ${accessToken}`
         }
       }
     );
@@ -52,420 +70,662 @@ router.post("/generate-irn", async (req, res) => {
   }
 });
 
-
-// router.post("/generate-irn", async (req, res) => {
+// router.post('/generate-qr-image', async (req, res) => {
 //   try {
 //     const {
-//       payload,
-//       username,
-//       password,
+//       signedQrCode,
 //       gstin,
-//       accessToken
+//       invoiceCode
 //     } = req.body;
 
-//     // Debug
-//     console.log("GSTIN:", gstin);
-//     console.log("Seller GSTIN:", payload?.SellerDtls?.Gstin);
-//     console.log("Barcde Type:", typeof payload?.ItemList?.[0]?.Barcde);
-
-//     // Convert fields that Adaequare expects as strings
-//     if (payload?.ItemList?.length) {
-//       payload.ItemList = payload.ItemList.map(item => ({
-//         ...item,
-//         HsnCd: String(item.HsnCd || ""),
-//         Barcde: String(item.Barcde || ""),
-//         PrdSlNo: String(item.PrdSlNo || ""),
-//         OrdLineRef: String(item.OrdLineRef || ""),
-//         PrdDesc: String(item.PrdDesc || ""),
-//         Unit: String(item.Unit || "")
-//       }));
+//     if (!signedQrCode) {
+//       return res.status(400).json({
+//         success: false,
+//         message: 'signedQrCode is required'
+//       });
 //     }
-
+// const accessToken = await getAccessToken();
 //     const response = await axios.post(
-//       "https://gsp.adaequare.com/test/enriched/ei/api/invoice",
-//       payload,
+//       `${GSP_URL}/enriched/ei/others/qr/image`,
+//       signedQrCode,
 //       {
+//         responseType: 'arraybuffer',
 //         headers: {
-//           "Content-Type": "application/json",
-//           "user_name": username,
-//           "password": password,
-//           // "gstin": gstin || payload?.SellerDtls?.Gstin,
-//           "gstin": "02AMBPG7773M002",
-
-//           "requestid": `req_${Date.now()}`,
-//           "Authorization": `Bearer ${accessToken}`
+//           'Content-Type': 'text/plain',
+//           'user_name': USER_NAME,
+//           'password': PASSWORD,
+//           'gstin': gstin,
+//           'requestid': `req_${Date.now()}`,
+//           'Authorization': `Bearer ${accessToken}`,
+//           'width': '300',
+//           'height': '300',
+//           'imgtype': 'jpg'
 //         }
 //       }
 //     );
 
-//     console.log("IRN Success:", response.data);
+// const invoiceDir = path.join(__dirname, '../invoice');
 
-//     return res.status(200).json(response.data);
+// if (!fs.existsSync(invoiceDir)) {
+//   fs.mkdirSync(invoiceDir, { recursive: true });
+// }
+
+// const fileName = `${invoiceCode}.jpg`;
+// const filePath = path.join(invoiceDir, fileName);
+
+// fs.writeFileSync(filePath, response.data);
+
+// res.status(200).json({
+//   success: true,
+//   message: 'QR image generated successfully',
+//   fileName,
+//   filePath,
+//   imageUrl: `http://localhost:5000/invoice/${fileName}`
+// });
 
 //   } catch (error) {
 //     console.error(
-//       "IRN Error:",
+//       'QR Image Error:',
 //       error.response?.data || error.message
 //     );
 
-//     return res.status(error.response?.status || 500).json({
+//     res.status(error.response?.status || 500).json({
 //       success: false,
 //       message:
 //         error.response?.data?.message ||
 //         error.message ||
-//         "Failed to generate IRN",
-//       error: error.response?.data || null
+//         'Failed to generate QR image'
 //     });
 //   }
 // });
 
+router.post('/generate-qr-image', async (req, res) => {
+  try {
+    const { signedQrCode, gstin, invoiceCode } = req.body;
+
+    console.log("=== QR REQUEST ===");
+    console.log("GSTIN:", gstin);
+    console.log("Invoice Code:", invoiceCode);
+    console.log("Signed QR Exists:", !!signedQrCode);
+
+    if (!signedQrCode) {
+      return res.status(400).json({
+        success: false,
+        message: 'signedQrCode is required'
+      });
+    }
+const accessToken = await getAccessToken();
+    const qrResponse = await axios.post(
+      `${GSP_URL}/enriched/ei/others/qr/image`,
+      signedQrCode,
+      {
+        responseType: 'arraybuffer',
+        headers: {
+          'Content-Type': 'text/plain',
+          user_name: USER_NAME,
+          password: PASSWORD,
+          gstin: gstin,
+          requestid: `req_${Date.now()}`,
+          Authorization: `Bearer ${accessToken}`,
+          width: '300',
+          height: '300',
+          imgtype: 'jpg'
+        }
+      }
+    );
+
+    // Always save inside project root invoice folder
+    const invoiceDir = path.resolve(process.cwd(), 'invoice');
+
+    console.log("Invoice Directory:", invoiceDir);
+
+    if (!fs.existsSync(invoiceDir)) {
+      fs.mkdirSync(invoiceDir, { recursive: true });
+    }
+
+    const safeInvoiceCode =
+      String(invoiceCode || `QR_${Date.now()}`)
+        .replace(/[<>:"/\\|?*]/g, "_");
+
+    const fileName = `${safeInvoiceCode}.jpg`;
+    const filePath = path.join(invoiceDir, fileName);
+
+    fs.writeFileSync(filePath, qrResponse.data);
+
+    console.log("QR Saved:", filePath);
+    console.log("Exists:", fs.existsSync(filePath));
+
+    return res.status(200).json({
+      success: true,
+      message: 'QR image generated successfully',
+      fileName,
+      filePath,
+      imageUrl: `${req.protocol}://${req.get('host')}/invoice/${fileName}`
+    });
+
+  } catch (error) {
+
+    console.error("=== QR IMAGE ERROR ===");
+
+    if (error.response) {
+      console.error("Status:", error.response.status);
+      console.error("Data:", error.response.data);
+    }
+
+    console.error("Message:", error.message);
+    console.error("Stack:", error.stack);
+
+    return res.status(500).json({
+      success: false,
+      message: error.message
+    });
+  }
+});
+
+router.get("/test-image", (req, res) => {
+  const filePath = path.join(
+    process.cwd(),
+    "invoice",
+    "SSA_000010_26-27.jpg"
+  );
+
+  res.json({
+    exists: fs.existsSync(filePath),
+    filePath
+  });
+});
+
+// Update invoice with IRN details
+router.put('/update-invoice-irn', async (req, res) => {
+  try {
+    const {
+      invoiceNumber,
+      branch_code,
+      ack_no,
+      ack_date,
+      irn_no,
+      signed_qr_code,
+      signed_invoice,
+      qr_image,
+      e_way_bill_no,
+      e_way_bill_date,
+      e_way_bill_valid_till,
+      IRNgenerated_status
+    } = req.body;
+
+    // Validate required fields
+    if (!invoiceNumber) {
+      return res.status(400).json({
+        success: false,
+        message: 'Invoice number is required'
+      });
+    }
+
+    // Check if invoice exists
+    const checkQuery = 'SELECT VoucherID FROM voucher WHERE InvoiceNumber = ?';
+    db.query(checkQuery, [invoiceNumber], (err, results) => {
+      if (err) {
+        console.error('Error checking invoice:', err);
+        return res.status(500).json({
+          success: false,
+          message: 'Database error while checking invoice'
+        });
+      }
+
+      if (results.length === 0) {
+        return res.status(404).json({
+          success: false,
+          message: `Invoice ${invoiceNumber} not found`
+        });
+      }
+
+      // Build update query dynamically
+      let updateFields = [];
+      let updateValues = [];
+
+      // Only add fields that are provided and not null/undefined
+      const fieldsToUpdate = {
+        branch_code,
+        ack_no,
+        ack_date,
+        irn_no,
+        signed_qr_code,
+        signed_invoice,
+        qr_image,
+        e_way_bill_no,
+        e_way_bill_date,
+        e_way_bill_valid_till,
+        IRNgenerated_status
+      };
+
+      Object.entries(fieldsToUpdate).forEach(([key, value]) => {
+        if (value !== undefined && value !== null) {
+          updateFields.push(`${key} = ?`);
+          updateValues.push(value);
+        }
+      });
+
+      // If no fields to update, return error
+      if (updateFields.length === 0) {
+        return res.status(400).json({
+          success: false,
+          message: 'No fields to update'
+        });
+      }
+
+      // Add invoice number to values array for WHERE clause
+      updateValues.push(invoiceNumber);
+
+      const updateQuery = `
+        UPDATE voucher 
+        SET ${updateFields.join(', ')} 
+        WHERE InvoiceNumber = ?
+      `;
+
+      console.log('Update Query:', updateQuery);
+      console.log('Update Values:', updateValues);
+
+      db.query(updateQuery, updateValues, (err, result) => {
+        if (err) {
+          console.error('Error updating invoice:', err);
+          return res.status(500).json({
+            success: false,
+            message: 'Database error while updating invoice'
+          });
+        }
+
+        // Fetch the updated record
+        const selectQuery = 'SELECT * FROM voucher WHERE InvoiceNumber = ?';
+        db.query(selectQuery, [invoiceNumber], (err, updatedResults) => {
+          if (err) {
+            console.error('Error fetching updated invoice:', err);
+            return res.status(500).json({
+              success: false,
+              message: 'Invoice updated but failed to fetch updated data'
+            });
+          }
+
+          res.status(200).json({
+            success: true,
+            message: 'Invoice IRN details updated successfully',
+            data: updatedResults[0]
+          });
+        });
+      });
+    });
+
+  } catch (error) {
+    console.error('Error updating invoice IRN:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Internal server error: ' + error.message
+    });
+  }
+});
+
+// CANCEL E-INVOICE API
+router.post("/cancel-irn", async (req, res) => {
+  try {
+    const { irn, cnlrsn, cnlrem } = req.body;
+
+    // Validate required fields
+    if (!irn) {
+      return res.status(400).json({
+        success: false,
+        message: "IRN is required for cancellation"
+      });
+    }
+
+    const payload = {
+      Irn: irn,
+      Cnlrsn: cnlrsn || "1",
+      Cnlrem: cnlrem || "Cancelled by user"
+    };
+const accessToken = await getAccessToken();
+    const response = await axios.post(
+      `${GSP_URL}/enriched/ei/api/invoice/cancel`,
+      payload,
+      {
+        headers: {
+          "Content-Type": "application/json",
+          "user_name": USER_NAME,
+          "password": PASSWORD,
+          "gstin": req.body.gstin ,
+          "requestid": `req_${Date.now()}`,
+          "Authorization": `Bearer ${accessToken}`
+        }
+      }
+    );
+
+    console.log("IRN Cancellation Success:", response.data);
+
+    res.status(200).json({
+      success: true,
+      data: response.data,
+      message: "E-Invoice cancelled successfully"
+    });
+
+  } catch (error) {
+    console.error(
+      "IRN Cancellation Error:",
+      error.response?.data || error.message
+    );
+
+    res.status(error.response?.status || 500).json({
+      success: false,
+      message:
+        error.response?.data?.message ||
+        error.message ||
+        "Failed to cancel e-invoice",
+      error: error.response?.data || null
+    });
+  }
+});
+
+// Get invoice IRN status
+router.get('/invoice-irn-status/:invoiceNumber', async (req, res) => {
+  try {
+    // Decode the invoice number from URL
+    const invoiceNumber = decodeURIComponent(req.params.invoiceNumber);
+
+    if (!invoiceNumber) {
+      return res.status(400).json({
+        success: false,
+        message: 'Invoice number is required'
+      });
+    }
+
+    console.log('Fetching IRN status for invoice:', invoiceNumber);
+
+    const query = `
+      SELECT 
+        VoucherID,
+        InvoiceNumber,
+        irn_no,
+        IRNgenerated_status,
+        ack_no,
+        ack_date,
+        signed_qr_code,
+        qr_image,
+        e_way_bill_no,
+        e_way_bill_date,
+        e_way_bill_valid_till
+      FROM voucher 
+      WHERE InvoiceNumber = ?
+    `;
+
+    db.query(query, [invoiceNumber], (err, results) => {
+      if (err) {
+        console.error('Error fetching IRN status:', err);
+        return res.status(500).json({
+          success: false,
+          message: 'Database error: ' + err.message
+        });
+      }
+
+      if (results.length === 0) {
+        return res.status(404).json({
+          success: false,
+          message: `Invoice ${invoiceNumber} not found`
+        });
+      }
+
+      res.status(200).json({
+        success: true,
+        data: results[0]
+      });
+    });
+
+  } catch (error) {
+    console.error('Error fetching IRN status:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Internal server error: ' + error.message
+    });
+  }
+});
 
 
-// // Helper function to promisify db queries
-// const queryAsync = (sql, params) => {
-//     return new Promise((resolve, reject) => {
-//         db.query(sql, params, (err, results) => {
-//             if (err) reject(err);
-//             else resolve(results);
-//         });
-//     });
-// };
+router.post('/generate-ewaybill', async (req, res) => {
+  try {
+    console.log("Request Bodys:", req.body);
 
-// // Middleware to check authentication
-// const authMiddleware = async (req, res, next) => {
-//     const token = req.headers.authorization?.split(' ')[1];
-//     if (!token) {
-//         return res.status(401).json({ error: 'No token provided' });
-//     }
-//     req.access_token = token;
-//     next();
-// };
+    const {
+      invoiceId,
+      irn_no,
+      transId,
+      transName,
+      transDocNo,
+      vehicleNo,
+      vehicleType,
+      distance,
+      transMode
+    } = req.body;
 
-// // Generate IRN endpoint
-// router.post('/generate-irn', authMiddleware, async (req, res) => {
-//     try {
-//         const {
-//             username,
-//             password,
-//             invoiceId,
-//             branchId,
-//             sellerGstin
-//         } = req.body;
+    // Current Date in DD/MM/YYYY format
+    const currentDate = new Date().toLocaleDateString('en-GB');
 
-//         const access_token = req.access_token;
+    // Request payload
+    const payload = {
+      Irn: irn_no,
+      Distance: distance,
+      TransMode: transMode,
+      TransId: transId,
+      TransName: transName,
+      TransDocDt: currentDate,
+      TransDocNo: transDocNo,
+      VehNo: vehicleNo,
+      VehType: vehicleType
+    };
 
-//         // Fetch invoice details
-//         const invoiceRows = await queryAsync(
-//             'SELECT * FROM invoice WHERE id = ?',
-//             [invoiceId]
-//         );
+const accessToken = await getAccessToken();
+    // Headers
+    const headers = {
+      'Content-Type': 'application/json',
+      'user_name': USER_NAME,
+      'password': PASSWORD,
+      'gstin': req.body.gstin ,
+      'requestid': crypto.randomUUID(),
+      'Authorization': `Bearer ${accessToken}`
+    };
 
-//         if (invoiceRows.length === 0) {
-//             return res.status(404).json({ error: 'No invoice found' });
-//         }
 
-//         const invoice = invoiceRows[0];
-//         const invoice_code = invoice.invoice_code;
-//         const customer_id = invoice.customer_id;
+    const response = await axios.post(
+      `${GSP_URL}/enriched/ei/api/ewaybill`,
+      payload,
+      { headers }
+    );
 
-//         // Fetch branch details (Seller)
-//         const sellerRows = await queryAsync(
-//             'SELECT * FROM add_branch WHERE branch_id = ?',
-//             [branchId]
-//         );
+    console.log(
+      "GSP Response:",
+      JSON.stringify(response.data, null, 2)
+    );
 
-//         if (sellerRows.length === 0) {
-//             return res.status(404).json({ error: 'Seller branch not found' });
-//         }
+    // Check success
+    if (!response.data.success) {
+      return res.status(400).json(response.data);
+    }
 
-//         const seller = sellerRows[0];
-//         const SellerDtls = {
-//             Gstin: seller.GST,
-//             LglNm: seller.branch_name,
-//             TrdNm: seller.branch_name,
-//             Pos: '12',
-//             Addr1: seller.address_line1,
-//             Addr2: seller.address_line2,
-//             Loc: seller.city,
-//             Pin: seller.pincode,
-//             Stcd: seller.state_code,
-//             Ph: seller.phone_number,
-//             Em: seller.email
-//         };
+    const result = response.data.result;
 
-//         // Fetch product details
-//         const productRows = await queryAsync(
-//             'SELECT * FROM invoice_items WHERE invoice_id = ?',
-//             [invoiceId]
-//         );
+    // Update Invoice Table
+    const sql = `
+            UPDATE voucher
+            SET
+                e_way_bill_no = ?,
+                e_way_bill_date = ?,
+                e_way_bill_valid_till = ?,
+                e_way_bill_status = 'Generated'
+            WHERE InvoiceNumber = ?
+        `;
 
-//         let ItemList = [];
-//         let AssVal = 0;
-//         let CgstVal = 0;
-//         let SgstVal = 0;
-//         let IgstVal = 0;
-//         let CesVal = 0;
-//         let StCesVal = 0;
-//         let Discount = 0;
+    db.query(
+      sql,
+      [
+        result.EwbNo,
+        result.EwbDt,
+        result.EwbValidTill,
+        invoiceId
+      ],
+      (err, dbResult) => {
+        if (err) {
+          console.error("DB Update Error:", err);
+          return res.status(500).json({
+            success: false,
+            message: "Database update failed",
+            error: err.message
+          });
+        }
 
-//         for (const product of productRows) {
-//             ItemList.push({
-//                 SlNo: "43" + product.id,
-//                 PrdDesc: product.product,
-//                 IsServc: 'N',
-//                 HsnCd: "1001",
-//                 Barcde: "123456",
-//                 Qty: parseFloat(product.qty),
-//                 FreeQty: 0,
-//                 Unit: 'PCS',
-//                 UnitPrice: parseFloat(product.price),
-//                 TotAmt: parseFloat(product.line_total).toFixed(2),
-//                 Discount: parseFloat(product.discount),
-//                 PreTaxVal: 0,
-//                 AssAmt: (parseFloat(product.line_total) - parseFloat(product.discount)).toFixed(2),
-//                 GstRt: parseFloat(product.gst),
-//                 IgstAmt: parseFloat(product.igst),
-//                 CgstAmt: 0,
-//                 SgstAmt: 0,
-//                 CesRt: parseFloat(product.cess_rate),
-//                 CesAmt: parseFloat(product.cess_amount),
-//                 CesNonAdvlAmt: 0,
-//                 StateCesRt: 0,
-//                 StateCesAmt: 0,
-//                 StateCesNonAdvlAmt: 0,
-//                 OthChrg: 0,
-//                 TotItemVal: (parseFloat(product.cgst) + parseFloat(product.sgst) + 
-//                             parseFloat(product.igst) + parseFloat(product.line_total) - 
-//                             parseFloat(product.discount)).toFixed(2),
-//                 OrgCntry: 'IN'
-//             });
+        console.log("DB Update Result:", dbResult);
 
-//             AssVal += parseFloat(product.line_total) - parseFloat(product.discount);
-//             CgstVal += parseFloat(product.cgst);
-//             SgstVal += parseFloat(product.sgst);
-//             IgstVal += parseFloat(product.igst);
-//             CesVal += parseFloat(product.cess_amount);
-//             StCesVal += parseFloat(product.cess_amount);
-//             Discount += parseFloat(product.discount);
-//         }
+        if (dbResult.affectedRows === 0) {
+          return res.status(404).json({
+            success: false,
+            message: `No invoice found with InvoiceNumber: ${invoiceId}`
+          });
+        }
 
-//         // Fetch customer details
-//         const customerRows = await queryAsync(
-//             `SELECT c.*, a.* FROM customer_master c 
-//              JOIN address_master a ON a.customer_master_id = c.id  
-//              WHERE c.id = ?`,
-//             [customer_id]
-//         );
+        return res.status(200).json({
+          success: true,
+          message: "E-Way Bill generated successfully",
+          ewaybill: result
+        });
+      }
+    );
 
-//         if (customerRows.length === 0) {
-//             return res.status(404).json({ error: 'Customer not found' });
-//         }
+  } catch (error) {
+    console.error(
+      "E-Way Bill Error:",
+      JSON.stringify(error.response?.data, null, 2)
+    );
 
-//         const buyer = customerRows[0];
-//         const BuyerDtls = {
-//             Gstin: buyer.gstin,
-//             LglNm: buyer.gst_reg_name,
-//             TrdNm: buyer.business_name,
-//             Pos: '12',
-//             Addr1: buyer.s_address_line1,
-//             Addr2: buyer.s_address_line2,
-//             Loc: buyer.s_city,
-//             Pin: buyer.s_Pincode,
-//             Stcd: buyer.state_code,
-//             Ph: buyer.mobile,
-//             Em: buyer.email
-//         };
+    return res.status(
+      error.response?.status || 500
+    ).json({
+      success: false,
+      message: error.response?.data?.error_description ||
+        error.response?.data?.message ||
+        error.message
+    });
+  }
+});
 
-//         // Calculate totals
-//         const TotInvVal = (AssVal + CgstVal + SgstVal + IgstVal + CesVal + StCesVal + Discount + 0.3).toFixed(2);
-//         const TotInvValFc = (AssVal + CgstVal + SgstVal + IgstVal + CesVal + StCesVal + Discount - 10).toFixed(2);
+router.post('/cancel-ewaybill', async (req, res) => {
+  try {
 
-//         const ValDtls = {
-//             AssVal: parseFloat(AssVal).toFixed(2),
-//             CgstVal: parseFloat(CgstVal).toFixed(2),
-//             SgstVal: parseFloat(SgstVal).toFixed(2),
-//             IgstVal: parseFloat(IgstVal).toFixed(2),
-//             CesVal: parseFloat(CesVal).toFixed(2),
-//             StCesVal: parseFloat(StCesVal).toFixed(2),
-//             Discount: parseFloat(Discount).toFixed(2),
-//             OthChrg: 0,
-//             RndOffAmt: 0.3,
-//             TotInvVal: TotInvVal,
-//             TotInvValFc: TotInvValFc
-//         };
+    const accessToken = await getAccessToken();
 
-//         const EwbDtls = {
-//             Transid: null,
-//             Transname: null,
-//             Distance: 0,
-//             Transdocno: null,
-//             TransdocDt: null,
-//             Vehno: 'KA123456',
-//             Vehtype: 'R',
-//             TransMode: '1'
-//         };
+    const {
+      invoiceId,
+      ewbNo,
+      cancelRsnCode = "4",
+      cancelRmrk = "Other"
+    } = req.body;
 
-//         // Prepare data for IRN Generation
-//         const data = {
-//             Version: '1.1',
-//             TranDtls: {
-//                 TaxSch: 'GST',
-//                 SupTyp: 'B2B',
-//                 RegRev: 'N',
-//                 EcmGstin: null,
-//                 IgstOnIntra: 'N'
-//             },
-//             DocDtls: {
-//                 Typ: 'INV',
-//                 No: 'IRN' + crypto.randomBytes(16).toString('hex'),
-//                 Dt: new Date().toLocaleDateString('en-GB')
-//             },
-//             SellerDtls,
-//             BuyerDtls,
-//             ItemList,
-//             ValDtls,
-//             EwbDtls
-//         };
+    const payload = {
+      ewbNo: Number(ewbNo),
+      cancelRsnCode: 4,
+      cancelRmrk: "Other"
+    };
 
-//         // Send IRN Generation Request
-//         const irnGenerationUrl = "https://gsp.adaequare.com/test/enriched/ei/api/invoice";
-        
-//         const irnResponse = await axios.post(irnGenerationUrl, data, {
-//             headers: {
-//                 'Content-Type': 'application/json',
-//                 'user_name': username,
-//                 'password': password,
-//                 'gstin': sellerGstin,
-//                 'requestid': crypto.randomBytes(16).toString('hex'),
-//                 'Authorization': `Bearer ${access_token}`
-//             }
-//         });
+    console.log("Cancel EWB Payload:", payload);
 
-//         const irnResponseBody = irnResponse.data;
+    // const headers = {
+    //   'Content-Type': 'application/json',
+    //   // 'user_name': USER_NAME, // use for production
+    //   'username': USER_NAME, // use for test environment
+    //   'password': PASSWORD,
+    //   'gstin': req.body.gstin,
+    //   'requestid': crypto.randomUUID(),
+    //   'Authorization': `Bearer ${accessToken}`,
+    //   'ctype': 'IRN' // use ctype only in test environment, remove in production
+    // };
 
-//         if (irnResponseBody.result && irnResponseBody.result.Irn) {
-//             const IRN = irnResponseBody.result.Irn;
-            
-//             // Generate QR code image
-//             const qrUrl = "https://gsp.adaequare.com/test/enriched/ei/others/qr/image";
-//             const qrResponse = await axios.post(qrUrl, irnResponseBody.result.SignedQRCode, {
-//                 headers: {
-//                     'Content-Type': 'text/plain',
-//                     'user_name': username,
-//                     'password': password,
-//                     'gstin': sellerGstin,
-//                     'requestid': crypto.randomBytes(16).toString('hex'),
-//                     'Authorization': `Bearer ${access_token}`,
-//                     'width': '300',
-//                     'height': '300',
-//                     'imgtype': 'jpg'
-//                 },
-//                 responseType: 'arraybuffer'
-//             });
+    // const response = await axios.post(
+    //   `${GSP_URL}/enriched/ewb/ewayapi?action=CANEWB`,
+    //   payload,
+    //   { headers }
+    // );
 
-//             // Create invoices directory if it doesn't exist
-//             const invoicesDir = path.join(__dirname, '..', 'invoices');
-//             await fs.mkdir(invoicesDir, { recursive: true });
-//             const filePath = `invoices/${invoice_code}.jpg`;
-//             const fullFilePath = path.join(__dirname, '..', filePath);
-//             await fs.writeFile(fullFilePath, qrResponse.data);
+    const isTestEnv = GSP_URL.includes('/test');
 
-//             // Update database
-//             const updateSql = `UPDATE invoice SET 
-//                 IRNgenerated_status = 'Yes',
-//                 qr_image = ?,
-//                 ack_no = ?,
-//                 ack_date = ?,
-//                 irn_no = ?,
-//                 signed_qr_code = ?,
-//                 signed_invoice = ?,
-//                 e_way_bill_no = ?,
-//                 e_way_bill_date = ?,
-//                 e_way_bill_valid_till = ?
-//                 WHERE id = ?`;
+// Headers
+const headers = {
+  'Content-Type': 'application/json',
+  ...(isTestEnv
+    ? { username: USER_NAME }      // Test Environment
+    : { user_name: USER_NAME }),   // Live Environment
 
-//             await queryAsync(updateSql, [
-//                 filePath,
-//                 irnResponseBody.result.AckNo,
-//                 irnResponseBody.result.AckDt,
-//                 IRN,
-//                 irnResponseBody.result.SignedQRCode,
-//                 irnResponseBody.result.SignedInvoice,
-//                 irnResponseBody.result.EwbNo || null,
-//                 irnResponseBody.result.EwbDt || null,
-//                 irnResponseBody.result.EwbValidTill || null,
-//                 invoiceId
-//             ]);
+  'password': PASSWORD,
+  'gstin': req.body.gstin,
+  'requestid': crypto.randomUUID(),
+  'Authorization': `Bearer ${accessToken}`,
 
-//             // Fetch updated record
-//             const updatedRows = await queryAsync(
-//                 'SELECT * FROM invoice WHERE id = ?',
-//                 [invoiceId]
-//             );
+  // Add ctype only for test environment
+  ...(isTestEnv && { ctype: 'IRN' })
+};
 
-//             res.json({
-//                 success: true,
-//                 message: 'IRN created successfully',
-//                 data: updatedRows[0]
-//             });
-//         } else {
-//             res.status(400).json({ 
-//                 error: 'Error generating IRN', 
-//                 message: irnResponseBody.message || 'Unknown error'
-//             });
-//         }
-//     } catch (error) {
-//         console.error('Error:', error.response?.data || error.message);
-//         res.status(500).json({ 
-//             error: 'API Error', 
-//             message: error.response?.data || error.message 
-//         });
-//     }
-// });
+// API URL
+const apiUrl = isTestEnv
+  ? `${GSP_URL}/enriched/ewb/ewayapi?action=CANEWB`
+  : `${GSP_URL}/enriched/ei/api/ewayapi`;
 
-// // Get invoice details endpoint
-// router.get('/invoice/:id', async (req, res) => {
-//     try {
-//         const rows = await queryAsync(
-//             'SELECT * FROM invoice WHERE id = ?',
-//             [req.params.id]
-//         );
-        
-//         if (rows.length === 0) {
-//             return res.status(404).json({ error: 'Invoice not found' });
-//         }
-        
-//         res.json({ success: true, data: rows[0] });
-//     } catch (error) {
-//         console.error('Error:', error);
-//         res.status(500).json({ error: error.message });
-//     }
-// });
+const response = await axios.post(
+  apiUrl,
+  payload,
+  { headers }
+);
 
-// // Get branches for dropdown
-// router.get('/branches', async (req, res) => {
-//     try {
-//         const rows = await queryAsync('SELECT branch_id, branch_name, GST FROM add_branch', []);
-//         res.json({ success: true, data: rows });
-//     } catch (error) {
-//         console.error('Error:', error);
-//         res.status(500).json({ error: error.message });
-//     }
-// });
+    
 
-// // Get customers for dropdown
-// router.get('/customers', async (req, res) => {
-//     try {
-//         const rows = await queryAsync(
-//             'SELECT c.id, c.business_name, c.gstin FROM customer_master c', 
-//             []
-//         );
-//         res.json({ success: true, data: rows });
-//     } catch (error) {
-//         console.error('Error:', error);
-//         res.status(500).json({ error: error.message });
-//     }
-// });
+    console.log(
+      "Cancel EWB Response:",
+      JSON.stringify(response.data, null, 2)
+    );
 
+    if (!response.data.success) {
+      return res.status(400).json(response.data);
+    }
+
+    db.query(
+      `UPDATE voucher
+       SET e_way_bill_status = 'Cancelled'
+       WHERE InvoiceNumber = ?`,
+      [invoiceId],
+      (err) => {
+
+        if (err) {
+          return res.status(500).json({
+            success: false,
+            message: "Database update failed"
+          });
+        }
+
+        return res.status(200).json({
+          success: true,
+          message: "E-Way Bill cancelled successfully"
+        });
+
+      }
+    );
+
+  } catch (error) {
+
+    console.error(
+      "Cancel EWB Error:",
+      JSON.stringify(error.response?.data, null, 2)
+    );
+
+    return res.status(
+      error.response?.status || 500
+    ).json({
+      success: false,
+      message:
+        error.response?.data?.message ||
+        error.message
+    });
+  }
+});
 
 module.exports = router;

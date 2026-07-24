@@ -90,11 +90,10 @@ const router = express.Router();
 const axios = require('axios');
 const crypto = require('crypto');
 const fs = require('fs');
+const db = require('../db');
 const { getValidToken } = require('../gspAuth');
-// require('dotenv').config();
+require('dotenv').config();
 
-const USER_NAME = process.env.GSP_USERNAME?.trim();
-const PASSWORD = process.env.GSP_PASSWORD?.trim();
 const GSTIN = process.env.GSTIN?.trim();
 const GSP_URL = process.env.GSP_URL?.trim();
 const APP_ID = process.env.GSP_APP_ID?.trim();
@@ -122,9 +121,40 @@ async function getAccessToken() {
   }
 }
 
+async function getGspCredentials() {
+  return new Promise((resolve, reject) => {
+    db.query(
+      `SELECT username, password
+       FROM gsp_credentials
+       WHERE is_active = 1
+       LIMIT 1`,
+      (err, result) => {
+        if (err) return reject(err);
+
+        if (!result.length) {
+          return reject(new Error("GSP credentials not found."));
+        }
+
+        resolve({
+          USER_NAME: result[0].username.trim(),
+          PASSWORD: result[0].password.trim()
+        });
+      }
+    );
+  });
+}
+
 router.post('/gstin-details', async (req, res) => {
   const gstin = req.body?.gstin;
-const accessToken = await getAccessToken();
+
+  const accessToken = await getAccessToken();
+
+  const {
+    USER_NAME,
+    PASSWORD
+  } = await getGspCredentials();
+
+
   if (!gstin) {
     return res.status(400).json({
       success: false,
@@ -142,31 +172,31 @@ const accessToken = await getAccessToken();
     console.log('Token Present:', accessToken);
 
     const response = await axios.get(
-  `${GSP_URL}/enriched/ei/api/master/gstin`,
-  {
-    params: {
-      gstin
-    },
-    headers: {
-      "Content-Type": "application/json",
-      "user_name": USER_NAME,
-      "password": PASSWORD,
-      "gstin": GSTIN,
-      "requestid": requestid,
-      "Authorization": `Bearer ${accessToken}`
-    },
-//      headers: {
-//   Authorization: `Bearer ${accessToken}`,
-//   Accept: 'application/json',
-//   'Content-Type': 'application/json',
-//   user_name: 'SHASHWATRAJ#MSA',
-//   password: 'Croma@0786',
-//   gstin: '10AAOCS1541B1ZZ',
-//   requestid: requestid
-// },
-    validateStatus: () => true
-  }
-);
+      `${GSP_URL}/enriched/ei/api/master/gstin`,
+      {
+        params: {
+          gstin
+        },
+        headers: {
+          "Content-Type": "application/json",
+          "user_name": USER_NAME,
+          "password": PASSWORD,
+          "gstin": GSTIN,
+          "requestid": requestid,
+          "Authorization": `Bearer ${accessToken}`
+        },
+        //      headers: {
+        //   Authorization: `Bearer ${accessToken}`,
+        //   Accept: 'application/json',
+        //   'Content-Type': 'application/json',
+        //   user_name: 'SHASHWATRAJ#MSA',
+        //   password: 'Croma@0786',
+        //   gstin: '10AAOCS1541B1ZZ',
+        //   requestid: requestid
+        // },
+        validateStatus: () => true
+      }
+    );
 
     console.log("headers:", response.config.headers);
     console.log('========== RESPONSE ==========');

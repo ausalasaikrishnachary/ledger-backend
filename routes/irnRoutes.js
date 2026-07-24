@@ -8,10 +8,34 @@ const db = require('../db');
 const { getValidToken } = require('../gspAuth');
 require('dotenv').config();
 
-const USER_NAME = process.env.GSP_USERNAME;
-const PASSWORD = process.env.GSP_PASSWORD;
-// const ACCESS_TOKEN = process.env.ACCESS_TOKEN;
 const GSP_URL = process.env.GSP_URL;
+
+
+async function getGspCredentials() {
+  return new Promise((resolve, reject) => {
+    db.query(
+      `SELECT username, password
+       FROM gsp_credentials
+       WHERE is_active = 1
+       LIMIT 1`,
+      (err, result) => {
+        if (err) {
+          return reject(err);
+        }
+
+        if (!result.length) {
+          return reject(new Error("GSP credentials not found."));
+        }
+
+        resolve({
+          username: result[0].username,
+          password: result[0].password
+        });
+      }
+    );
+  });
+}
+
 
 async function getAccessToken() {
   try {
@@ -32,7 +56,12 @@ async function getAccessToken() {
 router.post("/generate-irn", async (req, res) => {
   try {
     const { payload } = req.body;
-const accessToken = await getAccessToken();
+    const accessToken = await getAccessToken();
+
+    const {
+      username: USER_NAME,
+      password: PASSWORD
+    } = await getGspCredentials();
 
     const response = await axios.post(
       `${GSP_URL}/enriched/ei/api/invoice`,
@@ -154,7 +183,12 @@ router.post('/generate-qr-image', async (req, res) => {
         message: 'signedQrCode is required'
       });
     }
-const accessToken = await getAccessToken();
+    const accessToken = await getAccessToken();
+
+    const {
+      username: USER_NAME,
+      password: PASSWORD
+    } = await getGspCredentials();
     const qrResponse = await axios.post(
       `${GSP_URL}/enriched/ei/others/qr/image`,
       signedQrCode,
@@ -381,7 +415,12 @@ router.post("/cancel-irn", async (req, res) => {
       Cnlrsn: cnlrsn || "1",
       Cnlrem: cnlrem || "Cancelled by user"
     };
-const accessToken = await getAccessToken();
+    const accessToken = await getAccessToken();
+
+    const {
+      username: USER_NAME,
+      password: PASSWORD
+    } = await getGspCredentials();
     const response = await axios.post(
       `${GSP_URL}/enriched/ei/api/invoice/cancel`,
       payload,
@@ -390,7 +429,7 @@ const accessToken = await getAccessToken();
           "Content-Type": "application/json",
           "user_name": USER_NAME,
           "password": PASSWORD,
-          "gstin": req.body.gstin ,
+          "gstin": req.body.gstin,
           "requestid": `req_${Date.now()}`,
           "Authorization": `Bearer ${accessToken}`
         }
@@ -518,13 +557,18 @@ router.post('/generate-ewaybill', async (req, res) => {
       VehType: vehicleType
     };
 
-const accessToken = await getAccessToken();
+    const accessToken = await getAccessToken();
+
+    const {
+      username: USER_NAME,
+      password: PASSWORD
+    } = await getGspCredentials();
     // Headers
     const headers = {
       'Content-Type': 'application/json',
       'user_name': USER_NAME,
       'password': PASSWORD,
-      'gstin': req.body.gstin ,
+      'gstin': transId,
       'requestid': crypto.randomUUID(),
       'Authorization': `Bearer ${accessToken}`
     };
@@ -617,8 +661,14 @@ router.post('/cancel-ewaybill', async (req, res) => {
     const accessToken = await getAccessToken();
 
     const {
+      username: USER_NAME,
+      password: PASSWORD
+    } = await getGspCredentials();
+
+    const {
       invoiceId,
       ewbNo,
+      transId,
       cancelRsnCode = "4",
       cancelRmrk = "Other"
     } = req.body;
@@ -650,34 +700,34 @@ router.post('/cancel-ewaybill', async (req, res) => {
 
     const isTestEnv = GSP_URL.includes('/test');
 
-// Headers
-const headers = {
-  'Content-Type': 'application/json',
-  ...(isTestEnv
-    ? { username: USER_NAME }      // Test Environment
-    : { user_name: USER_NAME }),   // Live Environment
+    // Headers
+    const headers = {
+      'Content-Type': 'application/json',
+      ...(isTestEnv
+        ? { username: USER_NAME }      // Test Environment
+        : { username: USER_NAME }),   // Live Environment
 
-  'password': PASSWORD,
-  'gstin': req.body.gstin,
-  'requestid': crypto.randomUUID(),
-  'Authorization': `Bearer ${accessToken}`,
+      'password': PASSWORD,
+      'gstin': transId,
+      'requestid': crypto.randomUUID(),
+      'Authorization': `Bearer ${accessToken}`,
 
-  // Add ctype only for test environment
-  ...(isTestEnv && { ctype: 'IRN' })
-};
+      // Add ctype only for test environment
+      ...(isTestEnv && { ctype: 'IRN' })
+    };
 
-// API URL
-const apiUrl = isTestEnv
-  ? `${GSP_URL}/enriched/ewb/ewayapi?action=CANEWB`
-  : `${GSP_URL}/enriched/ei/api/ewayapi`;
+    // API URL
+    const apiUrl = isTestEnv
+      ? `${GSP_URL}/enriched/ewb/ewayapi?action=CANEWB`
+      : `${GSP_URL}/enriched/ewb/ewayapi?action=CANEWB`;
 
-const response = await axios.post(
-  apiUrl,
-  payload,
-  { headers }
-);
+    const response = await axios.post(
+      apiUrl,
+      payload,
+      { headers }
+    );
 
-    
+
 
     console.log(
       "Cancel EWB Response:",
