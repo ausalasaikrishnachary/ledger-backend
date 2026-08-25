@@ -1642,8 +1642,6 @@ router.get("/transactions", (req, res) => {
       a.shipping_pin_code
     FROM voucher v
     LEFT JOIN accounts a ON v.PartyID = a.id
-    WHERE v.order_number IS NULL 
-      OR v.order_number = ''
     ORDER BY v.VoucherID DESC
   `;
 
@@ -4163,9 +4161,274 @@ router.post('/production/create', (req, res) => {
   });
 });
 // PUT API - Update production by ID
+// router.put('/production/update/:id', (req, res) => {
+//   const { id } = req.params;
+//   const { voucherNo, invoiceDate, productionItems } = req.body;
+
+//   if (!productionItems || productionItems.length === 0) {
+//     return res.status(400).json({
+//       success: false,
+//       message: 'No production items to save'
+//     });
+//   }
+
+//   // Get connection
+//   db.getConnection((err, connection) => {
+//     if (err) {
+//       console.error('Connection error:', err);
+//       return res.status(500).json({ success: false, message: err.message });
+//     }
+
+//     // Start transaction
+//     connection.beginTransaction(err => {
+//       if (err) {
+//         connection.release();
+//         return res.status(500).json({ success: false, message: err.message });
+//       }
+
+//       // First, get old items to revert stock changes
+//       const getOldItemsQuery = `
+//         SELECT vd.*, v.TransactionType, v.product_id, v.batch_id, v.batch_number
+//         FROM voucherdetails vd
+//         JOIN voucher v ON vd.voucher_id = v.VoucherID
+//         WHERE v.VoucherID = ?
+//       `;
+
+//       connection.query(getOldItemsQuery, [id], (err, oldItems) => {
+//         if (err) {
+//           return connection.rollback(() => {
+//             connection.release();
+//             console.error('Error fetching old items:', err);
+//             res.status(500).json({ success: false, message: err.message });
+//           });
+//         }
+
+//         // Revert old stock changes
+//         let revertCompleted = 0;
+        
+//         if (oldItems.length > 0) {
+//           oldItems.forEach((oldItem) => {
+//             let revertQuery = '';
+//             let revertValues = [];
+
+//             if (oldItem.transaction_type === 'Production') {
+//               // Reverse Production: Subtract from stock
+//               revertQuery = `
+//                 UPDATE batches 
+//                 SET 
+//                   stock_in = stock_in - ?,
+//                   quantity = quantity - ?
+//                 WHERE product_id = ? AND batch_number = ?
+//               `;
+//               revertValues = [oldItem.quantity, oldItem.quantity, oldItem.product_id, oldItem.batch_number];
+//             } 
+//             else if (oldItem.transaction_type === 'Consumption') {
+//               // Reverse Consumption: Add back to stock
+//               revertQuery = `
+//                 UPDATE batches 
+//                 SET 
+//                   stock_out = stock_out - ?,
+//                   quantity = quantity + ?
+//                 WHERE product_id = ? AND batch_number = ?
+//               `;
+//               revertValues = [oldItem.quantity, oldItem.quantity, oldItem.product_id, oldItem.batch_number];
+//             }
+
+//             if (revertQuery && oldItem.batch_id) {
+//               connection.query(revertQuery, revertValues, (err) => {
+//                 if (err) {
+//                   return connection.rollback(() => {
+//                     connection.release();
+//                     console.error('Error reverting stock:', err);
+//                     res.status(500).json({ success: false, message: err.message });
+//                   });
+//                 }
+//                 revertCompleted++;
+//                 proceedWithUpdate();
+//               });
+//             } else {
+//               revertCompleted++;
+//               proceedWithUpdate();
+//             }
+//           });
+//         } else {
+//           proceedWithUpdate();
+//         }
+
+//         function proceedWithUpdate() {
+//           if (revertCompleted !== oldItems.length && oldItems.length > 0) {
+//             return;
+//           }
+
+//           // Delete old voucher details
+//           const deleteDetailsQuery = `DELETE FROM voucherdetails WHERE voucher_id = ?`;
+//           connection.query(deleteDetailsQuery, [id], (err) => {
+//             if (err) {
+//               return connection.rollback(() => {
+//                 connection.release();
+//                 console.error('Error deleting old details:', err);
+//                 res.status(500).json({ success: false, message: err.message });
+//               });
+//             }
+
+//             // Update voucher main record
+//             const updateVoucherQuery = `
+//               UPDATE voucher 
+//               SET 
+//                 VchNo = ?,
+//                 Date = ?,
+//                 TotalAmount = ?,
+//                 TotalPacks = ?
+//               WHERE VoucherID = ?
+//             `;
+
+//             // Calculate new totals
+//             let totalAmount = 0;
+//             productionItems.forEach(item => {
+//               const itemTotal = (parseFloat(item.qty) || 0) * (parseFloat(item.rate) || 0);
+//               totalAmount += (item.amount || itemTotal);
+//             });
+
+//             connection.query(updateVoucherQuery, [
+//               voucherNo,
+//               invoiceDate,
+//               totalAmount,
+//               productionItems.length,
+//               id
+//             ], (err) => {
+//               if (err) {
+//                 return connection.rollback(() => {
+//                   connection.release();
+//                   console.error('Error updating voucher:', err);
+//                   res.status(500).json({ success: false, message: err.message });
+//                 });
+//               }
+
+//               // Insert new voucher details and update stock
+//               let completedDetails = 0;
+//               const newVoucherIds = [];
+
+//               productionItems.forEach((item, idx) => {
+//                 const itemTotal = (parseFloat(item.qty) || 0) * (parseFloat(item.rate) || 0);
+
+//                 // Insert new details
+//                 const detailsQuery = `
+//                   INSERT INTO voucherdetails (
+//                     voucher_id,
+//                     product,
+//                     product_id,
+//                     batch,
+//                     batch_id,
+//                     quantity,
+//                     price,
+//                     transaction_type,
+//                     total,
+//                     created_at
+//                   ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+//                 `;
+
+//                 connection.query(detailsQuery, [
+//                   id,
+//                   item.itemName,
+//                   item.itemId,
+//                   item.batchNo,
+//                   item.batchId,
+//                   item.qty,
+//                   item.rate,
+//                   item.type,
+//                   item.amount || itemTotal,
+//                   new Date()
+//                 ], (err, result) => {
+//                   if (err) {
+//                     return connection.rollback(() => {
+//                       connection.release();
+//                       console.error('Error inserting details:', err);
+//                       res.status(500).json({ success: false, message: err.message });
+//                     });
+//                   }
+
+//                   newVoucherIds.push(result.insertId);
+
+//                   // Update stock with new values
+//                   let stockQuery = '';
+//                   let stockValues = [];
+
+//                   if (item.type === 'Production') {
+//                     stockQuery = `
+//                       UPDATE batches 
+//                       SET 
+//                         stock_in = stock_in + ?,
+//                         quantity = quantity + ?
+//                       WHERE product_id = ? AND batch_number = ?
+//                     `;
+//                     stockValues = [item.qty, item.qty, item.itemId, item.batchNo];
+//                   } 
+//                   else if (item.type === 'Consumption') {
+//                     stockQuery = `
+//                       UPDATE batches 
+//                       SET 
+//                         stock_out = stock_out + ?,
+//                         quantity = quantity - ?
+//                       WHERE product_id = ? AND batch_number = ?
+//                     `;
+//                     stockValues = [item.qty, item.qty, item.itemId, item.batchNo];
+//                   }
+
+//                   if (stockQuery && item.batchId) {
+//                     connection.query(stockQuery, stockValues, (err) => {
+//                       if (err) {
+//                         return connection.rollback(() => {
+//                           connection.release();
+//                           console.error('Error updating stock:', err);
+//                           res.status(500).json({ success: false, message: err.message });
+//                         });
+//                       }
+//                       completedDetails++;
+//                       finalizeUpdate();
+//                     });
+//                   } else {
+//                     completedDetails++;
+//                     finalizeUpdate();
+//                   }
+
+//                   function finalizeUpdate() {
+//                     if (completedDetails === productionItems.length) {
+//                       connection.commit(err => {
+//                         if (err) {
+//                           return connection.rollback(() => {
+//                             connection.release();
+//                             res.status(500).json({ success: false, message: err.message });
+//                           });
+//                         }
+
+//                         connection.release();
+//                         res.status(200).json({
+//                           success: true,
+//                           message: 'Production updated successfully',
+//                           data: {
+//                             voucherId: id,
+//                             itemsCount: productionItems.length
+//                           }
+//                         });
+//                       });
+//                     }
+//                   }
+//                 });
+//               });
+//             });
+//           });
+//         }
+//       });
+//     });
+//   });
+// });
+
+
 router.put('/production/update/:id', (req, res) => {
   const { id } = req.params;
   const { voucherNo, invoiceDate, productionItems } = req.body;
+  
+  console.log("data", { id, voucherNo, invoiceDate, productionItems });
 
   if (!productionItems || productionItems.length === 0) {
     return res.status(400).json({
@@ -4213,7 +4476,7 @@ router.put('/production/update/:id', (req, res) => {
             let revertQuery = '';
             let revertValues = [];
 
-            if (oldItem.transaction_type === 'Production') {
+            if (oldItem.transaction_type === 'Production'|| oldItem.TransactionType === 'Production') {
               // Reverse Production: Subtract from stock
               revertQuery = `
                 UPDATE batches 
@@ -4224,7 +4487,7 @@ router.put('/production/update/:id', (req, res) => {
               `;
               revertValues = [oldItem.quantity, oldItem.quantity, oldItem.product_id, oldItem.batch_number];
             } 
-            else if (oldItem.transaction_type === 'Consumption') {
+            else if (oldItem.transaction_type === 'Consumption'|| oldItem.TransactionType === 'Consumption') {
               // Reverse Consumption: Add back to stock
               revertQuery = `
                 UPDATE batches 
@@ -4273,12 +4536,16 @@ router.put('/production/update/:id', (req, res) => {
               });
             }
 
+            const transactionType =
+  productionItems.length > 0 ? productionItems[0].type : null;
+
             // Update voucher main record
             const updateVoucherQuery = `
               UPDATE voucher 
               SET 
                 VchNo = ?,
                 Date = ?,
+                 TransactionType = ?,
                 TotalAmount = ?,
                 TotalPacks = ?
               WHERE VoucherID = ?
@@ -4294,6 +4561,7 @@ router.put('/production/update/:id', (req, res) => {
             connection.query(updateVoucherQuery, [
               voucherNo,
               invoiceDate,
+               transactionType,
               totalAmount,
               productionItems.length,
               id
