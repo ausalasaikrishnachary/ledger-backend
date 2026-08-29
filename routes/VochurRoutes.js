@@ -2341,53 +2341,50 @@ router.post("/transaction", (req, res) => {
 
           connection.release();
 
-          // SMS sending logic (your existing code)
-          try {
-            const normalizedType = (transactionType || "")
-              .toLowerCase()
-              .trim()
-              .replace(/\s+/g, " ");
+        try {
+  const normalizedType = (transactionType || "")
+    .toLowerCase()
+    .trim()
+    .replace(/\s+/g, " ");
 
-            if (
-              orderNumber &&
-              (normalizedType === "Sales" || normalizedType === "stock transfer")
-            ) {
-              const mobile =
-                transactionData.fullAccountDetails?.mobile_number || null;
+  if (
+    orderNumber &&
+    (normalizedType === "sales" ||
+      normalizedType === "stock transfer")
+  ) {
+    const mobile =
+      transactionData.fullAccountDetails?.mobile_number || null;
 
-              if (!mobile) {
-                return;
-              }
+    if (mobile) {
+      const cleanMobile = mobile.toString().replace(/\D/g, "");
 
-              const cleanMobile = mobile.toString().replace(/\D/g, "");
-
-              if (!/^[6-9]\d{9}$/.test(cleanMobile)) {
-                return;
-              }
-
-              const smsMessage =
+      if (/^[6-9]\d{9}$/.test(cleanMobile)) {
+        const smsMessage =
 `Your invoice ${invoiceNumber} for order #${orderNumber} is ready.
 Total Amount: ${grandTotal} - SHREE SHASHWATRAJ AGRO PRIVATE LIMITED`;
 
-              const smsResponse = await axios.get(
-                "https://www.smsjust.com/blank/sms/user/urlsms.php",
-                {
-                  params: {
-                    username: process.env.SMS_USERNAME,
-                    pass: process.env.SMS_PASSWORD,
-                    senderid: process.env.SMS_SENDERID,
-                    dest_mobileno: cleanMobile,
-                    message: smsMessage,
-                    dltentityid: process.env.SMS_ENTITYID,
-                    dlttempid: process.env.SMS_INVOICEREADYTEMPLATEID,
-                    response: "y"
-                  }
-                }
-              );
-            }
-          } catch (err) {
-            // SMS failed (non-blocking)
+        await axios.get(
+          "https://www.smsjust.com/blank/sms/user/urlsms.php",
+          {
+            params: {
+              username: process.env.SMS_USERNAME,
+              pass: process.env.SMS_PASSWORD,
+              senderid: process.env.SMS_SENDERID,
+              dest_mobileno: cleanMobile,
+              message: smsMessage,
+              dltentityid: process.env.SMS_ENTITYID,
+              dlttempid: process.env.SMS_INVOICEREADYTEMPLATEID,
+              response: "y"
+            },
+            timeout: 5000
           }
+        );
+      }
+    }
+  }
+} catch (err) {
+  console.error("SMS failed:", err.message);
+}
 
           let message =
             transactionType === "CreditNote"
