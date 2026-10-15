@@ -29,6 +29,7 @@ const retailerReportRoutes = require("./routes/retailerReportRoutes");
 const expenseReportRoutes = require("./routes/expenseReportRoutes");
 const GstrbReportRoutes = require("./routes/GstrbReportRoutes");
 const salesReportRoutes = require("./routes/salesReportRoutes");
+const profitLossRoutes = require("./routes/profitLossRoutes");
 const pdfRoutes = require('./routes/pdfRoutes');
 const creditnoteRoutes = require('./routes/creditnote');
 const debitnoteRoutes = require('./routes/debitnote');
@@ -47,6 +48,7 @@ const gspRoutes = require('./routes/gspRoutes');
 const irnRoutes = require('./routes/irnRoutes');
 const saleType = require('./routes/saleType');
 const gspAuth = require('./gspAuth');
+const chatbotRoutes = require('./routes/chatbotRoutes');
 
 const { baseurl } = require('./baseUrl');
 const port = 5000;
@@ -111,6 +113,7 @@ app.use("/api/reports", retailerReportRoutes);
 app.use("/api/reports", GstrbReportRoutes);
 app.use("/api/gstr3b", GstrbReportRoutes);
 app.use("/api/reports", salesReportRoutes);
+app.use("/api/reports", profitLossRoutes);
 app.use('/api/credit-period-fix', creditPeriodFixRoutes);
 app.use("/", OfferFlashSale);
 app.use("/orders", RetailerOrderRoutes);
@@ -119,6 +122,7 @@ app.use("/api", inventory);
 app.use("/api", require("./routes/companyInfo"));
 app.use('/api', gspRoutes);
 app.use('/api', saleType);
+app.use('/api', chatbotRoutes);
 
 
 
