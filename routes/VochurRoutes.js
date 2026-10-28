@@ -2970,22 +2970,44 @@ const voucherData = {
   note_preview: transactionData.note_preview || 
                (transactionData.note ? transactionData.note.substring(0, 200) : ''),
   TaxSystem: isKacha ? "KACHA_NO_GST" : (transactionData.TaxSystem || "GST"),
-  product_id: items[0]?.product_id || null,
-  batch_id: voucherBatchNumber,
-  DC: transactionType === "CreditNote" ? "C" : "D",
-  ChequeNo: transactionData.ChequeNo || "",
-  ChequeDate: transactionData.ChequeDate || null,
-  BankName: transactionData.BankName || "",
-staffid: transactionData.supplierInfo?.staffid || transactionData.staffid || null,
-assigned_staff: transactionData.supplierInfo?.assigned_staff || transactionData.assigned_staff || null,
-  staff_incentive: staffIncentive,
-  created_at: new Date(),
-  balance_amount: balanceAmount,
-  status: transactionData.status || "active",
-  paid_date: transactionData.paid_date || null,
-  pdf_data: transactionData.pdf_data || null,
-  pdf_file_name: transactionData.pdf_file_name || null,
-  pdf_created_at: transactionData.pdf_created_at || null,
+
+
+product_id: items[0]?.product_id || null,
+batch_id: voucherBatchNumber,
+batch_number:
+  items[0]?.batch_number ||
+  items[0]?.batchNumber ||
+  items[0]?.batch ||
+  transactionData.batch_number ||
+  transactionData.batchNumber ||
+  "",
+
+DC: transactionType === "CreditNote" ? "C" : "D",
+ChequeNo: transactionData.ChequeNo || "",
+ChequeDate: transactionData.ChequeDate || null,
+BankName: transactionData.BankName || "",
+
+staffid:
+  transactionData.supplierInfo?.staffid ||
+  transactionData.staffid ||
+  null,
+
+assigned_staff:
+  transactionData.supplierInfo?.assigned_staff ||
+  transactionData.assigned_staff ||
+  null,
+
+staff_incentive: staffIncentive,
+created_at: new Date(),
+balance_amount: balanceAmount,
+status: transactionData.status || "active",
+paid_date: transactionData.paid_date || null,
+pdf_data: transactionData.pdf_data || null,
+pdf_file_name: transactionData.pdf_file_name || null,
+pdf_created_at: transactionData.pdf_created_at || null,
+
+
+
 
               transport_name: transactionData.transportDetails?.transport || 
                   transactionData.transport_name || null,
